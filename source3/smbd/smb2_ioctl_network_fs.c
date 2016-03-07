@@ -620,6 +620,35 @@ static NTSTATUS fsctl_srv_req_resume_key(TALLOC_CTX *mem_ctx,
 	return NT_STATUS_OK;
 }
 
+static NTSTATUS fsctl_lmr_req_resiliency(TALLOC_CTX *mem_ctx,
+                                        struct tevent_context *ev,
+                                        struct files_struct *fsp,
+                                        DATA_BLOB *in_input,
+                                        uint32_t in_max_output,
+                                        DATA_BLOB *out_output)
+{
+       struct req_resume_key_rsp rkey_rsp;
+       enum ndr_err_code ndr_ret;
+       struct network_resiliency_request *lmr_req;
+       struct smbXsrv_open *op = fsp->op;
+       NTSTATUS status = NT_STATUS_OK;
+
+       if (in_max_output != 0) {
+               DEBUG(10, ("Invalid output size %d\n", in_max_output));
+               return NT_STATUS_INVALID_PARAMETER;
+       }
+
+       lmr_req = (struct network_resiliency_request *)in_input->data;
+
+       DEBUG(10, ("Setting timeout to %u\n", lmr_req->timeout));
+
+       op->global->durable_timeout_msec = lmr_req->timeout;
+       status = smbXsrv_open_update(op);
+       DEBUG(10, ("smbXsrv_open_update returning %s\n", nt_errstr(status)));
+
+       return status;
+}
+
 static void smb2_ioctl_network_fs_copychunk_done(struct tevent_req *subreq);
 
 struct tevent_req *smb2_ioctl_network_fs(uint32_t ctl_code,
@@ -698,6 +727,16 @@ struct tevent_req *smb2_ioctl_network_fs(uint32_t ctl_code,
 		}
 		return tevent_req_post(req, ev);
 		break;
+       case FSCTL_LMR_REQ_RESILIENCY:
+               status = fsctl_lmr_req_resiliency(state, ev, state->fsp,
+                                                 &state->in_input,
+                                                 state->in_max_output,
+                                                 &state->out_output);
+               if (!tevent_req_nterror(req, status)) {
+                       tevent_req_done(req);
+               }
+               return tevent_req_post(req, ev);
+               break;
 	default: {
 		uint8_t *out_data = NULL;
 		uint32_t out_data_len = 0;
