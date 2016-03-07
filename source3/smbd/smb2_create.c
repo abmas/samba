@@ -662,6 +662,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		struct GUID *create_guid = NULL;
 		bool update_open = false;
 		bool durable_requested = false;
+		bool persistent_handle_requested = false;
 		uint32_t durable_timeout_msec = 0;
 		bool do_durable_reconnect = false;
 		uint64_t persistent_id = 0;
@@ -779,6 +780,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		if (dh2q) {
 			const uint8_t *p = dh2q->data.data;
 			uint32_t durable_v2_timeout = 0;
+			uint32_t durable_v2_flags = 0;
 			DATA_BLOB create_guid_blob;
 			const uint8_t *hdr;
 			uint32_t flags;
@@ -794,6 +796,11 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			}
 
 			durable_v2_timeout = IVAL(p, 0);
+			durable_v2_flags = IVAL(p, 1);
+
+			if (durable_v2_flags | SMB2_DHANDLE_FLAG_PERSISTENT ) {
+				persistent_handle_requested = true;
+			}
 			create_guid_blob = data_blob_const(p + 16, 16);
 
 			status = GUID_from_ndr_blob(&create_guid_blob,
