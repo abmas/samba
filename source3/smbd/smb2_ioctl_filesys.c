@@ -473,6 +473,11 @@ struct tevent_req *smb2_ioctl_filesys(uint32_t ctl_code,
 		}
 		return tevent_req_post(req, ev);
 		break;
+        case FSCTL_SET_INTEGRITY_INFORMATION:
+                /* Ashok: Cheat and return success */
+                tevent_req_done(req);
+                return tevent_req_post(req, ev);
+                break;
 	default: {
 		uint8_t *out_data = NULL;
 		uint32_t out_data_len = 0;
