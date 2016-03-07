@@ -670,7 +670,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		ssize_t lease_len = -1;
 		bool need_replay_cache = false;
 		struct smbXsrv_open *op = NULL;
-#if 0
+#if 1
 		struct smb2_create_blob *svhdx = NULL;
 #endif
 
@@ -686,7 +686,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 					     SMB2_CREATE_TAG_TWRP);
 		qfid = smb2_create_blob_find(&in_context_blobs,
 					     SMB2_CREATE_TAG_QFID);
-#if 0
+#if 1
 		if (smb2req->xconn->protocol >= PROTOCOL_SMB3_02) {
 			/*
 			 * This was introduced with SMB3_02
