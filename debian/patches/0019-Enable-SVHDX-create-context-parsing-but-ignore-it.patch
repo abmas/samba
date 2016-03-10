@@ -5,13 +5,14 @@ Subject: Enable SVHDX create context parsing, but ignore it
 Create contexts are optional. If we do not support it, just do not send a
 response to that create context.
 ---
- source3/modules/vfs_default.c | 3 ++-
- source3/smbd/smb2_create.c    | 4 ++--
- 2 files changed, 4 insertions(+), 3 deletions(-)
+ source3/smbd/smb2_create.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
+diff --git a/source3/smbd/smb2_create.c b/source3/smbd/smb2_create.c
+index 62948a0..3627cfd 100644
 --- a/source3/smbd/smb2_create.c
 +++ b/source3/smbd/smb2_create.c
-@@ -676,7 +676,7 @@ static struct tevent_req *smbd_smb2_crea
+@@ -676,7 +676,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
  		struct smb2_lease lease;
  		struct smb2_lease *lease_ptr = NULL;
  		ssize_t lease_len = -1;
@@ -20,7 +21,7 @@ response to that create context.
  		struct smb2_create_blob *svhdx = NULL;
  #endif
  
-@@ -692,7 +692,7 @@ static struct tevent_req *smbd_smb2_crea
+@@ -692,7 +692,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
  					     SMB2_CREATE_TAG_TWRP);
  		qfid = smb2_create_blob_find(&in_context_blobs,
  					     SMB2_CREATE_TAG_QFID);

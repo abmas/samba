@@ -7,7 +7,7 @@ Subject: VERSION
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/VERSION b/VERSION
-index 4cd96cc..e182554 100644
+index 9773087..4929266 100644
 --- a/VERSION
 +++ b/VERSION
 @@ -123,5 +123,5 @@ SAMBA_VERSION_RELEASE_NICKNAME=

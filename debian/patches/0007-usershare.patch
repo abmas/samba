@@ -43,7 +43,7 @@ index 6612191..5d000bd 100644
  
  <para>The usershare commands are:
 diff --git a/source3/param/loadparm.c b/source3/param/loadparm.c
-index 605555e..fe8aa6f 100644
+index 50b29e3..ef5ac6e 100644
 --- a/source3/param/loadparm.c
 +++ b/source3/param/loadparm.c
 @@ -834,7 +834,7 @@ static void init_globals(struct loadparm_context *lp_ctx, bool reinit_globals)
