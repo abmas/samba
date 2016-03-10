@@ -1,3 +1,11 @@
+samba (2:4.4.0rc4+dfsg-1) trusty; urgency=medium
+
+  [ Kevin Pease ]
+  * Cleaning out debian branch before import of 4.4.0rc4 upstream
+  * Imported Upstream version 4.4.0rc4
+
+ -- Kevin Pease <kevin.pease@simplivity.com>  Thu, 10 Mar 2016 15:42:55 -0500
+
 samba (2:4.3.6+dfsg-1) unstable; urgency=medium
 
   * New upstream release.
