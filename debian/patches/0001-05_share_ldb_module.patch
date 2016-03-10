@@ -1,0 +1,32 @@
+From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
+Date: Mon, 29 Feb 2016 12:04:32 -0500
+Subject: 05_share_ldb_module
+
+=== modified file 'source4/param/wscript_build'
+---
+ source4/param/wscript_build | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/source4/param/wscript_build b/source4/param/wscript_build
+index 4585a83..3b845b7 100644
+--- a/source4/param/wscript_build
++++ b/source4/param/wscript_build
+@@ -18,7 +18,7 @@ bld.SAMBA_MODULE('share_classic',
+ 	source='share_classic.c',
+ 	subsystem='share',
+ 	init_function='share_classic_init',
+-	deps='samba-util'
++	deps='samba-util samba-hostconfig'
+ 	)
+ 
+ 
+@@ -26,7 +26,8 @@ bld.SAMBA_MODULE('share_ldb',
+ 	source='share_ldb.c',
+ 	subsystem='share',
+ 	init_function='share_ldb_init',
+-	deps='ldbsamba auth_system_session'
++	deps='ldbsamba auth_system_session',
++	internal_module=False,
+ 	)
+ 
+ 

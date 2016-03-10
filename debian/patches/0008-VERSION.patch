@@ -1,0 +1,19 @@
+From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
+Date: Mon, 29 Feb 2016 12:04:33 -0500
+Subject: VERSION
+
+---
+ VERSION | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/VERSION b/VERSION
+index 4cd96cc..e182554 100644
+--- a/VERSION
++++ b/VERSION
+@@ -123,5 +123,5 @@ SAMBA_VERSION_RELEASE_NICKNAME=
+ #  ->  "3.0.0rc2-VendorVersion"                        #
+ #                                                      #
+ ########################################################
+-SAMBA_VERSION_VENDOR_SUFFIX=
++SAMBA_VERSION_VENDOR_SUFFIX=Debian
+ SAMBA_VERSION_VENDOR_PATCH=
