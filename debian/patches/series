@@ -8,7 +8,7 @@
 0008-VERSION.patch
 0009-waf_smbpasswd_location.patch
 0010-Add-so-version-number-to-private-libraries-for-dpkg-.patch
-0011-xsltproc_dont_build_smb.conf.5.patch
+#0011-xsltproc_dont_build_smb.conf.5.patch
 0012-heimdal-rfc3454.txt.patch
 0013-Fix-privacy-breach-on-google.com.patch
 0014-fix-cluster-build.patch
