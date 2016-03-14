@@ -98,8 +98,6 @@ usr/lib/*/libsamdb.so
 usr/lib/*/libsmbconf.so
 usr/lib/*/libsmbldap.so
 usr/lib/*/libtevent-unix-util.so
-usr/lib/*/libtevent-unix-util.so.0
-usr/lib/*/libtevent-unix-util.so.0.0.1
 usr/lib/*/libtevent-util.so
 usr/lib/*/pkgconfig/dcerpc.pc
 usr/lib/*/pkgconfig/dcerpc_samr.pc
@@ -114,7 +112,3 @@ usr/lib/*/pkgconfig/samba-hostconfig.pc
 usr/lib/*/pkgconfig/samba-policy.pc
 usr/lib/*/pkgconfig/samba-util.pc
 usr/lib/*/pkgconfig/samdb.pc
-usr/lib/*/samba/libgensec.so.0
-usr/lib/*/samba/libregistry.so.0
-usr/lib/*/samba/libsmbclient-raw.so.0
-usr/lib/*/samba/libtorture.so.0

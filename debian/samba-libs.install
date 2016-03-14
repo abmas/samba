@@ -8,7 +8,6 @@ usr/lib/*/libndr.so.*
 usr/lib/*/libndr-standard.so.*
 usr/lib/*/libnetapi.so.0
 usr/lib/*/libsamba-credentials.so.0*
-usr/lib/*/libsamba-errors.so
 usr/lib/*/libsamba-errors.so.*
 usr/lib/*/libsamba-hostconfig.so.*
 usr/lib/*/libsamba-passdb.so.0
@@ -18,7 +17,6 @@ usr/lib/*/libsamba-util.so.*
 usr/lib/*/libsamdb.so.*
 usr/lib/*/libsmbconf.so.0
 usr/lib/*/libsmbldap.so.0
-usr/lib/*/libtevent-unix-util.so
 usr/lib/*/libtevent-unix-util.so.0
 usr/lib/*/libtevent-unix-util.so.0.0.1
 usr/lib/*/libtevent-util.so.*

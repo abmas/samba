@@ -1,3 +1,10 @@
+samba (2:4.4.0rc4-0+svt2) trusty; urgency=medium
+
+  [ Kevin Pease ]
+  * REL-5004: Updating to straighten out file conflicts
+
+ -- Kevin Pease <kevin.pease@simplivity.com>  Mon, 14 Mar 2016 13:26:58 -0400
+
 samba (2:4.4.0rc4-0+svt1) trusty; urgency=medium
 
   [ Kevin Pease ]
