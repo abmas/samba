@@ -1,0 +1,57 @@
+From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
+Date: Mon, 29 Feb 2016 12:04:32 -0500
+Subject: usershare
+
+---
+ docs-xml/manpages/net.8.xml | 24 ++----------------------
+ source3/param/loadparm.c    |  2 +-
+ 2 files changed, 3 insertions(+), 23 deletions(-)
+
+diff --git a/docs-xml/manpages/net.8.xml b/docs-xml/manpages/net.8.xml
+index 6612191..5d000bd 100644
+--- a/docs-xml/manpages/net.8.xml
++++ b/docs-xml/manpages/net.8.xml
+@@ -1892,28 +1892,8 @@ non-root users to add user defined shares to be exported using the "net usershar
+ commands.
+ </para>
+ 
+-<para>
+-To set this up, first set up your smb.conf by adding to the [global] section:
+-
+-usershare path = /usr/local/samba/lib/usershares
+-
+-Next create the directory /usr/local/samba/lib/usershares, change the owner to root and
+-set the group owner to the UNIX group who should have the ability to create usershares,
+-for example a group called "serverops".
+-
+-Set the permissions on /usr/local/samba/lib/usershares to 01770.
+-
+-(Owner and group all access, no access for others, plus the sticky bit,
+-which means that a file in that directory can be renamed or deleted only
+-by the owner of the file).
+-
+-Finally, tell smbd how many usershares you will allow by adding to the [global]
+-section of smb.conf a line such as :
+-
+-usershare max shares = 100.
+-
+-To allow 100 usershare definitions. Now, members of the UNIX group "serverops"
+-can create user defined shares on demand using the commands below.
++<para>Members of the UNIX group "sambashare" can create user-defined shares on demand
++using the commands below.
+ </para>
+ 
+ <para>The usershare commands are:
+diff --git a/source3/param/loadparm.c b/source3/param/loadparm.c
+index 50b29e3..ef5ac6e 100644
+--- a/source3/param/loadparm.c
++++ b/source3/param/loadparm.c
+@@ -834,7 +834,7 @@ static void init_globals(struct loadparm_context *lp_ctx, bool reinit_globals)
+ 	lpcfg_string_set(Globals.ctx, &Globals.usershare_path, s);
+ 	TALLOC_FREE(s);
+ 	lpcfg_string_set(Globals.ctx, &Globals.usershare_template_share, "");
+-	Globals.usershare_max_shares = 0;
++	Globals.usershare_max_shares = 100;
+ 	/* By default disallow sharing of directories not owned by the sharer. */
+ 	Globals.usershare_owner_only = true;
+ 	/* By default disallow guest access to usershares. */
