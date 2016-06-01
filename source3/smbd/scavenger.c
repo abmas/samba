@@ -475,17 +475,29 @@ static void scavenger_timer(struct tevent_context *ev,
 	struct scavenger_timer_context *ctx =
 		talloc_get_type_abort(data, struct scavenger_timer_context);
 	NTSTATUS status;
-	bool ok;
+	bool ok, resilient, connected_share_modes;
 
-	DEBUG(10, ("scavenger: do cleanup for file %s at %s\n",
+	resilient = smbXsrv_open_is_resilient(ctx->msg.open_persistent_id);
+	connected_share_modes = has_connected_share_mode(ctx->msg.file_id);
+
+	DEBUG(2, ("scavenger: do cleanup for file %s at %s\n",
 		  file_id_string_tos(&ctx->msg.file_id),
 		  timeval_string(talloc_tos(), &t, true)));
 
+	if ( resilient && connected_share_modes) {
+		/* This is a resilient handle and there is another durable handle that has already */
+		/* been reconnected. Skip cleanup. If this resilient handle is not reconnected, it */
+		/* will be cleaned up when the session closes.					   */
+		DEBUG(2, ("scavenger: skipping cleanup for resilient file with connected sharemode\n"));
+		return;
+	}
+
 	ok = share_mode_cleanup_disconnected(ctx->msg.file_id,
 					     ctx->msg.open_persistent_id);
+	/* The previous function returns an error if it sees other share mode entries */
 	if (!ok) {
 		DEBUG(2, ("Failed to cleanup share modes and byte range locks "
-			  "for file %s open %llu\n",
+			  "for file %s open %llu, proceeding with open cleanup\n",
 			  file_id_string_tos(&ctx->msg.file_id),
 			  (unsigned long long)ctx->msg.open_persistent_id));
 	}
@@ -508,7 +520,7 @@ static void scavenger_add_timer(struct smbd_scavenger_state *state,
 
 	nttime_to_timeval(&until, msg->until);
 
-	DEBUG(10, ("scavenger: schedule file %s for cleanup at %s\n",
+	DEBUG(2, ("scavenger: schedule file %s for cleanup at %s\n",
 		   file_id_string_tos(&msg->file_id),
 		   timeval_string(talloc_tos(), &until, true)));
 

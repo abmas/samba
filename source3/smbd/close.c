@@ -661,7 +661,7 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
 	status = ntstatus_keeperror(status, tmp);
 
 	if (NT_STATUS_IS_OK(status) && fsp->op != NULL) {
-		is_durable = fsp->op->global->durable;
+		is_durable = fsp->op->global->durable || fsp->op->global->resilient;
 	}
 
 	if (close_type != SHUTDOWN_CLOSE) {
@@ -727,6 +727,7 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
 		 * Make sure the handle is not marked as durable anymore
 		 */
 		fsp->op->global->durable = false;
+		fsp->op->global->resilient = false;
 	}
 
 	if (fsp->print_file) {

@@ -429,6 +429,7 @@ interface smbXsrv
 		NTTIME					disconnect_time;
 		uint32					durable_timeout_msec;
 		boolean8				durable;
+                boolean8                                resilient;
 		DATA_BLOB				backend_cookie;
 		hyper					channel_sequence;
 	} smbXsrv_open_global0;

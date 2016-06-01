@@ -620,33 +620,67 @@ static NTSTATUS fsctl_srv_req_resume_key(TALLOC_CTX *mem_ctx,
 	return NT_STATUS_OK;
 }
 
-static NTSTATUS fsctl_lmr_req_resiliency(TALLOC_CTX *mem_ctx,
-                                        struct tevent_context *ev,
-                                        struct files_struct *fsp,
-                                        DATA_BLOB *in_input,
-                                        uint32_t in_max_output,
-                                        DATA_BLOB *out_output)
-{
-       struct req_resume_key_rsp rkey_rsp;
-       enum ndr_err_code ndr_ret;
-       struct network_resiliency_request *lmr_req;
-       struct smbXsrv_open *op = fsp->op;
-       NTSTATUS status = NT_STATUS_OK;
 
-       if (in_max_output != 0) {
-               DEBUG(10, ("Invalid output size %d\n", in_max_output));
+static NTSTATUS fsctl_request_resiliency(struct smbXsrv_connection *conn,
+                                        struct files_struct *fsp,
+                                        DATA_BLOB *in_input)
+{
+       NTSTATUS status;
+       uint32_t timeout = 0;
+       struct smbXsrv_open *op = fsp->op;
+
+       /* Should we check whether fsp is NULL? */
+
+       timeout = IVAL(in_input->data, 0x00);
+       /*
+        * Maximum value should be configurable -
+        * MaxResiliencyTimeout, with a default in
+        * Windows of 300 sec according to [MS-SMB2] 3.3.3
+        */
+       if (timeout > 300 * 1000) {
                return NT_STATUS_INVALID_PARAMETER;
        }
 
-       lmr_req = (struct network_resiliency_request *)in_input->data;
+       if (op->global->backend_cookie.length == 0) {
+               status = SMB_VFS_DURABLE_COOKIE(fsp, op,
+                                               &op->global->backend_cookie);
+               if (!NT_STATUS_IS_OK(status)) {
+                       return status;
+               }
+       }
 
-       DEBUG(10, ("Setting timeout to %u\n", lmr_req->timeout));
+       op->global->durable = false;
+       op->global->resilient = true;
 
-       op->global->durable_timeout_msec = lmr_req->timeout;
+       if (timeout == 0) {
+               /* Default - 120 sec as per Server 2012 and later
+                * according to [MS-SMB2] 3.3.5.15.9
+                */
+               timeout = 120 * 1000;
+       }
+
+       /* [MS-SMB2] defines different state variables for durable
+        * and resilient, but at the same time durable and resilient
+        * are mutually-exclusive, and the scavenging algorithm is
+        * identical.
+        * Therefore we keep the timeout in durable_timeout_msec.
+        */
+       op->global->durable_timeout_msec = timeout;
+
+       /* no need to handle durable owner - it's recorded
+        * on every open even if the handle is not durable
+        * or resilient.
+       */
+
        status = smbXsrv_open_update(op);
-       DEBUG(10, ("smbXsrv_open_update returning %s\n", nt_errstr(status)));
+       DBG_DEBUG("smb2_create_send: smbXsrv_open_update "
+                 "returned %s\n",
+                 nt_errstr(status));
+       if (!NT_STATUS_IS_OK(status)) {
+               return status;
+       }
 
-       return status;
+       return NT_STATUS_OK;
 }
 
 static void smb2_ioctl_network_fs_copychunk_done(struct tevent_req *subreq);
@@ -728,10 +762,8 @@ struct tevent_req *smb2_ioctl_network_fs(uint32_t ctl_code,
 		return tevent_req_post(req, ev);
 		break;
        case FSCTL_LMR_REQ_RESILIENCY:
-               status = fsctl_lmr_req_resiliency(state, ev, state->fsp,
-                                                 &state->in_input,
-                                                 state->in_max_output,
-                                                 &state->out_output);
+               status = fsctl_request_resiliency(state->smbreq->xconn,
+                                                state->fsp, &state->in_input);
                if (!tevent_req_nterror(req, status)) {
                        tevent_req_done(req);
                }

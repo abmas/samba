@@ -963,6 +963,10 @@ struct tevent_req *smb2srv_session_close_previous_send(TALLOC_CTX *mem_ctx,
 	struct smbXsrv_session_table *table = conn->client->session_table;
 	struct security_token *current_token = NULL;
 
+	DEBUG(2,("smb2srv_session_close_previous_send: called with global_id 0x%08x"
+			" previous session id 0x%16lx current session id 0x%16lx\n",
+				global_id,previous_session_id,current_session_id));
+
 	req = tevent_req_create(mem_ctx, &state,
 				struct smb2srv_session_close_previous_state);
 	if (req == NULL) {

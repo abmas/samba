@@ -18,7 +18,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
-
+#include <unistd.h>
 #include "includes.h"
 #include "libcli/smb2/smb2.h"
 #include "libcli/smb2/smb2_calls.h"
@@ -46,16 +46,21 @@
 #define CHECK_CREATED(__io, __created, __attribute)			\
 	do {								\
 		CHECK_VAL((__io)->out.create_action, NTCREATEX_ACTION_ ## __created); \
-		CHECK_VAL((__io)->out.alloc_size, 0);			\
 		CHECK_VAL((__io)->out.size, 0);				\
 		CHECK_VAL((__io)->out.file_attr, (__attribute));	\
 		CHECK_VAL((__io)->out.reserved2, 0);			\
 	} while(0)
+/*		CHECK_VAL((__io)->out.create_action, NTCREATEX_ACTION_ ## __created); \ */
+/*		CHECK_VAL((__io)->out.alloc_size, 0);			\ */
+/*		CHECK_VAL((__io)->out.size, 0);				\ */
+/*		CHECK_VAL((__io)->out.file_attr, (__attribute));	\ */
+/*		CHECK_VAL((__io)->out.reserved2, 0);			\ */
 
 static struct {
 	int count;
 	struct smb2_close cl;
 } break_info;
+
 
 static void torture_oplock_close_callback(struct smb2_request *req)
 {
@@ -107,14 +112,24 @@ bool test_durable_v2_open_create_blob(struct torture_context *tctx,
 
 	smb2_util_unlink(tree, fname);
 
-	smb2_oplock_create_share(&io, fname,
-				 smb2_util_share_access(""),
-				 smb2_util_oplock_level("b"));
+//        smb2_generic_create_share(&io,
+//                                  NULL /* lease */, false /* dir */,
+//                                  fname,
+//                                  NTCREATEX_DISP_OPEN,
+//                                  smb2_util_share_access(""),
+//                                  //smb2_util_oplock_level("b"),
+//                                  0, // no oplock
+//                                  0 /* leasekey */, 0 /* leasestate */);
+
+        smb2_oplock_create_share(&io, fname,
+                                 smb2_util_share_access(""),
+                                 smb2_util_oplock_level("b"));
+
 	io.in.durable_open = false;
 	io.in.durable_open_v2 = true;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -538,7 +553,7 @@ bool test_durable_v2_open_reopen1(struct torture_context *tctx,
 	io.in.durable_open_v2 = true;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -611,7 +626,7 @@ bool test_durable_v2_open_reopen1a(struct torture_context *tctx,
 	io.in.durable_open_v2 = true;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -712,7 +727,7 @@ bool test_durable_v2_open_reopen2(struct torture_context *tctx,
 	io.in.durable_open_v2 = true;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -873,7 +888,7 @@ bool test_durable_v2_open_reopen2b(struct torture_context *tctx,
 	io.in.durable_open_v2 = true;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -962,7 +977,7 @@ bool test_durable_v2_open_reopen2c(struct torture_context *tctx,
 	io.in.durable_open_v2 = false;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -1046,7 +1061,7 @@ bool test_durable_v2_open_reopen2_lease(struct torture_context *tctx,
 	io.in.durable_open_v2 = true;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -1293,7 +1308,7 @@ bool test_durable_v2_open_reopen2_lease_v2(struct torture_context *tctx,
 	io.in.durable_open_v2 = true;
 	io.in.persistent_open = false;
 	io.in.create_guid = create_guid;
-	io.in.timeout = UINT32_MAX;
+	io.in.timeout = 30000;
 
 	status = smb2_create(tree, mem_ctx, &io);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -1531,7 +1546,7 @@ bool test_durable_v2_open_set_persistence(struct torture_context *tctx,
        io.in.durable_open_v2 = true;
        io.in.persistent_open = true;
        io.in.create_guid = create_guid_1;
-       io.in.timeout = UINT32_MAX;
+       io.in.timeout = 30000;
 
        status = smb2_create(tree, mem_ctx, &io);
        CHECK_STATUS(status, NT_STATUS_OK);
@@ -1566,6 +1581,522 @@ bool test_durable_v2_open_set_persistence(struct torture_context *tctx,
 done:
        if (h1 != NULL) {
               smb2_util_close(tree, *h1);
+       }
+       smb2_util_close(tree, io.out.file.handle);
+
+       smb2_util_unlink(tree, fname);
+
+       talloc_free(mem_ctx);
+       return ret;
+}
+
+/*
+ * Test resilient open, disconnect, re-connect
+ */
+
+bool test_durable_v2_resilience(struct torture_context *tctx,
+                                struct smb2_tree *tree)
+{
+       NTSTATUS status;
+       TALLOC_CTX *mem_ctx = talloc_new(tctx);
+       char fname[256];
+       struct smb2_handle _h1;
+       struct smb2_handle _h2;
+       struct smb2_handle _h3;
+       struct smb2_handle *h1 = NULL;
+       struct smb2_handle *h2 = NULL;
+       struct smb2_handle *h3 = NULL;
+       union smb_ioctl ioctl;
+       struct smb2_create io;
+       struct network_resiliency_request lmr_req;
+       bool ret = true;
+       enum ndr_err_code ndr_ret;
+       struct GUID create_guid_1 = GUID_random();
+       struct GUID create_guid_2 = GUID_random();
+       struct GUID create_guid_3 = GUID_random();
+       struct smbcli_options options;
+
+       /* Choose a random name in case the state is left a little funky. */
+       snprintf(fname, 256, "durable_v2_resilience_%s.dat",
+                generate_random_str(tctx, 8));
+
+       options = tree->session->transport->options;
+
+       smb2_util_unlink(tree, fname);
+
+       ZERO_STRUCT(break_info);
+       smb2_generic_create_share(&io, NULL, false, fname, NTCREATEX_DISP_OPEN_IF,
+                                 smb2_util_share_access(""), 0, 0, 0);
+
+       /* Open the same file 3 times. */
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.create_guid = create_guid_1;
+       io.in.share_access =
+                   NTCREATEX_SHARE_ACCESS_DELETE|
+                   NTCREATEX_SHARE_ACCESS_READ|
+                   NTCREATEX_SHARE_ACCESS_WRITE;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+       _h1 = io.out.file.handle;
+       h1 = &_h1;
+
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.create_guid = create_guid_2;
+       io.in.share_access =
+                   NTCREATEX_SHARE_ACCESS_DELETE|
+                   NTCREATEX_SHARE_ACCESS_READ|
+                   NTCREATEX_SHARE_ACCESS_WRITE;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+       _h2 = io.out.file.handle;
+       h2 = &_h2;
+
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.create_guid = create_guid_3;
+       io.in.share_access =
+                   NTCREATEX_SHARE_ACCESS_DELETE|
+                   NTCREATEX_SHARE_ACCESS_READ|
+                   NTCREATEX_SHARE_ACCESS_WRITE;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+       _h3 = io.out.file.handle;
+       h3 = &_h3;
+
+       /*
+        * Now, set resiliency on each session we have to the file...
+        */
+       ZERO_STRUCT(ioctl);
+       ioctl.smb2.level = RAW_IOCTL_SMB2;
+       ioctl.smb2.in.file.handle = _h1;
+       ioctl.smb2.in.function = FSCTL_LMR_REQ_RESILIENCY;
+       ioctl.smb2.in.max_response_size = 0;
+       ioctl.smb2.in.flags = SMB2_IOCTL_FLAG_IS_FSCTL;
+
+       lmr_req.timeout = 30000; /* 30 seconds */
+       lmr_req.reserved = 0;
+
+       ndr_ret = ndr_push_struct_blob(&ioctl.smb2.in.out, mem_ctx, &lmr_req,
+                                (ndr_push_flags_fn_t)ndr_push_network_resiliency_request);
+       torture_assert_ndr_success(tctx, ndr_ret,
+                                "ndr_push_network_resiliency_request");
+
+       status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
+       torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
+
+       ZERO_STRUCT(ioctl);
+       ioctl.smb2.level = RAW_IOCTL_SMB2;
+       ioctl.smb2.in.file.handle = _h2;
+       ioctl.smb2.in.function = FSCTL_LMR_REQ_RESILIENCY;
+       ioctl.smb2.in.max_response_size = 0;
+       ioctl.smb2.in.flags = SMB2_IOCTL_FLAG_IS_FSCTL;
+
+       lmr_req.timeout = 30000; /* 30 seconds */
+       lmr_req.reserved = 0;
+
+       ndr_ret = ndr_push_struct_blob(&ioctl.smb2.in.out, mem_ctx, &lmr_req,
+                                (ndr_push_flags_fn_t)ndr_push_network_resiliency_request);
+       torture_assert_ndr_success(tctx, ndr_ret,
+                                "ndr_push_network_resiliency_request");
+       status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
+       torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
+
+       ZERO_STRUCT(ioctl);
+       ioctl.smb2.level = RAW_IOCTL_SMB2;
+       ioctl.smb2.in.file.handle = _h3;
+       ioctl.smb2.in.function = FSCTL_LMR_REQ_RESILIENCY;
+       ioctl.smb2.in.max_response_size = 0;
+       ioctl.smb2.in.flags = SMB2_IOCTL_FLAG_IS_FSCTL;
+
+       lmr_req.timeout = 30000; /* 30 seconds */
+       lmr_req.reserved = 0;
+
+       ndr_ret = ndr_push_struct_blob(&ioctl.smb2.in.out, mem_ctx, &lmr_req,
+                                (ndr_push_flags_fn_t)ndr_push_network_resiliency_request);
+       torture_assert_ndr_success(tctx, ndr_ret,
+                                "ndr_push_network_resiliency_request");
+
+       status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
+       torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
+
+       /* disconnect, reconnect and then do durable reopen */
+       TALLOC_FREE(tree);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+                torture_warning(tctx, "couldn't reconnect, bailing\n");
+                ret = false;
+                goto done;
+       }
+
+       /*
+        * Now for a succeeding reconnect to our first session:
+        */
+       ZERO_STRUCT(io);
+       io.in.fname = fname;
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.durable_handle = h1;
+       io.in.create_guid = create_guid_1;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       CHECK_CREATED(&io, EXISTED, FILE_ATTRIBUTE_ARCHIVE);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, false); /* no dh2q response blob */
+       CHECK_VAL(io.out.persistent_open, false);
+
+       /*
+        * Now for a succeeding reconnect to our second session:
+       */
+       sleep(5);
+       ZERO_STRUCT(io);
+       io.in.fname = fname;
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.durable_handle = h2;
+       io.in.create_guid = create_guid_2;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       CHECK_CREATED(&io, EXISTED, FILE_ATTRIBUTE_ARCHIVE);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, false); /* no dh2q response blob */
+       CHECK_VAL(io.out.persistent_open, false);
+       /* disconnect one more time */
+       TALLOC_FREE(tree);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+               torture_warning(tctx, "couldn't reconnect, bailing\n");
+               ret = false;
+               goto done;
+       }
+
+       status = smb2_util_close(tree, *h1);
+       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
+       status = smb2_util_close(tree, *h2);
+       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
+       h1 = NULL;
+       h2 = NULL;
+       h3 = NULL;
+
+done:
+       if (h1 != NULL) {
+              smb2_util_close(tree, *h1);
+       }
+       if (h2 != NULL) {
+              smb2_util_close(tree, *h2);
+       }
+       if (h3 != NULL) {
+              smb2_util_close(tree, *h3);
+       }
+       smb2_util_close(tree, io.out.file.handle);
+
+       smb2_util_unlink(tree, fname);
+
+       talloc_free(mem_ctx);
+       return ret;
+}
+
+/*
+ * Test resilient open, disconnect, re-connect
+ */
+
+bool test_durable_v2_resilience_brlock(struct torture_context *tctx,
+                                         struct smb2_tree *tree)
+{
+       NTSTATUS status;
+       TALLOC_CTX *mem_ctx = talloc_new(tctx);
+       char fname[256];
+       struct smb2_handle _h1;
+       struct smb2_handle _h2;
+       struct smb2_handle _h3;
+       struct smb2_handle *h1 = NULL;
+       struct smb2_handle *h2 = NULL;
+       struct smb2_handle *h3 = NULL;
+       union smb_ioctl ioctl;
+       struct smb2_create io;
+       struct network_resiliency_request lmr_req;
+       bool ret = true;
+       enum ndr_err_code ndr_ret;
+       struct GUID create_guid_1 = GUID_random();
+       struct GUID create_guid_2 = GUID_random();
+       struct GUID create_guid_3 = GUID_random();
+       struct smbcli_options options;
+       struct smb2_lock lck;
+       struct smb2_lock_element lock[1];
+       struct smb2_lock lck2;
+       struct smb2_lock_element lock2[1];
+
+       /* Choose a random name in case the state is left a little funky. */
+       snprintf(fname, 256, "durable_v2_resilience_brl_%s.dat",
+                generate_random_str(tctx, 8));
+
+       options = tree->session->transport->options;
+
+       smb2_util_unlink(tree, fname);
+
+       ZERO_STRUCT(break_info);
+       smb2_generic_create_share(&io, NULL, false, fname, NTCREATEX_DISP_OPEN_IF,
+                                 smb2_util_share_access(""), 0, 0, 0);
+
+       /* Open the same file 3 times. */
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.create_guid = create_guid_1;
+       io.in.share_access =
+                NTCREATEX_SHARE_ACCESS_DELETE|
+                NTCREATEX_SHARE_ACCESS_READ|
+                NTCREATEX_SHARE_ACCESS_WRITE;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+       _h1 = io.out.file.handle;
+        h1 = &_h1;
+
+       lock[0].offset = 0;
+       lock[0].length = 4;
+       lock[0].flags = SMB2_LOCK_FLAG_SHARED;
+       ZERO_STRUCT(lck);
+       lck.in.file.handle = _h1;
+       lck.in.locks = &lock[0];
+       lck.in.lock_count = 1;
+       status = smb2_lock(tree, &lck);
+       torture_assert_ntstatus_ok(tctx, status, "Incorrect status");
+
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.create_guid = create_guid_2;
+       io.in.share_access =
+                NTCREATEX_SHARE_ACCESS_DELETE|
+                NTCREATEX_SHARE_ACCESS_READ|
+                NTCREATEX_SHARE_ACCESS_WRITE;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+       _h2 = io.out.file.handle;
+        h2 = &_h2;
+
+       lock2[0].offset = 5;
+       lock2[0].length = 8;
+       lock2[0].flags = SMB2_LOCK_FLAG_SHARED;
+
+       ZERO_STRUCT(lck2);
+       lck2.in.file.handle = _h2;
+       lck2.in.locks = &lock2[0];
+       lck2.in.lock_count = 1;
+       status = smb2_lock(tree, &lck2);
+       torture_assert_ntstatus_ok(tctx, status, "Incorrect status");
+
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.create_guid = create_guid_3;
+       io.in.share_access =
+                NTCREATEX_SHARE_ACCESS_DELETE|
+                NTCREATEX_SHARE_ACCESS_READ|
+                NTCREATEX_SHARE_ACCESS_WRITE;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+       _h3 = io.out.file.handle;
+        h3 = &_h3;
+
+       /*
+        * Now, set resiliency on each session we have to the file...
+        */
+       ZERO_STRUCT(ioctl);
+       ioctl.smb2.level = RAW_IOCTL_SMB2;
+       ioctl.smb2.in.file.handle = _h1;
+       ioctl.smb2.in.function = FSCTL_LMR_REQ_RESILIENCY;
+       ioctl.smb2.in.max_response_size = 0;
+       ioctl.smb2.in.flags = SMB2_IOCTL_FLAG_IS_FSCTL;
+
+       lmr_req.timeout = 30000; /* 30 seconds */
+       lmr_req.reserved = 0;
+
+       ndr_ret = ndr_push_struct_blob(&ioctl.smb2.in.out, mem_ctx, &lmr_req,
+                               (ndr_push_flags_fn_t)ndr_push_network_resiliency_request);
+       torture_assert_ndr_success(tctx, ndr_ret,
+                               "ndr_push_network_resiliency_request");
+
+       status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
+       torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
+
+       ZERO_STRUCT(ioctl);
+       ioctl.smb2.level = RAW_IOCTL_SMB2;
+       ioctl.smb2.in.file.handle = _h2;
+       ioctl.smb2.in.function = FSCTL_LMR_REQ_RESILIENCY;
+       ioctl.smb2.in.max_response_size = 0;
+       ioctl.smb2.in.flags = SMB2_IOCTL_FLAG_IS_FSCTL;
+
+       lmr_req.timeout = 30000; /* 30 seconds */
+       lmr_req.reserved = 0;
+
+       ndr_ret = ndr_push_struct_blob(&ioctl.smb2.in.out, mem_ctx, &lmr_req,
+                               (ndr_push_flags_fn_t)ndr_push_network_resiliency_request);
+       torture_assert_ndr_success(tctx, ndr_ret,
+                               "ndr_push_network_resiliency_request");
+       status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
+       torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
+
+       ZERO_STRUCT(ioctl);
+       ioctl.smb2.level = RAW_IOCTL_SMB2;
+       ioctl.smb2.in.file.handle = _h3;
+       ioctl.smb2.in.function = FSCTL_LMR_REQ_RESILIENCY;
+       ioctl.smb2.in.max_response_size = 0;
+       ioctl.smb2.in.flags = SMB2_IOCTL_FLAG_IS_FSCTL;
+
+       lmr_req.timeout = 30000; /* 30 seconds */
+       lmr_req.reserved = 0;
+
+       ndr_ret = ndr_push_struct_blob(&ioctl.smb2.in.out, mem_ctx, &lmr_req,
+                               (ndr_push_flags_fn_t)ndr_push_network_resiliency_request);
+       torture_assert_ndr_success(tctx, ndr_ret,
+                               "ndr_push_network_resiliency_request");
+
+      status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
+       torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
+
+       /* disconnect, reconnect and then do durable reopen */
+       TALLOC_FREE(tree);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+               torture_warning(tctx, "couldn't reconnect, bailing\n");
+               ret = false;
+               goto done;
+       }
+
+       /*
+        * Now for a succeeding reconnect to our first session:
+       */
+       sleep(5);
+      ZERO_STRUCT(io);
+      io.in.fname = fname;
+      io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.durable_handle = h1;
+       io.in.create_guid = create_guid_1;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       CHECK_CREATED(&io, EXISTED, FILE_ATTRIBUTE_ARCHIVE);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, false); /* no dh2q response blob */
+       CHECK_VAL(io.out.persistent_open, false);
+
+       _h1 = io.out.file.handle;
+        h1 = &_h1;
+
+       /*
+        * Now for a succeeding reconnect to our second session:
+       */
+       sleep(5);
+       ZERO_STRUCT(io);
+       io.in.fname = fname;
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.durable_handle = h2;
+       io.in.create_guid = create_guid_2;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       CHECK_CREATED(&io, EXISTED, FILE_ATTRIBUTE_ARCHIVE);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, false); /* no dh2q response blob */
+       CHECK_VAL(io.out.persistent_open, false);
+
+       _h2 = io.out.file.handle;
+        h2 = &_h2;
+
+       /*
+        * Now for a succeeding reconnect to our third session:
+       */
+       sleep(5);
+       ZERO_STRUCT(io);
+       io.in.fname = fname;
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.durable_handle = h3;
+       io.in.create_guid = create_guid_3;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       CHECK_CREATED(&io, EXISTED, FILE_ATTRIBUTE_ARCHIVE);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, false); /* no dh2q response blob */
+       CHECK_VAL(io.out.persistent_open, false);
+       _h3 = io.out.file.handle;
+        h3 = &_h3;
+
+       sleep(5);
+       lock[0].offset = 0;
+       lock[0].length = 4;
+       lock[0].flags = SMB2_LOCK_FLAG_UNLOCK;
+       ZERO_STRUCT(lck);
+       lck.in.file.handle = _h1;
+       lck.in.locks = &lock[0];
+       lck.in.lock_count = 1;
+       status = smb2_lock(tree, &lck);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       lock2[0].offset = 5;
+       lock2[0].length = 8;
+       lock2[0].flags = SMB2_LOCK_FLAG_UNLOCK;
+       ZERO_STRUCT(lck2);
+       lck2.in.file.handle = _h2;
+       lck2.in.locks = &lock2[0];
+       lck2.in.lock_count = 1;
+       status = smb2_lock(tree, &lck2);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       /* disconnect one more time */
+       TALLOC_FREE(tree);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+                torture_warning(tctx, "couldn't reconnect, bailing\n");
+                ret = false;
+                goto done;
+       }
+
+       status = smb2_util_close(tree, *h1);
+       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
+       status = smb2_util_close(tree, *h2);
+       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
+       status = smb2_util_close(tree, *h3);
+       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
+       h1 = NULL;
+       h2 = NULL;
+       h3 = NULL;
+
+done:
+       if (h1 != NULL) {
+               smb2_util_close(tree, *h1);
+       }
+       if (h2 != NULL) {
+               smb2_util_close(tree, *h2);
+       }
+       if (h3 != NULL) {
+               smb2_util_close(tree, *h3);
        }
        smb2_util_close(tree, io.out.file.handle);
 
@@ -1611,7 +2142,7 @@ bool test_durable_v2_open_app_instance(struct torture_context *tctx,
 	io1.in.persistent_open = false;
 	io1.in.create_guid = create_guid_1;
 	io1.in.app_instance_id = &app_instance_id;
-	io1.in.timeout = UINT32_MAX;
+	io1.in.timeout = 30000;
 
 	status = smb2_create(tree1, mem_ctx, &io1);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -1627,7 +2158,7 @@ bool test_durable_v2_open_app_instance(struct torture_context *tctx,
 	/*
 	 * try to open the file as durable from a second tree with
 	 * a different create guid but the same app_instance_id
-	 * while the first handle is still open.
+	* while the first handle is still open.
 	 */
 
 	smb2_oplock_create_share(&io2, fname,
@@ -1638,7 +2169,7 @@ bool test_durable_v2_open_app_instance(struct torture_context *tctx,
 	io2.in.persistent_open = false;
 	io2.in.create_guid = create_guid_2;
 	io2.in.app_instance_id = &app_instance_id;
-	io2.in.timeout = UINT32_MAX;
+	io2.in.timeout = 30000;
 
 	status = smb2_create(tree2, mem_ctx, &io2);
 	CHECK_STATUS(status, NT_STATUS_OK);
@@ -1860,11 +2391,12 @@ struct torture_suite *torture_smb2_durable_v2_open_init(void)
 	torture_suite_add_1smb2_test(suite, "reopen2c", test_durable_v2_open_reopen2c);
 	torture_suite_add_1smb2_test(suite, "reopen2-lease", test_durable_v2_open_reopen2_lease);
 	torture_suite_add_1smb2_test(suite, "reopen2-lease-v2", test_durable_v2_open_reopen2_lease_v2);
-	torture_suite_add_2smb2_test(suite, "app-instance", test_durable_v2_open_app_instance);
+//	torture_suite_add_2smb2_test(suite, "app-instance", test_durable_v2_open_app_instance);
 	torture_suite_add_1smb2_test(suite, "persistent-open-oplock", test_persistent_open_oplock);
 	torture_suite_add_1smb2_test(suite, "persistent-open-lease", test_persistent_open_lease);
 	torture_suite_add_1smb2_test(suite, "persistent-open-set-persistent", test_durable_v2_open_set_persistence);
-
+        torture_suite_add_1smb2_test(suite, "resilience", test_durable_v2_resilience);
+        torture_suite_add_1smb2_test(suite, "resilience-brlock", test_durable_v2_resilience_brlock);
 	suite->description = talloc_strdup(suite, "SMB2-DURABLE-V2-OPEN tests");
 
 	return suite;

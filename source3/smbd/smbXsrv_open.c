@@ -1095,7 +1095,7 @@ NTSTATUS smbXsrv_open_close(struct smbXsrv_open *op, NTTIME now)
 		}
 	}
 
-	if (global_rec != NULL && op->global->durable) {
+	if (global_rec != NULL && ((op->global->durable) || (op->global->resilient))) {
 		/*
 		 * If it is a durable open we need to update the global part
 		 * instead of deleting it
@@ -1389,7 +1389,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
-	if (!op->global->durable) {
+	if (!((op->global->durable) || (op->global->resilient))) {
 		TALLOC_FREE(op);
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
@@ -1626,4 +1626,52 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 done:
 	talloc_free(frame);
 	return status;
+}
+
+bool smbXsrv_open_is_resilient(uint64_t persistent_id)
+{
+	NTSTATUS status = NT_STATUS_OK;
+	bool ret = false;
+	TALLOC_CTX *frame = talloc_stackframe();
+	struct smbXsrv_open_global0 *op = NULL;
+	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
+	TDB_DATA val;
+	struct db_record *rec;
+	uint32_t global_id = persistent_id & UINT32_MAX;
+
+	key = smbXsrv_open_global_id_to_key(global_id, key_buf);
+	rec = dbwrap_fetch_locked(smbXsrv_open_global_db_ctx, frame, key);
+	if (rec == NULL) {
+		status = NT_STATUS_NOT_FOUND;
+		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x] "
+			  "failed to fetch record from %s - %s\n",
+			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx),
+			   nt_errstr(status)));
+		goto done;
+	}
+
+	val = dbwrap_record_get_value(rec);
+	if (val.dsize == 0) {
+		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x] "
+			  "empty record in %s, skipping...\n",
+			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx)));
+		goto done;
+	}
+
+	status = smbXsrv_open_global_parse_record(talloc_tos(), rec, &op);
+	if (!NT_STATUS_IS_OK(status)) {
+		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x] "
+			  "failed to read record: %s\n",
+			  global_id, nt_errstr(status)));
+		goto done;
+	}
+
+	if ( op->resilient ) {
+		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x], [persistent: 0x%16lx] is resilient\n", global_id, persistent_id));
+		ret = true;
+	}
+done:
+	talloc_free(frame);
+	return ret;
 }

@@ -162,6 +162,12 @@ void file_close_conn(connection_struct *conn)
 			 */
 			fsp->op->global->durable = false;
 		}
+		if (fsp->op != NULL && fsp->op->global->resilient) {
+			/*
+			 * A tree disconnect closes a resilient handle
+			 */
+			fsp->op->global->resilient = false;
+		}
 		close_file(NULL, fsp, SHUTDOWN_CLOSE);
 	}
 }

@@ -662,7 +662,6 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		struct GUID *create_guid = NULL;
 		bool update_open = false;
 		bool durable_requested = false;
-		bool persistent_handle_requested = false;
 		uint32_t durable_timeout_msec = 0;
 		bool do_durable_reconnect = false;
 		uint64_t persistent_id = 0;
@@ -780,7 +779,6 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		if (dh2q) {
 			const uint8_t *p = dh2q->data.data;
 			uint32_t durable_v2_timeout = 0;
-			uint32_t durable_v2_flags = 0;
 			DATA_BLOB create_guid_blob;
 			const uint8_t *hdr;
 			uint32_t flags;
@@ -796,11 +794,6 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			}
 
 			durable_v2_timeout = IVAL(p, 0);
-			durable_v2_flags = IVAL(p, 1);
-
-			if (durable_v2_flags | SMB2_DHANDLE_FLAG_PERSISTENT ) {
-				persistent_handle_requested = true;
-			}
 			create_guid_blob = data_blob_const(p + 16, 16);
 
 			status = GUID_from_ndr_blob(&create_guid_blob,
@@ -1025,9 +1018,9 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 
 			DEBUG(10, ("smb2_create_send: %s to recreate the "
 				   "smb2srv_open struct for a durable handle.\n",
-				   op->global->durable ? "succeded" : "failed"));
+				   (op->global->durable || op->global->resilient) ? "succeded" : "failed"));
 
-			if (!op->global->durable) {
+			if (!(op->global->durable || op->global->resilient)) {
 				talloc_free(op);
 				tevent_req_nterror(req,
 					NT_STATUS_OBJECT_NAME_NOT_FOUND);
@@ -1230,8 +1223,18 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		if (!replay_operation && op->global->backend_cookie.length > 0)
 		{
 			update_open = true;
-
-			op->global->durable = true;
+                        /*
+                         * Ashok:  earlier, we use op->global->durable (or resilient)
+                         *         when we're doing a durable reconnect, so I think
+                         *         'durable' is already appropriately set in that case.
+                         *         Therefore, I'm thinking we only want to set
+                         *         'durable' here if we're newly requesting a 
+                         *         a durable handle (otherwise, we might set it on
+                         *         a resilient handle).
+                         */
+                        if (durable_requested) { 
+			        op->global->durable = true;
+                        }
 			op->global->durable_timeout_msec = durable_timeout_msec;
 		}
 

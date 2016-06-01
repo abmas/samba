@@ -819,6 +819,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 				  (data->stream_name == NULL)
 				  ? "" : data->stream_name,
 				  server_id_str_buf(entry->pid, &tmp)));
+			/* Cannot cleanup share mode lock as a valid entry exists. */
 			goto done;
 		}
 		if (open_persistent_id != entry->share_file_id) {
@@ -837,6 +838,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 				  ? "" : data->stream_name,
 				  (unsigned long long)entry->share_file_id,
 				  (unsigned long long)open_persistent_id));
+			/* Cannot cleanup share mode lock as a valid entry exists. */
 			goto done;
 		}
 	}
@@ -866,6 +868,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 			   (data->stream_name == NULL)
 			   ? "" : data->stream_name,
 			   (unsigned long long)open_persistent_id));
+		/* Cannot cleanup share mode lock as a valid entry exists. */
 		goto done;
 	}
 
@@ -889,6 +892,39 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 	data->modified = true;
 
 	ret = true;
+done:
+	talloc_free(frame);
+	return ret;
+}
+
+
+bool has_connected_share_mode(struct file_id fid)
+{
+	bool ret = false;
+	TALLOC_CTX *frame = talloc_stackframe();
+	unsigned n;
+	struct share_mode_data *data;
+	struct share_mode_lock *lck;
+	bool ok;
+
+	lck = get_existing_share_mode_lock(frame, fid);
+	if (lck == NULL) {
+		DEBUG(5, ("has_connected_share_mode: "
+			  "Could not fetch share mode entry for %s\n",
+			  file_id_string(frame, &fid)));
+		goto done;
+	}
+	data = lck->data;
+
+	for (n=0; n < data->num_share_modes; n++) {
+		struct share_mode_entry *entry = &data->share_modes[n];
+
+		if (!server_id_is_disconnected(&entry->pid)) {
+			/* This is a valid (reconnected) entry */
+			ret = true;
+			goto done;
+		}
+	}
 done:
 	talloc_free(frame);
 	return ret;

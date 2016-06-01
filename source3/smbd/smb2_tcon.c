@@ -377,12 +377,6 @@ static NTSTATUS smbd_smb2_tree_connect(struct smbd_smb2_request *req,
 		*out_share_flags |= SMB2_SHAREFLAG_ENCRYPT_DATA;
 	}
 
-	/* Ashok SVT hack: Just clain CA capability and Scaleout */
-	if ( conn->protocol >= PROTOCOL_SMB3_00) {
-		*out_capabilities |= SMB2_SHARE_CAP_CONTINUOUS_AVAILABILITY;
-		*out_capabilities |= SMB2_SHARE_CAP_SCALEOUT;
-	}
-
 	*out_maximal_access = tcon->compat->share_access;
 
 	*out_tree_id = tcon->global->tcon_wire_id;

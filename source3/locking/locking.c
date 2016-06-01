@@ -865,6 +865,7 @@ static struct share_mode_entry *find_share_mode_entry(
 
 	for (i=0; i<d->num_share_modes; i++) {
 		struct share_mode_entry *e = &d->share_modes[i];
+		DEBUG(10, ("Processing share mode entry with gen_id %lu and share_file_id %lu\n", fsp->fh->gen_id, e->share_file_id));
 
 		if (!is_valid_share_mode_entry(e)) {
 			continue;
@@ -878,6 +879,7 @@ static struct share_mode_entry *find_share_mode_entry(
 		if (fsp->fh->gen_id != e->share_file_id) {
 			continue;
 		}
+		DEBUG(10, ("Returning share mode entry with gen_id %lu and share_file_id %lu\n", fsp->fh->gen_id, e->share_file_id));
 		return e;
 	}
 	return NULL;
@@ -907,35 +909,33 @@ bool mark_share_mode_disconnected(struct share_mode_lock *lck,
 				  struct files_struct *fsp)
 {
 	struct share_mode_entry *e;
-
-	if (lck->data->num_share_modes != 1) {
-		return false;
-	}
+	bool foundone = false;
 
 	if (fsp->op == NULL) {
 		return false;
 	}
-	if (!fsp->op->global->durable) {
+	if (!(fsp->op->global->durable || fsp->op->global->resilient)) {
 		return false;
 	}
 
-	e = find_share_mode_entry(lck, fsp);
-	if (e == NULL) {
-		return false;
-	}
+       while (e = find_share_mode_entry(lck, fsp)) {
+               foundone = true;
+               DEBUG(10, ("Marking share mode entry disconnected for durable handle\n"));
+               server_id_set_disconnected(&e->pid);
+               /*
+               * On reopen the caller needs to check that
+               * the client comes with the correct handle.
+               */
+               e->share_file_id = fsp->op->global->open_persistent_id;
 
-	DEBUG(10, ("Marking share mode entry disconnected for durable handle\n"));
+               lck->data->modified = true;
+       }
 
-	server_id_set_disconnected(&e->pid);
-
-	/*
-	 * On reopen the caller needs to check that
-	 * the client comes with the correct handle.
-	 */
-	e->share_file_id = fsp->op->global->open_persistent_id;
-
-	lck->data->modified = true;
-	return true;
+       if (foundone == true) {
+               return true;
+       } else {
+               return false;
+       }
 }
 
 /*******************************************************************

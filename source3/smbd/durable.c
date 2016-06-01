@@ -169,7 +169,11 @@ NTSTATUS vfs_default_durable_disconnect(struct files_struct *fsp,
 	}
 
 	if ((fsp_lease_type(fsp) & SMB2_LEASE_HANDLE) == 0) {
+            if ( fsp->op->global->durable ) {
 		return NT_STATUS_NOT_SUPPORTED;
+            } else {
+		DEBUG(3, ("vfs_default_durable_disconnect: Ignoring the fact that no lease held. Continuing with durable disconnect"));
+            }
 	}
 
 	/*
@@ -235,10 +239,15 @@ NTSTATUS vfs_default_durable_disconnect(struct files_struct *fsp,
 			TALLOC_FREE(lck);
 		}
 	}
-	if (lck == NULL) {
-		return NT_STATUS_NOT_SUPPORTED;
+	if ( lck == NULL ) {
+            if ( fsp->op->global->durable ) {
+	        return NT_STATUS_NOT_SUPPORTED;
+            } else {
+                DEBUG(1, ("vfs_default_durable_disconnect: Ignoring share mode lock check and continuing with durable disconnect\n"));
+            }
 	}
-	TALLOC_FREE(lck);
+
+        if ( lck ) TALLOC_FREE(lck);
 
 	status = vfs_stat_fsp(fsp);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -550,7 +559,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	struct files_struct *fsp = NULL;
 	NTSTATUS status;
 	bool ok;
-	int ret;
+	int ret,i;
 	int flags = 0;
 	struct file_id file_id;
 	struct smb_filename *smb_fname = NULL;
@@ -627,49 +636,49 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	 */
 
 	lck = get_existing_share_mode_lock(mem_ctx, file_id);
-	if (lck == NULL) {
-		DEBUG(5, ("vfs_default_durable_reconnect: share-mode lock "
-			   "not obtained from db\n"));
-		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
-	}
 
-	if (lck->data->num_share_modes == 0) {
-		DEBUG(1, ("vfs_default_durable_reconnect: Error: no share-mode "
-			  "entry in existing share mode lock\n"));
-		TALLOC_FREE(lck);
-		return NT_STATUS_INTERNAL_DB_ERROR;
-	}
+        if (lck == NULL) {
+                if ( op->global->durable ) {
+                       DEBUG(3, ("vfs_default_durable_reconnect: share-mode lock "
+                               "not obtained from db\n"));
+                       return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+                } else {
+                       DEBUG(3, ("vfs_default_durable_reconnect: share-mode lock "
+                               "not obtained from db, Ignoring...\n"));
+                       goto PROCEEDOPEN;
+                }
+        }
 
-	if (lck->data->num_share_modes > 1) {
-		/*
-		 * It can't be durable if there is more than one handle
-		 * on the file.
-		 */
-		DEBUG(5, ("vfs_default_durable_reconnect: more than one "
-			  "share-mode entry - can not be durable\n"));
-		TALLOC_FREE(lck);
-		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
-	}
+        if (lck->data->num_share_modes == 0) {
+                if ( op->global->durable ) {
+                       DEBUG(1, ("vfs_default_durable_reconnect: Error: no share-mode "
+                               "entry in existing share mode lock\n"));
+                       TALLOC_FREE(lck);
+                       return NT_STATUS_INTERNAL_DB_ERROR;
+                } else {
+                       DEBUG(1, ("vfs_default_durable_reconnect: Error: no share-mode "
+                               "entry in existing share mode lock, Ignoring...\n"));
+                       goto PROCEEDOPEN;
+                }
+        }
 
-	e = &lck->data->share_modes[0];
-
-	if (!server_id_is_disconnected(&e->pid)) {
-		DEBUG(5, ("vfs_default_durable_reconnect: denying durable "
-			  "reconnect for handle that was not marked "
-			  "disconnected (e.g. smbd or cluster node died)\n"));
-		TALLOC_FREE(lck);
-		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
-	}
-
-	if (e->share_file_id != op->global->open_persistent_id) {
-		DEBUG(5, ("vfs_default_durable_reconnect: denying durable "
-			  "share_file_id changed %llu != %llu"
-			  "(e.g. another client had opened the file)\n",
-			  (unsigned long long)e->share_file_id,
-			  (unsigned long long)op->global->open_persistent_id));
-		TALLOC_FREE(lck);
-		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
-	}
+        for (i=0; i<lck->data->num_share_modes; i++) {
+                e = &lck->data->share_modes[i];
+                DEBUG(10, ("vfs_default_durable_reconnect: Processing share mode entry with inode %lu and share_file_id %lu\n", file_id.inode, e->share_file_id));
+                if (e->share_file_id != op->global->open_persistent_id) {
+                       /* When a share mode entry is marked disconnected, the share_file_id is set to open_persistent_id*/
+                       /* This could have been a share mode entry already reconnected */
+                       e = NULL;
+                       continue;
+                }
+                DEBUG(10, ("vfs_default_durable_reconnect: Matched share mode entry with inode %lu and share_file_id %lu\n", file_id.inode, e->share_file_id));
+	        break;
+        }
+        if ( e == NULL ) {
+                DEBUG(3, ("vfs_default_durable_reconnect: denying durable reconnect as no share mode entries available to reconnect\n"));
+                TALLOC_FREE(lck);
+                return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+        }
 
 	if ((e->access_mask & (FILE_WRITE_DATA|FILE_APPEND_DATA)) &&
 	    !CAN_WRITE(conn))
@@ -684,12 +693,12 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	/*
 	 * 2. proceed with opening file
 	 */
-
+PROCEEDOPEN:
 	status = fsp_new(conn, conn, &fsp);
 	if (!NT_STATUS_IS_OK(status)) {
 		DEBUG(0, ("vfs_default_durable_reconnect: failed to create "
 			  "new fsp: %s\n", nt_errstr(status)));
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		return status;
 	}
 
@@ -733,7 +742,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 
 		fsp->lease = find_fsp_lease(fsp, &key, l);
 		if (fsp->lease == NULL) {
-			TALLOC_FREE(lck);
+			if (lck) TALLOC_FREE(lck);
 			fsp_free(fsp);
 			return NT_STATUS_NO_MEMORY;
 		}
@@ -744,7 +753,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 		 */
 		if (!GUID_equal(fsp_client_guid(fsp),
 				&l->client_guid)) {
-			TALLOC_FREE(lck);
+			if (lck) TALLOC_FREE(lck);
 			fsp_free(fsp);
 			return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 		}
@@ -759,7 +768,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 
 	status = fsp_set_smb_fname(fsp, smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		fsp_free(fsp);
 		DEBUG(0, ("vfs_default_durable_reconnect: "
 			  "fsp_set_smb_fname failed: %s\n",
@@ -780,7 +789,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 		DEBUG(1, ("vfs_default_durable_reconnect: "
 			  "failed to reopen brlocks: %s\n",
 			  nt_errstr(status)));
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		op->compat = NULL;
 		fsp_free(fsp);
 		return status;
@@ -799,7 +808,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 
 	status = fd_open(conn, fsp, flags, 0 /* mode */);
 	if (!NT_STATUS_IS_OK(status)) {
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		DEBUG(1, ("vfs_default_durable_reconnect: failed to open "
 			  "file: %s\n", nt_errstr(status)));
 		op->compat = NULL;
@@ -828,7 +837,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 				  "SMB_VFS_CLOSE failed (%s) - leaking file "
 				  "descriptor\n", strerror(errno)));
 		}
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		op->compat = NULL;
 		fsp_free(fsp);
 		return status;
@@ -841,7 +850,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 				  "SMB_VFS_CLOSE failed (%s) - leaking file "
 				  "descriptor\n", strerror(errno)));
 		}
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		op->compat = NULL;
 		fsp_free(fsp);
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
@@ -855,23 +864,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 				  "SMB_VFS_CLOSE failed (%s) - leaking file "
 				  "descriptor\n", strerror(errno)));
 		}
-		TALLOC_FREE(lck);
-		op->compat = NULL;
-		fsp_free(fsp);
-		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
-	}
-
-	ok = vfs_default_durable_reconnect_check_stat(&cookie.stat_info,
-						      &fsp->fsp_name->st,
-						      fsp_str_dbg(fsp));
-	if (!ok) {
-		ret = SMB_VFS_CLOSE(fsp);
-		if (ret == -1) {
-			DEBUG(0, ("vfs_default_durable_reconnect: "
-				  "SMB_VFS_CLOSE failed (%s) - leaking file "
-				  "descriptor\n", strerror(errno)));
-		}
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		op->compat = NULL;
 		fsp_free(fsp);
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
@@ -887,7 +880,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 				  "SMB_VFS_CLOSE failed (%s) - leaking file "
 				  "descriptor\n", strerror(errno)));
 		}
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		op->compat = NULL;
 		fsp_free(fsp);
 		return status;
@@ -895,7 +888,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 
 	status = vfs_default_durable_cookie(fsp, mem_ctx, &new_cookie_blob);
 	if (!NT_STATUS_IS_OK(status)) {
-		TALLOC_FREE(lck);
+		if (lck) TALLOC_FREE(lck);
 		DEBUG(1, ("vfs_default_durable_reconnect: "
 			  "vfs_default_durable_cookie - %s\n",
 			  nt_errstr(status)));
@@ -913,8 +906,10 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	/*
 	 * release the sharemode lock: this writes the changes
 	 */
-	lck->data->modified = true;
-	TALLOC_FREE(lck);
+	if (lck) {
+		lck->data->modified = true;
+		TALLOC_FREE(lck);
+	}
 
 	*result = fsp;
 	*new_cookie = new_cookie_blob;

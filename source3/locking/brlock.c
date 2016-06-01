@@ -1649,7 +1649,7 @@ bool brl_mark_disconnected(struct files_struct *fsp)
 
 	smblctx = fsp->op->global->open_persistent_id;
 
-	if (!fsp->op->global->durable) {
+	if (!(fsp->op->global->durable || fsp->op->global->resilient)) {
 		return false;
 	}
 
@@ -1671,8 +1671,10 @@ bool brl_mark_disconnected(struct files_struct *fsp)
 		 */
 
 		if (lock->context.smblctx != smblctx) {
-			TALLOC_FREE(br_lck);
-			return false;
+                        /*
+                         * This lock is not for this session; continue
+                         */
+                        continue;
 		}
 
 		if (lock->context.tid != tid) {
@@ -1708,14 +1710,17 @@ bool brl_reconnect_disconnected(struct files_struct *fsp)
 	unsigned int i;
 	struct server_id self = messaging_server_id(fsp->conn->sconn->msg_ctx);
 	struct byte_range_lock *br_lck = NULL;
+        int matched_locks = 0;
 
 	if (fsp->op == NULL) {
+		DEBUG(1, ("brl_reconnect_disconnected: fsp->op is null\n"));
 		return false;
 	}
 
 	smblctx = fsp->op->global->open_persistent_id;
 
-	if (!fsp->op->global->durable) {
+	if (!(fsp->op->global->durable || fsp->op->global->resilient)) {
+		DEBUG(1, ("brl_reconnect_disconnected: durable not set\n"));
 		return false;
 	}
 
@@ -1727,6 +1732,7 @@ bool brl_reconnect_disconnected(struct files_struct *fsp)
 
 	br_lck = brl_get_locks(talloc_tos(), fsp);
 	if (br_lck == NULL) {
+		DEBUG(1, ("brl_reconnect_disconnected: br_lck is null\n"));
 		return false;
 	}
 
@@ -1739,36 +1745,42 @@ bool brl_reconnect_disconnected(struct files_struct *fsp)
 		struct lock_struct *lock = &br_lck->lock_data[i];
 
 		/*
-		 * as this is a durable handle we only expect locks
+		 * If this is a durable handle we only expect locks
 		 * of the current file handle!
 		 */
 
 		if (lock->context.smblctx != smblctx) {
-			TALLOC_FREE(br_lck);
-			return false;
+                        /*
+                         *  This lock is not for this session; continue
+                         */
+                        continue;
 		}
 
 		if (lock->context.tid != TID_FIELD_INVALID) {
 			TALLOC_FREE(br_lck);
+			DEBUG(1, ("brl_reconnect_disconnected: invalid TID\n"));
 			return false;
 		}
 
 		if (!server_id_is_disconnected(&lock->context.pid)) {
 			TALLOC_FREE(br_lck);
+			DEBUG(1, ("brl_reconnect_disconnected: server ID not disconnected\n"));
 			return false;
 		}
 
 		if (lock->fnum != FNUM_FIELD_INVALID) {
 			TALLOC_FREE(br_lck);
+			DEBUG(1, ("brl_reconnect_disconnected: invalid FNUM\n"));
 			return false;
 		}
 
 		lock->context.pid = self;
 		lock->context.tid = tid;
 		lock->fnum = fnum;
+                matched_locks++;
 	}
 
-	fsp->current_lock_count = br_lck->num_locks;
+	fsp->current_lock_count = matched_locks;
 	br_lck->modified = true;
 	TALLOC_FREE(br_lck);
 	return true;
@@ -2252,6 +2264,8 @@ bool brl_cleanup_disconnected(struct file_id fid, uint64_t open_persistent_id)
 				  "%s used by server %s, do not cleanup\n",
 				  file_id_string(frame, &fid),
 				  server_id_str_buf(ctx->pid, &tmp)));
+			/* This means a durable handle was already reconnected in this session, don't cleanup */
+			/* return false (ret == false) here so the open for this open_persistent_id is not cleaned up */
 			goto done;
 		}
 
@@ -2262,6 +2276,8 @@ bool brl_cleanup_disconnected(struct file_id fid, uint64_t open_persistent_id)
 				  file_id_string(frame, &fid),
 				  (unsigned long long)open_persistent_id,
 				  (unsigned long long)ctx->smblctx));
+			/* This means a durable handle was already reconnected in this session, don't cleanup */
+			/* return false (ret == false) here so the open for this open_persistent_id is not cleaned up */
 			goto done;
 		}
 	}

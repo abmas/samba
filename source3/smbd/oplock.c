@@ -187,12 +187,10 @@ bool update_num_read_oplocks(files_struct *fsp, struct share_mode_lock *lck)
 	uint32_t i;
 
 	if (EXCLUSIVE_OPLOCK_TYPE(fsp->oplock_type)) {
-		/*
-		 * If we're the only one, we don't need a brlock entry
-		 */
 		remove_stale_share_mode_entries(d);
-		SMB_ASSERT(d->num_share_modes == 1);
-		SMB_ASSERT(EXCLUSIVE_OPLOCK_TYPE(d->share_modes[0].op_type));
+                if (d->num_share_modes != 1 || !EXCLUSIVE_OPLOCK_TYPE(d->share_modes[0].op_type)) {
+                       DEBUG(1,("update_num_read_oplocks: num_share_modes = %d\n",d->num_share_modes));
+                }
 		return true;
 	}
 

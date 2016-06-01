@@ -209,6 +209,7 @@ int share_entry_forall(int (*fn)(const struct share_mode_entry *,
 bool share_mode_cleanup_disconnected(struct file_id id,
 				     uint64_t open_persistent_id);
 
+bool has_connected_share_mode(struct file_id id);
 
 /* The following definitions come from locking/posix.c  */
 
