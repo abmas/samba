@@ -169,7 +169,7 @@ NTSTATUS vfs_default_durable_disconnect(struct files_struct *fsp,
 	}
 
 	if ((fsp_lease_type(fsp) & SMB2_LEASE_HANDLE) == 0) {
-            if ( fsp->op->global->durable ) {
+            if ( fsp->op->global->durable && !fsp->op->global->persistent) {
 		return NT_STATUS_NOT_SUPPORTED;
             } else {
 		DEBUG(3, ("vfs_default_durable_disconnect: Ignoring the fact that no lease held. Continuing with durable disconnect"));
@@ -240,9 +240,11 @@ NTSTATUS vfs_default_durable_disconnect(struct files_struct *fsp,
 		}
 	}
 	if ( lck == NULL ) {
-            if ( fsp->op->global->durable ) {
+            if ( fsp->op->global->durable && !fsp->op->global->persistent) {
 	        return NT_STATUS_NOT_SUPPORTED;
             } else {
+		/* Now that we have taken care of the durable case, I think this can be removed. For resilient and persistent, it is */
+		/* entirely legit to have no share mode locks on disconnect. If there are no locks to preserve, none will be preserved */
                 DEBUG(1, ("vfs_default_durable_disconnect: Ignoring share mode lock check and continuing with durable disconnect\n"));
             }
 	}
@@ -554,8 +556,8 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 				       files_struct **result,
 				       DATA_BLOB *new_cookie)
 {
-	struct share_mode_lock *lck;
-	struct share_mode_entry *e;
+	struct share_mode_lock *lck = NULL;
+	struct share_mode_entry *e = NULL;
 	struct files_struct *fsp = NULL;
 	NTSTATUS status;
 	bool ok;
@@ -638,24 +640,25 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	lck = get_existing_share_mode_lock(mem_ctx, file_id);
 
         if (lck == NULL) {
-                if ( op->global->durable ) {
-                       DEBUG(3, ("vfs_default_durable_reconnect: share-mode lock "
+                if ( op->global->durable && !op->global->persistent) {
+                       DEBUG(1, ("vfs_default_durable_reconnect: share-mode lock "
                                "not obtained from db\n"));
                        return NT_STATUS_OBJECT_NAME_NOT_FOUND;
                 } else {
-                       DEBUG(3, ("vfs_default_durable_reconnect: share-mode lock "
+                       DEBUG(1, ("vfs_default_durable_reconnect: share-mode lock "
                                "not obtained from db, Ignoring...\n"));
                        goto PROCEEDOPEN;
                 }
         }
 
         if (lck->data->num_share_modes == 0) {
-                if ( op->global->durable ) {
+                if ( op->global->durable && !op->global->persistent) {
                        DEBUG(1, ("vfs_default_durable_reconnect: Error: no share-mode "
                                "entry in existing share mode lock\n"));
                        TALLOC_FREE(lck);
                        return NT_STATUS_INTERNAL_DB_ERROR;
                 } else {
+			/* Ok to not have any share mode locks for resilient and persistent? */
                        DEBUG(1, ("vfs_default_durable_reconnect: Error: no share-mode "
                                "entry in existing share mode lock, Ignoring...\n"));
                        goto PROCEEDOPEN;
@@ -675,7 +678,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	        break;
         }
         if ( e == NULL ) {
-                DEBUG(3, ("vfs_default_durable_reconnect: denying durable reconnect as no share mode entries available to reconnect\n"));
+                DEBUG(1, ("vfs_default_durable_reconnect: denying durable reconnect as no share mode entries available to reconnect\n"));
                 TALLOC_FREE(lck);
                 return NT_STATUS_OBJECT_NAME_NOT_FOUND;
         }
@@ -683,7 +686,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	if ((e->access_mask & (FILE_WRITE_DATA|FILE_APPEND_DATA)) &&
 	    !CAN_WRITE(conn))
 	{
-		DEBUG(5, ("vfs_default_durable_reconnect: denying durable "
+		DEBUG(1, ("vfs_default_durable_reconnect: denying durable "
 			  "share[%s] is not writeable anymore\n",
 			  lp_servicename(talloc_tos(), SNUM(conn))));
 		TALLOC_FREE(lck);
@@ -702,14 +705,19 @@ PROCEEDOPEN:
 		return status;
 	}
 
-	fsp->fh->private_options = e->private_options;
 	fsp->fh->gen_id = smbXsrv_open_hash(op);
 	fsp->file_id = file_id;
 	fsp->file_pid = smb1req->smbpid;
 	fsp->vuid = smb1req->vuid;
-	fsp->open_time = e->time;
-	fsp->access_mask = e->access_mask;
-	fsp->share_access = e->share_access;
+
+        if (e != NULL) {
+		fsp->fh->private_options = e->private_options;
+		fsp->open_time = e->time;
+		fsp->access_mask = e->access_mask;
+		fsp->share_access = e->share_access;
+		fsp->oplock_type = e->op_type;
+	}
+
 	fsp->can_read = ((fsp->access_mask & (FILE_READ_DATA)) != 0);
 	fsp->can_write = ((fsp->access_mask & (FILE_WRITE_DATA|FILE_APPEND_DATA)) != 0);
 	fsp->fnum = op->local_id;
@@ -731,7 +739,6 @@ PROCEEDOPEN:
 	 * We do not support aio write behind for smb2
 	 */
 	fsp->aio_write_behind = false;
-	fsp->oplock_type = e->op_type;
 
 	if (fsp->oplock_type == LEASE_OPLOCK) {
 		struct share_mode_lease *l = &lck->data->leases[e->lease_idx];
@@ -779,9 +786,11 @@ PROCEEDOPEN:
 	op->compat = fsp;
 	fsp->op = op;
 
-	e->pid = messaging_server_id(conn->sconn->msg_ctx);
-	e->op_mid = smb1req->mid;
-	e->share_file_id = fsp->fh->gen_id;
+        if (e != NULL) {
+	        e->pid = messaging_server_id(conn->sconn->msg_ctx);
+	        e->op_mid = smb1req->mid;
+	        e->share_file_id = fsp->fh->gen_id;
+        }
 
 	ok = brl_reconnect_disconnected(fsp);
 	if (!ok) {

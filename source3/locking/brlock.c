@@ -52,6 +52,9 @@ struct byte_range_lock {
 	struct db_record *record;
 };
 
+/* forward declaration */
+static int brl_traverse_persist_fn(struct db_record *rec, void *state);
+
 /****************************************************************************
  Debug info at level 10 for lock struct.
 ****************************************************************************/
@@ -345,12 +348,13 @@ void brl_init(bool read_only)
 {
 	int tdb_flags;
 	char *db_path;
+	NTSTATUS status;
 
 	if (brlock_db) {
 		return;
 	}
 
-	tdb_flags = TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH;
+	tdb_flags = TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH;
 
 	if (!lp_clustering()) {
 		/*
@@ -376,6 +380,24 @@ void brl_init(bool read_only)
 			 db_path));
 		TALLOC_FREE(db_path);
 		return;
+	}
+
+	if ( read_only == false ) {
+		status = dbwrap_traverse(brlock_db, brl_traverse_persist_fn, NULL, NULL);
+		if ( ! NT_STATUS_IS_OK(status) ) {
+			TALLOC_FREE(brlock_db);
+			DEBUG(0,("brl_init: ERROR: Failed to recover persistent handle related brlock entries. Cleanup and proceed.\n"));
+			tdb_flags |= TDB_CLEAR_IF_FIRST;
+			brlock_db = db_open(NULL, db_path,
+                            		SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
+                            		read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
+                            		DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
+			if (!brlock_db) {
+				DEBUG(0,("brl_init: Failed to open byte range locking database %s\n", db_path));
+				TALLOC_FREE(db_path);
+				return;
+			}
+		}
 	}
 	TALLOC_FREE(db_path);
 }
@@ -1649,7 +1671,7 @@ bool brl_mark_disconnected(struct files_struct *fsp)
 
 	smblctx = fsp->op->global->open_persistent_id;
 
-	if (!(fsp->op->global->durable || fsp->op->global->resilient)) {
+	if (!(fsp->op->global->durable || fsp->op->global->resilient || fsp->op->global->persistent)) {
 		return false;
 	}
 
@@ -1719,7 +1741,7 @@ bool brl_reconnect_disconnected(struct files_struct *fsp)
 
 	smblctx = fsp->op->global->open_persistent_id;
 
-	if (!(fsp->op->global->durable || fsp->op->global->resilient)) {
+	if (!(fsp->op->global->durable || fsp->op->global->resilient || fsp->op->global->persistent)) {
 		DEBUG(1, ("brl_reconnect_disconnected: durable not set\n"));
 		return false;
 	}
@@ -1839,6 +1861,41 @@ static int brl_traverse_fn(struct db_record *rec, void *state)
 
 	TALLOC_FREE(locks);
 	return 0;
+}
+
+static int brl_traverse_persist_fn(struct db_record *rec, void *state)
+{
+        struct lock_struct *locks;
+        bool found = false;
+        TDB_DATA value;
+	NTSTATUS status;
+
+        value = dbwrap_record_get_value(rec);
+
+        /* In a traverse function we must make a copy of
+           dbuf before modifying it. */
+
+        locks = (struct lock_struct *)talloc_memdup(
+                talloc_tos(), value.dptr, value.dsize);
+        if (!locks) {
+                return 0; /* best effort. next entry*/
+        }
+
+	found = smbXsrv_lookup_persistent_id(locks->context.smblctx);
+
+	if ( found == false) {
+		status = dbwrap_record_delete(rec);
+		if (!NT_STATUS_IS_OK(status)) {
+                	DEBUG(1, ("brl_traverse_persist_fn: Error deleting record for persistent id %lu\n", locks->context.smblctx));
+                	return 0; /*best effort, try to keep going*/
+        	}
+                DEBUG(1, ("brl_traverse_persist_fn: Deleted brl lock record for persistent id %lu\n", locks->context.smblctx));
+	} else {
+                DEBUG(1, ("brl_traverse_persist_fn: Retaining brl lock record for persistent id %lu\n", locks->context.smblctx));
+	}
+
+        TALLOC_FREE(locks);
+        return 0;
 }
 
 /*******************************************************************

@@ -97,9 +97,35 @@ static bool run_matching(struct torture_context *torture,
 
 	for (t = suite->testcases; t; t = t->next) {
 		char *name = talloc_asprintf(torture, "%s.%s", prefix, t->name);
+                char *dot_ptr = NULL;
+                char *numeric_ptr = NULL;
+                bool isdigit = false;
+
+                dot_ptr = strrchr(expr, '.');
+                if (dot_ptr != NULL) {
+                    numeric_ptr = dot_ptr + 1;
+                    while (numeric_ptr[0] != 0) {
+                       if (isdigit(numeric_ptr[0]) == 0) {
+                           isdigit = false;
+                           break;
+                       } else {
+                           isdigit = true;
+                           numeric_ptr++;
+                       }
+                    }
+                    if (isdigit) {
+                       *dot_ptr = 0;
+                    }
+                }
+
 		if (gen_fnmatch(expr, name) == 0) {
 			*matched = true;
 			reload_charcnv(torture->lp_ctx);
+                        if (isdigit) {
+                             torture->numeric_string = dot_ptr + 1;
+                        } else {
+                             torture->numeric_string = NULL;
+                        }
 			ret &= torture_run_tcase_restricted(torture, t, restricted);
 		}
 		for (p = t->tests; p; p = p->next) {
@@ -110,6 +136,11 @@ static bool run_matching(struct torture_context *torture,
 				ret &= torture_run_test_restricted(torture, t, p, restricted);
 			}
 		}
+
+                if (isdigit) {
+                   *dot_ptr = '.';
+                }
+
 	}
 
 	return ret;

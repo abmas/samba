@@ -384,6 +384,7 @@ interface smbXsrv
 		[ref] smbXsrv_tcon_global0		*global;
 		NTSTATUS				status;
 		NTTIME					idle_time;
+		uint32					capabilities;
 		[ignore] connection_struct		*compat;
 	} smbXsrv_tcon;
 
@@ -430,6 +431,7 @@ interface smbXsrv
 		uint32					durable_timeout_msec;
 		boolean8				durable;
                 boolean8                                resilient;
+                boolean8                                persistent;
 		DATA_BLOB				backend_cookie;
 		hyper					channel_sequence;
 	} smbXsrv_open_global0;

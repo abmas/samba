@@ -475,6 +475,8 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 	struct smb2_create_blob *dh2q = NULL;
 	struct smb2_create_blob *rqls = NULL;
 	bool replay_operation = false;
+	struct smbXsrv_open *op = NULL;
+	bool persistent_handle = false;
 
 	if(lp_fake_oplocks(SNUM(smb2req->tcon->compat))) {
 		requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
@@ -779,6 +781,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		if (dh2q) {
 			const uint8_t *p = dh2q->data.data;
 			uint32_t durable_v2_timeout = 0;
+			uint32_t durable_v2_flags = 0;
 			DATA_BLOB create_guid_blob;
 			const uint8_t *hdr;
 			uint32_t flags;
@@ -794,6 +797,14 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			}
 
 			durable_v2_timeout = IVAL(p, 0);
+			durable_v2_flags = IVAL(p, 4);
+
+                        DEBUG(3, ("Got durable v2 request with flag  %x and tcon capability %x\n",
+                                           (int)durable_v2_flags, smb2req->tcon->capabilities));
+                        if ((durable_v2_flags & SMB2_DHANDLE_FLAG_PERSISTENT) && (smb2req->tcon->capabilities & SMB2_SHARE_CAP_CONTINUOUS_AVAILABILITY)) {
+                                DEBUG(3, ("Setting persistent_handle = true\n"));
+				persistent_handle = true;
+			}
 			create_guid_blob = data_blob_const(p + 16, 16);
 
 			status = GUID_from_ndr_blob(&create_guid_blob,
@@ -1018,9 +1029,9 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 
 			DEBUG(10, ("smb2_create_send: %s to recreate the "
 				   "smb2srv_open struct for a durable handle.\n",
-				   (op->global->durable || op->global->resilient) ? "succeded" : "failed"));
+                                   (op->global->durable || op->global->resilient || op->global->persistent) ? "succeded" : "failed"));
 
-			if (!(op->global->durable || op->global->resilient)) {
+                        if (!(op->global->durable || op->global->resilient || op->global->persistent)) {
 				talloc_free(op);
 				tevent_req_nterror(req,
 					NT_STATUS_OBJECT_NAME_NOT_FOUND);
@@ -1210,8 +1221,13 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			}
 		}
 
-		if (!replay_operation && durable_requested &&
-		    (fsp_lease_type(result) & SMB2_LEASE_HANDLE))
+		if (!replay_operation && durable_requested )
+                /*
+                 *  Removed this check:
+                 *     (fsp_lease_type(result) & SMB2_LEASE_HANDLE)
+                 *  because persistent handles don't get that value and
+                 *  we need to create a cookie here.
+                 */
 		{
 			status = SMB_VFS_DURABLE_COOKIE(result,
 						op,
@@ -1237,6 +1253,13 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
                         }
 			op->global->durable_timeout_msec = durable_timeout_msec;
 		}
+
+                if (persistent_handle) {
+                        op->global->durable = true;
+                        op->global->persistent = true;
+                        op->global->durable_timeout_msec = durable_timeout_msec;
+                        update_open = true;
+                }
 
 		if (update_open) {
 			op->global->create_guid = _create_guid;
@@ -1283,6 +1306,9 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			uint8_t p[8] = { 0, };
 			DATA_BLOB blob = data_blob_const(p, sizeof(p));
 			uint32_t durable_v2_response_flags = 0;
+
+			if ( persistent_handle ) 
+				durable_v2_response_flags = SMB2_DHANDLE_FLAG_PERSISTENT;
 
 			SIVAL(p, 0, op->global->durable_timeout_msec);
 			SIVAL(p, 4, durable_v2_response_flags);

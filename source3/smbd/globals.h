@@ -554,6 +554,7 @@ NTSTATUS smb2srv_client_connection_pass(struct smbd_smb2_request *smb2req,
 NTSTATUS smbXsrv_connection_init_tables(struct smbXsrv_connection *conn,
 					enum protocol_types protocol);
 
+bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find);
 NTSTATUS smbXsrv_session_global_init(void);
 NTSTATUS smbXsrv_session_create(struct smbXsrv_connection *conn,
 				NTTIME now,
@@ -933,3 +934,9 @@ struct smbd_server_connection {
 extern struct smbXsrv_client *global_smbXsrv_client;
 
 void smbd_init_globals(void);
+
+struct smbXsrv_open_persistent_id {
+        struct smbXsrv_open_persistent_id *next;
+        uint64_t open_persistent_id;
+};
+

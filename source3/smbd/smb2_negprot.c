@@ -325,6 +325,14 @@ NTSTATUS smbd_smb2_request_process_negprot(struct smbd_smb2_request *req)
 		capabilities |= SMB2_CAP_ENCRYPTION;
 	}
 
+        /* Ashok: Advertise persistent handles capability */
+        if (protocol >= PROTOCOL_SMB3_00) {
+               if (in_capabilities & SMB2_CAP_PERSISTENT_HANDLES) {
+                       capabilities |= SMB2_CAP_PERSISTENT_HANDLES;
+		/*Ashok: Add setting connection datastructure flag for PH */
+               }
+        }
+
 	/*
 	 * 0x10000 (65536) is the maximum allowed message size
 	 * for SMB 2.0

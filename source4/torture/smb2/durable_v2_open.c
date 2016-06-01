@@ -19,6 +19,8 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include <unistd.h>
+#include <dirent.h>
+#include <signal.h>
 #include "includes.h"
 #include "libcli/smb2/smb2.h"
 #include "libcli/smb2/smb2_calls.h"
@@ -314,10 +316,21 @@ static bool test_durable_v2_open_oplock_table(struct torture_context *tctx,
 {
 	bool ret = true;
 	uint8_t i;
+        int testnum = -1;
 
 	smb2_util_unlink(tree, fname);
 
+        if (tctx->numeric_string != NULL) {
+                testnum = atoi(tctx->numeric_string);
+        }
+
 	for (i = 0; i < num_tests; i++) {
+                if (testnum != -1) {
+                         if (testnum != i) {
+                               continue;
+                         }
+                }
+
 		ret = test_one_durable_v2_open_oplock(tctx,
 						      tree,
 						      fname,
@@ -1049,7 +1062,7 @@ bool test_durable_v2_open_reopen2_lease(struct torture_context *tctx,
 	options = tree->session->transport->options;
 
 	/* Choose a random name in case the state is left a little funky. */
-	snprintf(fname, 256, "durable_v2_open_reopen2_%s.dat",
+	snprintf(fname, 256, "durable_v2_open_reopen2_lease%s.dat",
 		 generate_random_str(tctx, 8));
 
 	smb2_util_unlink(tree, fname);
@@ -1295,7 +1308,7 @@ bool test_durable_v2_open_reopen2_lease_v2(struct torture_context *tctx,
 	options = tree->session->transport->options;
 
 	/* Choose a random name in case the state is left a little funky. */
-	snprintf(fname, 256, "durable_v2_open_reopen2_%s.dat",
+	snprintf(fname, 256, "durable_v2_open_reopen_leasev2_%s.dat",
 		 generate_random_str(tctx, 8));
 
 	smb2_util_unlink(tree, fname);
@@ -1530,7 +1543,7 @@ bool test_durable_v2_open_set_persistence(struct torture_context *tctx,
        struct GUID create_guid_1 = GUID_random();
 
        /* Choose a random name in case the state is left a little funky. */
-       snprintf(fname, 256, "durable_v2_open_persist_fsctl_%s.dat",
+       snprintf(fname, 256, "durable_v2_open_set_persist_%s.dat",
                 generate_random_str(tctx, 8));
 
        smb2_util_unlink(tree, fname);
@@ -1573,6 +1586,107 @@ bool test_durable_v2_open_set_persistence(struct torture_context *tctx,
 
        status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
        torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
+
+       status = smb2_util_close(tree, *h1);
+       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
+       h1 = NULL;
+
+done:
+       if (h1 != NULL) {
+              smb2_util_close(tree, *h1);
+       }
+       smb2_util_close(tree, io.out.file.handle);
+
+       smb2_util_unlink(tree, fname);
+
+       talloc_free(mem_ctx);
+       return ret;
+}
+
+/*
+ * Test persistent open/disconnect/reconnect
+ */
+
+bool test_durable_v2_reopen_persistence(struct torture_context *tctx,
+                                         struct smb2_tree *tree)
+{
+       NTSTATUS status;
+       TALLOC_CTX *mem_ctx = talloc_new(tctx);
+       char fname[256];
+       struct smb2_handle _h1;
+       struct smb2_handle *h1 = NULL;
+       union smb_ioctl ioctl;
+       struct smb2_create io;
+       bool ret = true;
+       enum ndr_err_code ndr_ret;
+       struct GUID create_guid_1 = GUID_random();
+       struct smbcli_options options;
+
+       /* Choose a random name in case the state is left a little funky. */
+       snprintf(fname, 256, "durable_v2_reopen_persist_%s.dat",
+                generate_random_str(tctx, 8));
+
+       options = tree->session->transport->options;
+
+       smb2_util_unlink(tree, fname);
+
+       ZERO_STRUCT(break_info);
+       tree->session->transport->oplock.handler = torture_oplock_handler;
+       tree->session->transport->oplock.private_data = tree;
+
+       smb2_oplock_create_share(&io, fname,
+                                smb2_util_share_access(""),
+                                smb2_util_oplock_level("b"));
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = true;
+       io.in.persistent_open = true;
+       io.in.create_guid = create_guid_1;
+       io.in.timeout = 30000;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, true);
+       CHECK_VAL(io.out.persistent_open, true);
+
+       _h1 = io.out.file.handle;
+       h1 = &_h1;
+
+       /* disconnect, reconnect and then do durable reopen */
+       TALLOC_FREE(tree);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+                torture_warning(tctx, "couldn't reconnect, bailing\n");
+                ret = false;
+                goto done;
+       }
+
+       /*
+        * Now for a succeeding reconnect to our first session:
+        */
+       ZERO_STRUCT(io);
+       io.in.fname = fname;
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.durable_handle_v2 = h1;
+       io.in.create_guid = create_guid_1;
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       CHECK_CREATED(&io, EXISTED, FILE_ATTRIBUTE_ARCHIVE);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, false); /* no dh2q response blob */
+       CHECK_VAL(io.out.persistent_open, false);
+
+       /* disconnect one more time */
+       TALLOC_FREE(tree);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+               torture_warning(tctx, "couldn't reconnect, bailing\n");
+               ret = false;
+               goto done;
+       }
 
        status = smb2_util_close(tree, *h1);
        CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
@@ -2376,6 +2490,171 @@ bool test_persistent_open_lease(struct torture_context *tctx,
 	return ret;
 }
 
+bool test_persistent_samba_kill(struct torture_context *tctx,
+                                struct smb2_tree *tree)
+{
+       DIR* dir;
+       struct dirent* ent;
+       char* endptr;
+       char buf[512];
+       NTSTATUS status;
+       TALLOC_CTX *mem_ctx = talloc_new(tctx);
+       char fname[256];
+       struct smb2_handle _h1;
+       struct smb2_handle *h1 = NULL;
+       union smb_ioctl ioctl;
+       struct smb2_create io;
+       bool ret = true;
+       bool found_process = false;
+       enum ndr_err_code ndr_ret;
+       struct GUID create_guid_1 = GUID_random();
+       struct smbcli_options options;
+       struct smb2_lock lck;
+       struct smb2_lock_element lock[1];
+
+       /* Choose a random name in case the state is left a little funky. */
+       snprintf(fname, 256, "persist_samba_kill_%s.dat",
+                generate_random_str(tctx, 8));
+
+       options = tree->session->transport->options;
+
+       smb2_util_unlink(tree, fname);
+
+       ZERO_STRUCT(break_info);
+       tree->session->transport->oplock.handler = torture_oplock_handler;
+       tree->session->transport->oplock.private_data = tree;
+
+       smb2_oplock_create_share(&io, fname,
+                                smb2_util_share_access(""),
+                                smb2_util_oplock_level("b"));
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = true;
+       io.in.persistent_open = true;
+       io.in.create_guid = create_guid_1;
+       io.in.timeout = 30000;
+
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       _h1 = io.out.file.handle;
+       h1 = &_h1;
+
+       lock[0].offset = 0;
+       lock[0].length = 4;
+       lock[0].flags = SMB2_LOCK_FLAG_EXCLUSIVE;
+       ZERO_STRUCT(lck);
+       lck.in.file.handle = _h1;
+       lck.in.locks = &lock[0];
+       lck.in.lock_count = 1;
+       status = smb2_lock(tree, &lck);
+       torture_assert_ntstatus_ok(tctx, status, "Incorrect status");
+
+#ifdef WHATEVER
+       if (!(dir = opendir("/proc"))) {
+           return false;
+       }
+
+       while((ent = readdir(dir)) != NULL) {
+           /* if endptr is not a null character, the directory is not
+            * entirely numeric, so ignore it */
+	   FILE * fp = NULL;
+           long lpid = strtol(ent->d_name, &endptr, 10);
+           if (*endptr != '\0') {
+               continue;
+           }   
+
+           /* try to open the cmdline file */
+           snprintf(buf, sizeof(buf), "/proc/%ld/cmdline", lpid);
+           fp = fopen(buf, "r");
+        
+           if (fp) {
+               if (fgets(buf, sizeof(buf), fp) != NULL) {
+                   /* check the first token in the file, the program name */
+                   char* first = strtok(buf, " ");
+                   if (!strcmp(first, "smbd")) {
+                       fclose(fp);
+                       kill(lpid, SIGKILL);
+                       found_process = true;
+                       break;
+                   }
+               }
+               fclose(fp);
+           }   
+        
+       }
+    
+       closedir(dir);
+       if (!found_process) return false;
+#endif
+       system("/etc/init.d/samba restart");
+
+       /* disconnect, reconnect and then do persistent reopen */
+       TALLOC_FREE(tree);
+
+       sleep(20);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+                torture_warning(tctx, "couldn't reconnect, bailing\n");
+                ret = false;
+                goto done;
+       }
+
+       /*
+        * Now for a succeeding reconnect to our first session:
+        */
+       ZERO_STRUCT(io);
+       io.in.fname = fname;
+       io.in.durable_open = false;
+       io.in.durable_open_v2 = false;
+       io.in.persistent_open = false;
+       io.in.durable_handle_v2 = h1;
+       io.in.create_guid = create_guid_1;
+       status = smb2_create(tree, mem_ctx, &io);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       CHECK_CREATED(&io, EXISTED, FILE_ATTRIBUTE_ARCHIVE);
+       CHECK_VAL(io.out.durable_open, false);
+       CHECK_VAL(io.out.durable_open_v2, false); /* no dh2q response blob */
+       CHECK_VAL(io.out.persistent_open, false);
+
+       _h1 = io.out.file.handle;
+
+       lock[0].offset = 0;
+       lock[0].length = 4;
+       lock[0].flags = SMB2_LOCK_FLAG_UNLOCK;
+       ZERO_STRUCT(lck);
+       lck.in.file.handle = _h1;
+       lck.in.locks = &lock[0];
+       lck.in.lock_count = 1;
+       status = smb2_lock(tree, &lck);
+       CHECK_STATUS(status, NT_STATUS_OK);
+
+       /* disconnect one more time */
+       TALLOC_FREE(tree);
+
+       if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+               torture_warning(tctx, "couldn't reconnect, bailing\n");
+               ret = false;
+               h1 = NULL;
+               goto done;
+       }
+
+       status = smb2_util_close(tree, *h1);
+       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
+       h1 = NULL;
+
+done:
+       if (h1 != NULL) {
+              smb2_util_close(tree, *h1);
+       }
+       smb2_util_close(tree, io.out.file.handle);
+
+       smb2_util_unlink(tree, fname);
+
+       talloc_free(mem_ctx);
+       return ret;
+}
+
 struct torture_suite *torture_smb2_durable_v2_open_init(void)
 {
 	struct torture_suite *suite =
@@ -2397,6 +2676,8 @@ struct torture_suite *torture_smb2_durable_v2_open_init(void)
 	torture_suite_add_1smb2_test(suite, "persistent-open-set-persistent", test_durable_v2_open_set_persistence);
         torture_suite_add_1smb2_test(suite, "resilience", test_durable_v2_resilience);
         torture_suite_add_1smb2_test(suite, "resilience-brlock", test_durable_v2_resilience_brlock);
+        torture_suite_add_1smb2_test(suite, "persistent-reopen", test_durable_v2_reopen_persistence);
+        torture_suite_add_1smb2_test(suite, "persistent-samba-kill", test_persistent_samba_kill);
 	suite->description = talloc_strdup(suite, "SMB2-DURABLE-V2-OPEN tests");
 
 	return suite;

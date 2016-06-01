@@ -329,6 +329,12 @@ static NTSTATUS smbd_smb2_tree_connect(struct smbd_smb2_request *req,
 
 	tcon->status = NT_STATUS_OK;
 
+	if ((conn->smb2.client.capabilities & conn->smb2.server.capabilities & SMB2_CAP_PERSISTENT_HANDLES)) {
+		tcon->capabilities = SMB2_SHARE_CAP_CONTINUOUS_AVAILABILITY;
+	} else {
+		tcon->capabilities = 0; /* Currently CA is the only capability */
+	}
+
 	status = smbXsrv_tcon_update(tcon);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(tcon);
@@ -375,6 +381,14 @@ static NTSTATUS smbd_smb2_tree_connect(struct smbd_smb2_request *req,
 
 	if (encryption_desired) {
 		*out_share_flags |= SMB2_SHAREFLAG_ENCRYPT_DATA;
+	}
+
+	/* If xconn (smbXsrv_connection ) has CAP_PERSISTENT setup, then
+	 * set the following */
+	if ( conn->protocol >= PROTOCOL_SMB3_00 && \
+		( tcon->capabilities & SMB2_SHARE_CAP_CONTINUOUS_AVAILABILITY) ) {
+		*out_capabilities |= SMB2_SHARE_CAP_CONTINUOUS_AVAILABILITY;
+		
 	}
 
 	*out_maximal_access = tcon->compat->share_access;

@@ -58,9 +58,89 @@
 /* the locking database handle */
 static struct db_context *lock_db;
 
+/* forward decl */
+static TDB_DATA unparse_share_modes(struct share_mode_data *d);
+
+static int sml_traverse_persist_fn(struct db_record *rec, void *_state)
+{
+        uint32_t i;
+        TDB_DATA key,data;
+        TDB_DATA value;
+        DATA_BLOB blob;
+        enum ndr_err_code ndr_err;
+        struct share_mode_data *d;
+        struct file_id fid;
+	bool found_persistent_open = False;
+	NTSTATUS status;
+
+        key = dbwrap_record_get_key(rec);
+        value = dbwrap_record_get_value(rec);
+
+	DEBUG(1, ("sml_traverse_persist_fn: Entering sml_traverse_persist_fn\n"));
+
+        /* Ensure this is a locking_key record. */
+        if (key.dsize != sizeof(fid)) {
+                return 0;
+        }
+        memcpy(&fid, key.dptr, sizeof(fid));
+
+        d = talloc(talloc_tos(), struct share_mode_data);
+        if (d == NULL) {
+                return 0;
+        }
+
+        blob.data = value.dptr;
+        blob.length = value.dsize;
+
+        ndr_err = ndr_pull_struct_blob_all(
+                &blob, d, d, (ndr_pull_flags_fn_t)ndr_pull_share_mode_data);
+        if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+                DEBUG(1, ("sml_traverse_persist_fn: ndr_pull_share_mode_lock failed\n"));
+                return 0;
+        }
+
+        for (i=0; i<d->num_share_modes; i++) {
+                struct share_mode_entry *entry = &d->share_modes[i];
+		if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
+                	entry->stale = false; /* [skip] in idl */
+                	entry->lease = &d->leases[entry->lease_idx];
+			found_persistent_open = True;
+			server_id_set_disconnected(&entry->pid);
+			entry->share_file_id = entry->open_persistent_id;
+               		d->modified = true;
+			DEBUG(1, ("sml_traverse_persist_fn: Found a persistent open, retaining record for id %ld\n", entry->open_persistent_id));
+		} else { 
+                	entry->stale = true; /* [skip] in idl */
+		}
+        }
+
+	if ( !found_persistent_open ) {
+		dbwrap_record_delete(rec);
+	} else {
+		data = unparse_share_modes(d);
+		if ( data.dptr != NULL ) {
+			status = dbwrap_record_store(d->record, data, TDB_REPLACE);
+			if (!NT_STATUS_IS_OK(status)) {
+				DEBUG(1, ("sml_traverse_persist_fn: store returned %s\n", nt_errstr(status)));
+			}
+		}
+	}
+
+        if (DEBUGLEVEL >= 3) {
+                DEBUG(3, ("sml_traverse_persist_fn: parse_share_modes:\n"));
+                NDR_PRINT_DEBUG(share_mode_data, d);
+        }
+
+        TALLOC_FREE(d);
+	DEBUG(1, ("sml_traverse_persist_fn: Leaving sml_traverse_persist_fn\n"));
+	
+        return 0;
+}
+
 static bool locking_init_internal(bool read_only)
 {
 	char *db_path;
+	NTSTATUS status;
 
 	brl_init(read_only);
 
@@ -72,15 +152,40 @@ static bool locking_init_internal(bool read_only)
 		return false;
 	}
 
+	/* open the lock db without clearing existing entries, first. Let's try to keep the persistent */
+	/* handle related entries. If something fails in the middle, we will get rid of the db and move on*/
 	lock_db = db_open(NULL, db_path,
 			  SMB_OPEN_DATABASE_TDB_HASH_SIZE,
-			  TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+			  TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH,
 			  read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
 			  DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
-	TALLOC_FREE(db_path);
 	if (!lock_db) {
 		DEBUG(0,("ERROR: Failed to initialise locking database\n"));
+		TALLOC_FREE(db_path);
 		return False;
+	}
+
+	if ( read_only == false ) {
+		/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
+		status = dbwrap_traverse_read(lock_db, sml_traverse_persist_fn, NULL, NULL);
+
+		if ( ! NT_STATUS_IS_OK(status) ) {
+			TALLOC_FREE(lock_db);
+			/* Cleanup and move on */
+			DEBUG(0,("ERROR: Failed to recover persistent handle related lock entries. Cleanup and proceed.\n"));
+			lock_db = db_open(NULL, db_path,
+				SMB_OPEN_DATABASE_TDB_HASH_SIZE,
+				TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+				read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+				DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
+			if (!lock_db) {
+				DEBUG(0,("ERROR: Failed to initialise locking database\n"));
+				TALLOC_FREE(db_path);
+				return False;
+			}
+		} else {
+			TALLOC_FREE(db_path);
+		}
 	}
 
 	if (!posix_locking_init(read_only))
@@ -905,7 +1010,6 @@ bool has_connected_share_mode(struct file_id fid)
 	unsigned n;
 	struct share_mode_data *data;
 	struct share_mode_lock *lck;
-	bool ok;
 
 	lck = get_existing_share_mode_lock(frame, fid);
 	if (lck == NULL) {

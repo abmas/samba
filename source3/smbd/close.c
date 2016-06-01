@@ -661,7 +661,7 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
 	status = ntstatus_keeperror(status, tmp);
 
 	if (NT_STATUS_IS_OK(status) && fsp->op != NULL) {
-		is_durable = fsp->op->global->durable || fsp->op->global->resilient;
+		is_durable = fsp->op->global->durable || fsp->op->global->resilient || fsp->op->global->persistent;
 	}
 
 	if (close_type != SHUTDOWN_CLOSE) {
@@ -728,6 +728,7 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
 		 */
 		fsp->op->global->durable = false;
 		fsp->op->global->resilient = false;
+		fsp->op->global->persistent = false;
 	}
 
 	if (fsp->print_file) {

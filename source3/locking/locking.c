@@ -846,6 +846,14 @@ bool set_share_mode(struct share_mode_lock *lck, struct files_struct *fsp,
 	e->time.tv_usec = fsp->open_time.tv_usec;
 	e->id = fsp->file_id;
 	e->share_file_id = fsp->fh->gen_id;
+	/* For persistent opens, record the persistent id as we will need it when reconnecting after a crash*/
+	/* Note that setting it here does not work for resilient handle for example, which can be made resilient */
+	/* using an ioctl. Persistent handle has to be requested at create time, so setting it here works. */
+	if ( 1 == fsp->op->global->persistent ) {
+		e->open_persistent_id = fsp->op->global->open_persistent_id;
+	} else {
+		e->open_persistent_id = UINT64_MAX;
+	}
 	e->uid = (uint32_t)uid;
 	e->flags = (fsp->posix_flags & FSP_POSIX_FLAGS_OPEN) ?
 		SHARE_MODE_FLAG_POSIX_OPEN : 0;
@@ -914,11 +922,11 @@ bool mark_share_mode_disconnected(struct share_mode_lock *lck,
 	if (fsp->op == NULL) {
 		return false;
 	}
-	if (!(fsp->op->global->durable || fsp->op->global->resilient)) {
+	if (!(fsp->op->global->durable || fsp->op->global->resilient || fsp->op->global->persistent)) {
 		return false;
 	}
 
-       while (e = find_share_mode_entry(lck, fsp)) {
+       while ((e = find_share_mode_entry(lck, fsp))) {
                foundone = true;
                DEBUG(10, ("Marking share mode entry disconnected for durable handle\n"));
                server_id_set_disconnected(&e->pid);

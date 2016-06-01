@@ -1587,13 +1587,6 @@ extern void build_options(bool screen);
 		exit_daemon("Samba cannot init tcon context", EACCES);
 	}
 
-	if (!locking_init())
-		exit_daemon("Samba cannot init locking", EACCES);
-
-	if (!leases_db_init(false)) {
-		exit_daemon("Samba cannot init leases", EACCES);
-	}
-
 	if (!smbd_notifyd_init(msg_ctx, interactive)) {
 		exit_daemon("Samba cannot init notification", EACCES);
 	}
@@ -1644,6 +1637,13 @@ extern void build_options(bool screen);
 	status = smbXsrv_open_global_init();
 	if (!NT_STATUS_IS_OK(status)) {
 		exit_daemon("Samba cannot init global open", map_errno_from_nt_status(status));
+	}
+
+	if (!locking_init())
+		exit_daemon("Samba cannot init locking", EACCES);
+
+	if (!leases_db_init(false)) {
+		exit_daemon("Samba cannot init leases", EACCES);
 	}
 
 	/* This MUST be done before start_epmd() because otherwise

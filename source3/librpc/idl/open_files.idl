@@ -53,6 +53,7 @@ interface open_files
 		timeval		time;
 		file_id		id;
 		udlong		share_file_id;
+		udlong		open_persistent_id;
 		uint32		uid;
 		uint16		flags;
 		uint32		name_hash;

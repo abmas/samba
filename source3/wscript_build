@@ -643,6 +643,7 @@ bld.SAMBA3_SUBSYSTEM('LOCKING',
                     locking/posix.c
                     locking/share_mode_lock.c''',
                     deps='''
+		    smbd_base
                     tdb
                     talloc
                     LEASES_DB

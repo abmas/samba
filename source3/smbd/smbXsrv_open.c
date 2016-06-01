@@ -31,6 +31,11 @@
 #include "librpc/gen_ndr/ndr_smbXsrv.h"
 #include "serverid.h"
 
+/* Remove the paranoid malloc checker. */
+#ifdef malloc
+#undef malloc
+#endif
+
 struct smbXsrv_open_table {
 	struct {
 		struct db_context *db_ctx;
@@ -47,10 +52,96 @@ struct smbXsrv_open_table {
 
 static struct db_context *smbXsrv_open_global_db_ctx = NULL;
 
+struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
+
+static NTSTATUS smbXsrv_open_global_parse_record(TALLOC_CTX *mem_ctx,
+						 struct db_record *rec,
+						 struct smbXsrv_open_global0 **global);
+
+static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *data)
+{
+        /**
+         *  Not using the state feature right now, so commenting this out
+	struct smbXsrv_open_global_traverse_state *state =
+            (struct smbXsrv_open_global_traverse_state*)data;
+        */
+
+	struct smbXsrv_open_global0 *global = NULL;
+	NTSTATUS status;
+
+	status = smbXsrv_open_global_parse_record(talloc_tos(), rec, &global);
+	if (!NT_STATUS_IS_OK(status)) {
+	        DEBUG(1, ("parse record failed on open_global\n"));
+		return -1;
+	}
+
+	global->db_rec = rec;
+        if (global->persistent == 1) {
+                struct smbXsrv_open_persistent_id *persistent_id_element = malloc(sizeof(struct smbXsrv_open_persistent_id));
+                struct smbXsrv_open_persistent_id *last_element = smbXsrv_open_global_persistent_ids;
+
+                persistent_id_element->next = NULL;
+                persistent_id_element->open_persistent_id = global->open_persistent_id;
+
+                if (last_element != NULL) {
+                       while (last_element->next != NULL) {
+		             last_element = last_element->next;
+                       }
+                       last_element->next = persistent_id_element;
+                } else {
+                       smbXsrv_open_global_persistent_ids = persistent_id_element;
+                }
+        } else {
+                status = dbwrap_record_delete(rec);
+	        if (!NT_STATUS_IS_OK(status)) {
+	                DEBUG(1, ("error when deleting non-persistent record\n"));
+         	}
+        }
+
+        /**
+         *  Not using the 'state' feature at the moment, so commenting it out                  
+	ret = state->fn(global, state->private_data);
+         */
+ 
+	talloc_free(global);
+	return 0;
+}
+
+bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find)
+{
+
+        struct smbXsrv_open_persistent_id *current_id;
+	if ( smbXsrv_open_global_db_ctx == NULL ) {
+		DEBUG(1,("smbXsrv_lookup_persistent_id with smbXsrv_open_global_db_ctx = NULL\n"));
+	}
+
+        if (smbXsrv_open_global_persistent_ids == NULL) {
+                return false;
+        }
+        current_id = smbXsrv_open_global_persistent_ids;
+        while (current_id != NULL) {
+                if (current_id->open_persistent_id == persistent_id_to_find) {
+                        return true;
+                }
+                current_id = current_id->next;
+        }
+        return false;
+}
+
 NTSTATUS smbXsrv_open_global_init(void)
 {
 	char *global_path = NULL;
 	struct db_context *db_ctx = NULL;
+	NTSTATUS status;
+
+        /**
+         *  Not using the 'state' feature at the moment, so commenting it out
+	int count = 0;
+	struct smbXsrv_open_global_traverse_state state = {
+		.fn = fn,
+		.private_data = private_data,
+	};
+        */
 
 	if (smbXsrv_open_global_db_ctx != NULL) {
 		return NT_STATUS_OK;
@@ -64,21 +155,22 @@ NTSTATUS smbXsrv_open_global_init(void)
 	db_ctx = db_open(NULL, global_path,
 			 0, /* hash_size */
 			 TDB_DEFAULT |
-			 TDB_CLEAR_IF_FIRST |
 			 TDB_INCOMPATIBLE_HASH,
 			 O_RDWR | O_CREAT, 0600,
 			 DBWRAP_LOCK_ORDER_1,
 			 DBWRAP_FLAG_NONE);
 	TALLOC_FREE(global_path);
 	if (db_ctx == NULL) {
-		NTSTATUS status;
-
+	        DEBUG(1, ("Null context on open_global\n"));
 		status = map_nt_error_from_unix_common(errno);
 
 		return status;
 	}
 
 	smbXsrv_open_global_db_ctx = db_ctx;
+	status = dbwrap_traverse_read(smbXsrv_open_global_db_ctx,
+				      smbXsrv_open_global_traverse_persist_fn,
+				      NULL, NULL);
 
 	return NT_STATUS_OK;
 }
@@ -1095,7 +1187,7 @@ NTSTATUS smbXsrv_open_close(struct smbXsrv_open *op, NTTIME now)
 		}
 	}
 
-	if (global_rec != NULL && ((op->global->durable) || (op->global->resilient))) {
+        if (global_rec != NULL && ((op->global->durable) || (op->global->resilient) || (op->global->persistent))) {
 		/*
 		 * If it is a durable open we need to update the global part
 		 * instead of deleting it
@@ -1389,7 +1481,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
-	if (!((op->global->durable) || (op->global->resilient))) {
+        if (!((op->global->durable) || (op->global->resilient) || (op->global->persistent))) {
 		TALLOC_FREE(op);
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
