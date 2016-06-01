@@ -18,3 +18,4 @@
 0018-Fake-support-for-FSCTL_SET_INTEGRITY_INFORMATION.patch
 0019-Enable-SVHDX-create-context-parsing-but-ignore-it.patch
 0020-Add-support-for-persistent-handles.patch
+0021-HYP-1420-Full-resilient-handle-support-undo-partial-.patch
