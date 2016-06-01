@@ -1,3 +1,10 @@
+samba (2:4.4.0rc4-0+svt6) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-1420 : Resilient Handles Support.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Wed, 01 Jun 2016 13:18:50 -0400
+
 samba (2:4.4.0rc4-0+svt5) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
