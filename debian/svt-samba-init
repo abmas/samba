@@ -254,6 +254,33 @@ echo "CMD $CMD"
         success=0
     fi
 
+    # Remove any old FQDN failure domain entry from the HyperV host's hosts file.
+    CMD=`echo Powershell.exe  -command '$hosts = get-content C:\Windows\System32\drivers\etc\hosts ; $hosts -notmatch '"\"\"\"\s${FAILURE_DOMAIN}-omnicube-io.${DOMAIN_NAME}($|\s)\"\"\""' | Out-File C:\Windows\System32\drivers\etc\hosts'`
+    echo -n "Running: $CMD :on the HyperV host"
+    ${SRCPATH}/winexe -U ${GROUP_NAME}/${ADMIN_USER}%${ADMIN_PASSWD} //${HYPERV_HOST_MGMT_IP} "$CMD"
+
+    if [ $? -eq 0 ]; then
+        echo " : success"
+        success=1
+    else
+        echo " : failed"
+        success=0
+    fi
+
+    # Add an entry for the FQDN failure domain (pointing to the SVA storage IP address) in the
+    # HyperV host's hosts file
+
+    CMD=`echo Powershell.exe  -command "\"\"\"${SVA_STORAGE_IP} ${FAILURE_DOMAIN}-omnicube-io.${DOMAIN_NAME}\"\"\" | Out-File -append C:\Windows\System32\drivers\etc\hosts"`
+    echo -n "Running: $CMD :on the HyperV host"
+    ${SRCPATH}/winexe -U ${GROUP_NAME}/${ADMIN_USER}%${ADMIN_PASSWD} //${HYPERV_HOST_MGMT_IP} "$CMD"
+
+    if [ $? -eq 0 ]; then
+        echo " : success"
+        success=1
+    else
+        echo " : failed"
+        success=0
+    fi
 }
 
 deploy_samba()
