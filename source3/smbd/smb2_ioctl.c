@@ -205,6 +205,14 @@ NTSTATUS smbd_smb2_request_process_ioctl(struct smbd_smb2_request *req)
 				NT_STATUS_INVALID_PARAMETER);
 		}
 		break;
+	case FSCTL_LMR_REQ_RESILIENCY:
+		/* As per MS SMB2 spec, the dynamic part should be 8 bytes. If not
+		 * we need to fail with status invalid parameter
+		 */
+		if ( SMBD_SMB2_IN_DYN_LEN(req) < 8 ) {
+			return smbd_smb2_request_error(req,
+                                NT_STATUS_INVALID_PARAMETER);
+		}
 	default:
 		in_fsp = file_fsp_smb2(req, in_file_id_persistent,
 				       in_file_id_volatile);

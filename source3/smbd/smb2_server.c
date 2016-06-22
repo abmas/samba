@@ -1961,6 +1961,7 @@ NTSTATUS smbd_smb2_request_verify_sizes(struct smbd_smb2_request *req,
 	size_t body_size;
 	size_t min_dyn_size = expected_body_size & 0x00000001;
 	int max_idx = req->in.vector_count - SMBD_SMB2_NUM_IOV_PER_REQ;
+	uint32_t in_ctl_code;
 
 	/*
 	 * The following should be checked already.
@@ -1985,6 +1986,10 @@ NTSTATUS smbd_smb2_request_verify_sizes(struct smbd_smb2_request *req,
 
 	switch (opcode) {
 	case SMB2_OP_IOCTL:
+		inbody = SMBD_SMB2_IN_BODY_PTR(req);
+		in_ctl_code = IVAL(inbody, 0x04);
+		if ( in_ctl_code == FSCTL_LMR_REQ_RESILIENCY )
+			DEBUG(0,("SMBD_SMB2_IN_BODY_LEN(req) = %x, SMBD_SMB2_IN_DYN_LEN(req) = %x\n", (uint32_t)SMBD_SMB2_IN_BODY_LEN(req), (uint32_t)SMBD_SMB2_IN_DYN_LEN(req)));
 	case SMB2_OP_GETINFO:
 		min_dyn_size = 0;
 		break;

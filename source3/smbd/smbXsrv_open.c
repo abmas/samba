@@ -1478,7 +1478,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 
 	if (!security_token_is_sid(current_token, &op->global->open_owner)) {
 		TALLOC_FREE(op);
-		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+		return NT_STATUS_ACCESS_DENIED;
 	}
 
         if (!((op->global->durable) || (op->global->resilient) || (op->global->persistent))) {

@@ -768,7 +768,9 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			/*
 			 * durable handle request is processed below.
 			 */
-			durable_requested = true;
+			if ( (requested_oplock_level & SMB2_OPLOCK_LEVEL_BATCH) || rqls ) {
+				durable_requested = true;
+			}
 			/*
 			 * Set the timeout to 16 mins.
 			 *
@@ -827,7 +829,9 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			/*
 			 * durable handle v2 request processed below
 			 */
-			durable_requested = true;
+                        if ( (requested_oplock_level & SMB2_OPLOCK_LEVEL_BATCH) || rqls || persistent_handle ) {
+				durable_requested = true;
+                        }
 			durable_timeout_msec = durable_v2_timeout;
 			if (durable_timeout_msec == 0) {
 				/*
@@ -873,15 +877,23 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 
 		if (dhnc) {
 			persistent_id = BVAL(dhnc->data.data, 0);
-
 			do_durable_reconnect = true;
 		}
 
 		if (dh2c) {
 			const uint8_t *p = dh2c->data.data;
+			uint32_t durable_v2_flags = 0;
 			DATA_BLOB create_guid_blob;
 
 			persistent_id = BVAL(p, 0);
+			durable_v2_flags = IVAL(p,32);
+
+                        DEBUG(3, ("Got durable v2 request with flag  %x and tcon capability %x\n",
+                                           (int)durable_v2_flags, smb2req->tcon->capabilities));
+                        if ((durable_v2_flags & SMB2_DHANDLE_FLAG_PERSISTENT) && (smb2req->tcon->capabilities & SMB2_SHARE_CAP_CONTINUOUS_AVAILABILITY)) {
+                                DEBUG(3, ("Setting persistent_handle = true\n"));
+				persistent_handle = true;
+			}
 			create_guid_blob = data_blob_const(p + 16, 16);
 
 			status = GUID_from_ndr_blob(&create_guid_blob,
@@ -954,15 +966,25 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 				NDR_PRINT_DEBUG(smb2_lease, lease_ptr);
 			}
 
-			if (!smb2_lease_key_valid(&lease.lease_key)) {
-				lease_ptr = NULL;
+			if ( ! (lease.lease_state & SMB2_LEASE_HANDLE) ) {
+				/* According to MS_SMB2 spec, if lease handle is not requested, do not send
+				 * durable context response.
+				 */
+				durable_requested = false;
 				requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
-			}
-
-			if ((smb2req->xconn->protocol < PROTOCOL_SMB3_00) &&
-			    (lease.lease_version != 1)) {
-				DEBUG(10, ("v2 lease key only for SMB3\n"));
 				lease_ptr = NULL;
+			} else {
+
+				if (!smb2_lease_key_valid(&lease.lease_key)) {
+					lease_ptr = NULL;
+					requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
+				}
+
+				if ((smb2req->xconn->protocol < PROTOCOL_SMB3_00) &&
+						(lease.lease_version != 1)) {
+					DEBUG(10, ("v2 lease key only for SMB3\n"));
+					lease_ptr = NULL;
+				}
 			}
 
 			/*
@@ -1037,6 +1059,14 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 					NT_STATUS_OBJECT_NAME_NOT_FOUND);
 				return tevent_req_post(req, ev);
 			}
+
+
+                       if ( op->global->persistent && persistent_handle == false ) {
+                                talloc_free(op);
+                                tevent_req_nterror(req,
+                                        NT_STATUS_OBJECT_NAME_NOT_FOUND);
+                                return tevent_req_post(req, ev);
+                        }
 
 			status = SMB_VFS_DURABLE_RECONNECT(smb1req->conn,
 						smb1req,
