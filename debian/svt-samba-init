@@ -311,23 +311,8 @@ deploy_samba()
     echo Joining domain
     ask_retry "net ads join -U $ADMIN_USER%$ADMIN_PASSWD"
 
-    #TODO Setup so Samba and Winbind start automatically after svtfs.
-
-    /etc/init.d/samba stop
-    /etc/init.d/samba start
-
-    echo -n "Waiting for Samba service to start...60 seconds: "
-    for i in `seq 1 60`
-    do
-       sleep 1
-       echo -n "."
-    done
-    echo "Done waiting!"
-
-    echo "Verifying winbind operation..."
-    ask_retry "id $ADMIN_USER"
-
-    net rpc rights grant '$GROUP_NAME\\Domain Admins' SeDiskOperatorPrivilege -U$ADMIN_USER%$ADMIN_PASSWD
+    # Delete the upstart override file for samba when running on HyperV
+    [ `grep -ic provider.hyperv $SVTCONF` -eq 1 ] && (rm /etc/init/svt-samba-server.override)
 
     echo "SVT Samba One-time Initialization done."
 }
