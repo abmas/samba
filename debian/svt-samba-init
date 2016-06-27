@@ -261,17 +261,6 @@ deploy_samba()
 
     get_samba_specific_defines
 
-    if [ `iptables -L | head -4 | grep -c "anywhere *$"` -lt 1 ]
-    then
-       echo IPTables is not open enough, injecting rule...
-       iptables -I INPUT -j ACCEPT
-       echo IPTables is updated to accept all incoming traffic
-    else
-       echo IPTables looks good
-    fi
-
-    ${SRCPATH}/fw.stop
-
     setup_domain_networking
 
     echo Starting to update Samba on the DVM and integrate with Windows domain...
@@ -310,6 +299,24 @@ deploy_samba()
 
     echo Joining domain
     ask_retry "net ads join -U $ADMIN_USER%$ADMIN_PASSWD"
+
+    #TODO Setup so Samba and Winbind start automatically after svtfs.
+
+    /etc/init.d/samba stop
+    /etc/init.d/samba start
+
+    echo -n "Waiting for Samba service to start...60 seconds: "
+    for i in `seq 1 60`
+    do
+       sleep 1
+       echo -n "."
+    done
+    echo "Done waiting!"
+
+    echo "Verifying winbind operation..."
+    ask_retry "id $ADMIN_USER"
+
+    net rpc rights grant '$GROUP_NAME\\Domain Admins' SeDiskOperatorPrivilege -U$ADMIN_USER%$ADMIN_PASSWD
 
     # Delete the upstart override file for samba when running on HyperV
     [ `grep -ic provider.hyperv $SVTCONF` -eq 1 ] && (rm /etc/init/svt-samba-server.override)
@@ -389,18 +396,7 @@ prep_predeploy_and_exit()
 	wget -N http://10.0.0.85/captures/SierraNevada/resetTia
 	wget -N http://10.0.0.85/captures/SierraNevada/winexe
 	chmod +x winexe
-	cat > fw.stop << EOT
-#!/bin/sh
-echo "Stopping firewall and allowing everyone..."
-iptables -F
-iptables -X
-iptables -t mangle -F
-iptables -t mangle -X
-iptables -P INPUT ACCEPT
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT ACCEPT
-EOT
-        cat > DEFS << EOT
+	cat > DEFS << EOT
 ### Fill these out to avoid fat fingering! Examples are provided as comments (#) below.
 ### This file is sourced into bash at the beginning of the install script.
 
@@ -439,8 +435,6 @@ EXIT_ON_ERROR=1
 ####Samba specific definitions END####
 EOT
     fi
-
-    chmod +x fw.stop
 
     if [ ! -d ${SAMBAPDIR}/samba ]; then
 	mv /var/lib/samba ${SAMBAPDIR}/
