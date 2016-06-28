@@ -27,7 +27,7 @@ case $1 in
 		initctl stop winbind
 		;;
 	reload)
-		initctl reload smbd
+		killall -HUP smbd; initctl reload smbd
 		;;
 	restart|force-reload)
 		[ -f /var/svtfs/SambaInstall/fw.stop ] && /var/svtfs/SambaInstall/fw.stop &> /dev/null
