@@ -1,3 +1,10 @@
+samba (2:4.4.0rc4-0+svt7) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-2019 : Persistent Handle support + Misc changes.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Tue, 28 Jun 2016 18:45:59 -0400
+
 samba (2:4.4.0rc4-0+svt6) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
