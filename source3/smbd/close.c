@@ -668,6 +668,12 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
 		is_durable = false;
 	}
 
+#ifdef STRICT_RESILIENT_CHECKING
+        if ( fsp->op->global->resilient && !lp_smb2_leases() ) {
+               is_durable = false;
+        }
+#endif
+
 	if (is_durable) {
 		DATA_BLOB new_cookie = data_blob_null;
 

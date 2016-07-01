@@ -965,10 +965,13 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 					   (int)lease_len));
 				NDR_PRINT_DEBUG(smb2_lease, lease_ptr);
 			}
-
-			if ( ! (lease.lease_state & SMB2_LEASE_HANDLE) ) {
-				/* According to MS_SMB2 spec, if lease handle is not requested, do not send
-				 * durable context response.
+                        if ( ( durable_requested || do_durable_reconnect ) &&
+                             (! (lease.lease_state & SMB2_LEASE_HANDLE) ) ) {
+				/* According to MS_SMB2 spec, 
+				 * 1) if durable is requested and
+				 * 2) lease context is provided/requested and
+				 * 3) there is no handle caching lease requested.
+				 * 4) then, durable and lease context requests should be ignored.
 				 */
 				durable_requested = false;
 				requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
