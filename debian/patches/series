@@ -19,3 +19,5 @@
 0019-Enable-SVHDX-create-context-parsing-but-ignore-it.patch
 0020-Add-support-for-persistent-handles.patch
 0021-HYP-1420-Full-resilient-handle-support-undo-partial-.patch
+0022-Persistent-Handle-Support-and-torture-changes.patch
+0023-Microsoft-Protocol-Framework-tests-related-fixes.patch

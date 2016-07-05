@@ -11,7 +11,7 @@
 # ask_retry "<cmd>"
 # NULL/Empty command would cause just the prompt. Skip/Abort out of the prompt as needed.
 #
-env APPSETUP="/var/tmp/build/bin/appsetup"
+export SVTCONF=/var/svtfs/0/myconf/static/svtfs.xml
 ask_retry()
 {
     cmd="$1"
@@ -286,7 +286,6 @@ echo "CMD $CMD"
 
 deploy_samba()
 {
-    . "$APPSETUP"
 
     get_samba_specific_defines
 
