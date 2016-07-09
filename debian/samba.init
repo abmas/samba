@@ -6,40 +6,46 @@
 # Required-Stop:
 # Default-Start:
 # Default-Stop:
-# Short-Description: ensure Samba daemons are started (nmbd and smbd)
+# Short-Description: ensure Samba daemons are started (nmbd, smbd and samba)
+# Description: Starts Samba, a Windows AD and SMB/CIFS fileserver for UNIX
 ### END INIT INFO
 
-#set -e
+set -e
 
-# start nmbd, smbd and winbind unconditionally
+# start nmbd, smbd and samba-ad-dc unconditionally
 # the init scripts themselves check if they are needed or not
 case $1 in
 	start)
-		[ -f /var/svtfs/SambaInstall/fw.stop ] && /var/svtfs/SambaInstall/fw.stop &> /dev/null
-		echo "manual" > /etc/init/svt-firewall.override &> /dev/null
-		initctl start nmbd
-		initctl start smbd
-		initctl start winbind
+		/etc/init.d/nmbd start
+		/etc/init.d/smbd start
+		/etc/init.d/samba-ad-dc start
 		;;
 	stop)
-		initctl stop smbd
-		initctl stop nmbd
-		initctl stop winbind
+		/etc/init.d/samba-ad-dc stop
+		/etc/init.d/smbd stop
+		/etc/init.d/nmbd stop
 		;;
 	reload)
-		killall -HUP smbd; initctl reload smbd
+		/etc/init.d/smbd reload
 		;;
 	restart|force-reload)
-		[ -f /var/svtfs/SambaInstall/fw.stop ] && /var/svtfs/SambaInstall/fw.stop &> /dev/null
-		echo "manual" > /etc/init/svt-firewall.override &> /dev/null
-		initctl "$1" nmbd
-		initctl "$1" smbd
-		initctl "$1" winbind
+		/etc/init.d/nmbd "$1"
+		/etc/init.d/smbd "$1"
+		/etc/init.d/samba-ad-dc "$1"
 		;;
 	status)
-		initctl status nmbd
-		initctl status smbd
-		initctl status winbind
+		status=0
+		NMBD_DISABLED=`testparm -s --parameter-name='disable netbios' 2>/dev/null || true`
+		SERVER_ROLE=`samba-tool testparm --parameter-name="server role"  2>/dev/null | tail -1 || true`
+		if [ "$SERVER_ROLE" != "active directory domain controller" ]; then
+			if [ "$NMBD_DISABLED" != "Yes" ]; then
+				/etc/init.d/nmbd status || status=$?
+			fi
+			/etc/init.d/smbd status || status=$?
+		else
+			/etc/init.d/samba-ad-dc status || status=$?
+		fi
+		exit $status
 		;;
 	*)
 		echo "Usage: /etc/init.d/samba {start|stop|reload|restart|force-reload|status}"

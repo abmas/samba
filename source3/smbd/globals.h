@@ -140,6 +140,13 @@ NTSTATUS smbd_do_qfilepathinfo(connection_struct *conn,
 			       char **ppdata,
 			       unsigned int *pdata_size);
 
+NTSTATUS smbd_do_setfsinfo(connection_struct *conn,
+				struct smb_request *req,
+				TALLOC_CTX *mem_ctx,
+				uint16_t info_level,
+				files_struct *fsp,
+				const DATA_BLOB *pdata);
+
 NTSTATUS smbd_do_setfilepathinfo(connection_struct *conn,
 				struct smb_request *req,
 				TALLOC_CTX *mem_ctx,
@@ -641,6 +648,10 @@ NTSTATUS smb2srv_open_lookup(struct smbXsrv_connection *conn,
 			     uint64_t volatile_id,
 			     NTTIME now,
 			     struct smbXsrv_open **_open);
+NTSTATUS smb2srv_open_lookup_replay_cache(struct smbXsrv_connection *conn,
+					  const struct GUID *create_guid,
+					  NTTIME now,
+					  struct smbXsrv_open **_open);
 NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 			       struct auth_session_info *session_info,
 			       uint64_t persistent_id,
@@ -714,6 +725,13 @@ struct smbd_smb2_request {
 	/* fake smb1 request. */
 	struct smb_request *smb1req;
 	struct files_struct *compat_chain_fsp;
+
+	/*
+	 * Keep track of whether the outstanding request counters
+	 * had been updated in dispatch, so that they need to be
+	 * adapted again in reply.
+	 */
+	bool request_counters_updated;
 
 	/*
 	 * The sub request for async backend calls.

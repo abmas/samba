@@ -404,6 +404,11 @@ interface smbXsrv
 
 	/* open files */
 
+	typedef [public,bitmap8bit] bitmap {
+		SMBXSRV_OPEN_NEED_REPLAY_CACHE		= 0x01,
+		SMBXSRV_OPEN_HAVE_REPLAY_CACHE		= 0x02
+	} smbXsrv_open_flags;
+
 	typedef struct {
 		[ignore] db_record 			*db_rec;
 		server_id				server_id;
@@ -425,6 +430,7 @@ interface smbXsrv
 		uint32					durable_timeout_msec;
 		boolean8				durable;
 		DATA_BLOB				backend_cookie;
+		hyper					channel_sequence;
 	} smbXsrv_open_global0;
 
 	typedef union {
@@ -463,6 +469,10 @@ interface smbXsrv
 		NTSTATUS				status;
 		NTTIME					idle_time;
 		[ignore] files_struct			*compat;
+		smbXsrv_open_flags			flags;
+		uint32					create_action;
+		hyper					request_count;
+		hyper					pre_request_count;
 	} smbXsrv_open;
 
 	typedef union {
