@@ -466,7 +466,8 @@ bool rename_share_filename(struct messaging_context *msg_ctx,
 			const char *servicepath,
 			uint32_t orig_name_hash,
 			uint32_t new_name_hash,
-			const struct smb_filename *smb_fname_dst)
+			const struct smb_filename *smb_fname_dst,
+			uint64_t open_persistent_id)
 {
 	struct share_mode_data *d = lck->data;
 	size_t sp_len;
@@ -582,7 +583,8 @@ bool rename_share_filename(struct messaging_context *msg_ctx,
 					&id,
 					d->servicepath,
 					d->base_name,
-					d->stream_name);
+					d->stream_name,
+					open_persistent_id);
 		if (!NT_STATUS_IS_OK(status)) {
 			/* Any error recovery possible here ? */
 			DEBUG(1,("Failed to rename lease key for "

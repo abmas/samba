@@ -381,6 +381,19 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(
 	struct smb_filename *smb_fname = NULL;
 	uint32_t ucf_flags = UCF_PREP_CREATEFILE;
 	NTSTATUS status;
+	char *unix_syntax_filename;
+
+	if (requested_filename == NULL) {
+		DEBUG(1, ("smbd_smb2_create_durable_lease_check: requested filename is NULL\n"));
+		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+	}
+
+	unix_syntax_filename = strdup(requested_filename);
+
+	if (unix_syntax_filename == NULL) {
+		DEBUG(1, ("smbd_smb2_create_durable_lease_check: can't dup filename; out of memory\n"));
+		return NT_STATUS_NO_MEMORY;
+	}
 
 	if (lease_ptr == NULL) {
 		if (fsp->oplock_type != LEASE_OPLOCK) {
@@ -403,13 +416,21 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(
 			   "in reopened file\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
+	status = check_path_syntax(unix_syntax_filename);
+	if (!NT_STATUS_IS_OK(status)) {
+		DEBUG(10, ("smbd_smb2_create_durable_lease_check: check_path_syntax returned %s\n",
+			   nt_errstr(status)));
+		free(unix_syntax_filename);
+		return status;
+	}
 
 	status = filename_convert(talloc_tos(), fsp->conn, false,
-				  requested_filename, ucf_flags,
+				  unix_syntax_filename, ucf_flags,
 				  NULL, &smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
 		DEBUG(10, ("filename_convert returned %s\n",
 			   nt_errstr(status)));
+		free(unix_syntax_filename);
 		return status;
 	}
 
@@ -417,6 +438,7 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(
 		DEBUG(10, ("Lease requested for file %s, reopened file "
 			   "is named %s\n", smb_fname->base_name,
 			   fsp->fsp_name->base_name));
+		free(unix_syntax_filename);
 		TALLOC_FREE(smb_fname);
 		return NT_STATUS_INVALID_PARAMETER;
 	}

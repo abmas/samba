@@ -1685,7 +1685,8 @@ static NTSTATUS grant_fsp_lease(struct files_struct *fsp,
 			       &fsp->file_id,
 			       fsp->conn->connectpath,
 			       fsp->fsp_name->base_name,
-			       fsp->fsp_name->stream_name);
+			       fsp->fsp_name->stream_name,
+			       fsp->op->global->open_persistent_id);
 	if (!NT_STATUS_IS_OK(status)) {
 		DEBUG(10, ("%s: leases_db_add failed: %s\n", __func__,
 			   nt_errstr(status)));

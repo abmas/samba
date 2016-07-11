@@ -32,7 +32,8 @@ NTSTATUS leases_db_add(const struct GUID *client_guid,
 		       const struct file_id *id,
 		       const char *servicepath,
 		       const char *filename,
-		       const char *stream_name);
+		       const char *stream_name,
+		       uint64_t open_persistent_id);
 NTSTATUS leases_db_del(const struct GUID *client_guid,
 		       const struct smb2_lease_key *lease_key,
 		       const struct file_id *id);
@@ -47,7 +48,8 @@ NTSTATUS leases_db_rename(const struct GUID *client_guid,
 			const struct file_id *id,
 			const char *servicepath_new,
 			const char *filename_new,
-			const char *stream_name_new);
+			const char *stream_name_new,
+		        uint64_t open_persistent_id);
 NTSTATUS leases_db_copy_file_ids(TALLOC_CTX *mem_ctx,
 			uint32_t num_files,
 			const struct leases_db_file *files,

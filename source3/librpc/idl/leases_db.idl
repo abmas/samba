@@ -19,6 +19,7 @@ interface leases_db
 		[string,charset(UTF8)] char *servicepath;
 		[string,charset(UTF8)] char *base_name;
 		[string,charset(UTF8)] char *stream_name;
+		udlong open_persistent_id;
 	} leases_db_file;
 
 	typedef [public] struct {
