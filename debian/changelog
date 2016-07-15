@@ -1,3 +1,11 @@
+samba (2:4.4.0rc4-0+svt8) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-1682: Move tdbs needed for persistent reconnect to /etc/samba (persistent store)
+  * HYP-1683 : Persist some tdbs required for PH across samba restarts to file.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Fri, 15 Jul 2016 15:38:31 -0400
+
 samba (2:4.4.0rc4-0+svt7) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
