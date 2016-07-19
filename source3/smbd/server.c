@@ -1639,12 +1639,12 @@ extern void build_options(bool screen);
 		exit_daemon("Samba cannot init global open", map_errno_from_nt_status(status));
 	}
 
-	if (!locking_init())
-		exit_daemon("Samba cannot init locking", EACCES);
-
 	if (!leases_db_init(false)) {
 		exit_daemon("Samba cannot init leases", EACCES);
 	}
+
+	if (!locking_init())
+		exit_daemon("Samba cannot init locking", EACCES);
 
 	/* This MUST be done before start_epmd() because otherwise
 	 * start_epmd() forks and races against dcesrv_ep_setup() to

@@ -50,6 +50,14 @@ struct smbXsrv_open_table {
 	} global;
 };
 
+struct db_record {
+        struct db_context *db;
+        TDB_DATA key, value;
+        NTSTATUS (*store)(struct db_record *rec, TDB_DATA data, int flag);
+        NTSTATUS (*delete_rec)(struct db_record *rec);
+        void *private_data;
+};
+
 static struct db_context *smbXsrv_open_global_db_ctx = NULL;
 
 struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
@@ -57,6 +65,8 @@ struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
 static NTSTATUS smbXsrv_open_global_parse_record(TALLOC_CTX *mem_ctx,
 						 struct db_record *rec,
 						 struct smbXsrv_open_global0 **global);
+
+NTSTATUS smbXsrv_open_disconnect(struct smbXsrv_open_global0 *global, struct db_context *db_ctx, NTTIME now);
 
 static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *data)
 {
@@ -68,6 +78,9 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
 
 	struct smbXsrv_open_global0 *global = NULL;
 	NTSTATUS status;
+        struct db_record *result;
+	TDB_DATA key;
+	TDB_DATA val;
 
 	status = smbXsrv_open_global_parse_record(talloc_tos(), rec, &global);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -75,7 +88,17 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
 		return -1;
 	}
 
-	global->db_rec = rec;
+	key = dbwrap_record_get_key(rec);
+
+	val = dbwrap_record_get_value(rec);
+
+        result = (struct db_record *)talloc_size(
+		global,
+                sizeof(struct db_record) + key.dsize + val.dsize);
+
+	global->db_rec = result;
+	memcpy(global->db_rec, rec, sizeof(struct db_record) + key.dsize + val.dsize);
+
         if (global->persistent == 1) {
                 struct smbXsrv_open_persistent_id *persistent_id_element = malloc(sizeof(struct smbXsrv_open_persistent_id));
                 struct smbXsrv_open_persistent_id *last_element = smbXsrv_open_global_persistent_ids;
@@ -91,10 +114,11 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
                 } else {
                        smbXsrv_open_global_persistent_ids = persistent_id_element;
                 }
+		smbXsrv_open_disconnect(global, smbXsrv_open_global_db_ctx, 0);
         } else {
                 status = dbwrap_record_delete(rec);
 	        if (!NT_STATUS_IS_OK(status)) {
-	                DEBUG(1, ("error when deleting non-persistent record\n"));
+	                DEBUG(1, ("smbXsrv_open_global_traverse_persist_fn: error when deleting non-persistent record in traverse function\n"));
          	}
         }
 
@@ -168,9 +192,9 @@ NTSTATUS smbXsrv_open_global_init(void)
 	}
 
 	smbXsrv_open_global_db_ctx = db_ctx;
-	status = dbwrap_traverse_read(smbXsrv_open_global_db_ctx,
-				      smbXsrv_open_global_traverse_persist_fn,
-				      NULL, NULL);
+	status = dbwrap_traverse(smbXsrv_open_global_db_ctx,
+				 smbXsrv_open_global_traverse_persist_fn,
+				 NULL, NULL);
 
 	return NT_STATUS_OK;
 }
@@ -1148,6 +1172,80 @@ NTSTATUS smbXsrv_open_update(struct smbXsrv_open *op)
 	}
 
 	return NT_STATUS_OK;
+}
+
+NTSTATUS smbXsrv_open_disconnect(struct smbXsrv_open_global0 *global, struct db_context *db_ctx, NTTIME now)
+{
+	struct db_record *global_rec = NULL;
+	NTSTATUS status;
+	NTSTATUS error = NT_STATUS_OK;
+
+	global->disconnect_time = now;
+	server_id_set_disconnected(&global->server_id);
+
+	global_rec = global->db_rec;
+	global->db_rec = NULL;
+	if (global_rec == NULL) {
+		uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
+		TDB_DATA key;
+
+		key = smbXsrv_open_global_id_to_key(
+						global->open_global_id,
+						key_buf);
+
+		global_rec = dbwrap_fetch_locked(db_ctx,
+						 global, key);
+		if (global_rec == NULL) {
+			DEBUG(0, ("smbXsrv_open_disconnect(0x%08x): "
+				  "Failed to lock global key '%s'\n",
+				  global->open_global_id,
+				  hex_encode_talloc(global_rec, key.dptr,
+						    key.dsize)));
+			error = NT_STATUS_INTERNAL_ERROR;
+		}
+	}
+
+        if (global_rec != NULL && ((global->durable) || (global->resilient) || (global->persistent))) {
+		/*
+		 * If it is a durable open we need to update the global part
+		 * instead of deleting it
+		 */
+		global->db_rec = global_rec;
+		status = smbXsrv_open_global_store(global);
+		if (NT_STATUS_IS_OK(status)) {
+			/*
+			 * smbXsrv_open_global_store does the free
+			 * of op->global->db_rec
+			 */
+			global_rec = NULL;
+		}
+		if (!NT_STATUS_IS_OK(status)) {
+			DEBUG(0,("smbXsrv_open_disconnect(0x%08x)"
+				 "smbXsrv_open_global_store() failed - %s\n",
+				 global->open_global_id,
+				 nt_errstr(status)));
+			error = status;
+		}
+	}
+
+	if (global_rec != NULL) {
+		status = dbwrap_record_delete(global_rec);
+		if (!NT_STATUS_IS_OK(status)) {
+			TDB_DATA key = dbwrap_record_get_key(global_rec);
+
+			DEBUG(0, ("smbXsrv_open_disconnect(0x%08x): "
+				  "failed to delete global key '%s': %s\n",
+				  global->open_global_id,
+				  hex_encode_talloc(global_rec, key.dptr,
+						    key.dsize),
+				  nt_errstr(status)));
+			error = status;
+		}
+	}
+
+	TALLOC_FREE(global_rec);
+
+	return error;
 }
 
 NTSTATUS smbXsrv_open_close(struct smbXsrv_open *op, NTTIME now)

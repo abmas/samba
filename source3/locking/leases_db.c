@@ -33,63 +33,105 @@
 /* the leases database handle */
 static struct db_context *leases_db;
 
+void remove_stale_lease_entries(struct leases_db_value *d)
+{
+	uint32_t i;
+
+	i = 0;
+	while (i < d->num_files) {
+		if (d->files[i].stale) {
+			struct leases_db_file *m = d->files;
+			m[i] = m[d->num_files-1];
+			d->num_files -= 1;
+		} else {
+			i += 1;
+		}
+	}
+}
+
 static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
 {
-        uint32_t i;
-        TDB_DATA key,data;
-        TDB_DATA value;
-        DATA_BLOB blob;
-        enum ndr_err_code ndr_err;
-        struct leases_db_value *d;
-        bool found_persistent_open = False;
-        NTSTATUS status;
+	uint32_t i;
+	TDB_DATA key,data;
+	TDB_DATA value;
+	DATA_BLOB blob;
+	enum ndr_err_code ndr_err;
+	struct leases_db_value *d;
+	bool found_persistent_open = False;
+	NTSTATUS status;
 
-        key = dbwrap_record_get_key(rec);
-        value = dbwrap_record_get_value(rec);
+	key = dbwrap_record_get_key(rec);
+	value = dbwrap_record_get_value(rec);
 
-        DEBUG(1, ("leases_db_traverse_persist_fn: Entering leases_db_traverse_persist_fn\n"));
+	DEBUG(1, ("leases_db_traverse_persist_fn: Entering leases_db_traverse_persist_fn\n"));
 
-        /* Ensure this is a key record. */
-        if (key.dsize != sizeof(struct leases_db_key)) {
-		DEBUG(1, ("leases_db_traverse_persist_fn: Record is not a key record - key.dsize is %d\n", key.dsize));
-                return 0;
-        }
+	/* Ensure this is a key record. */
+	if (key.dsize != sizeof(struct leases_db_key)) {
+	     	DEBUG(1, ("leases_db_traverse_persist_fn: Record is not a key record - key.dsize is %d\n", (int)key.dsize));
+		return 0;
+	}
 
-        d = talloc(talloc_tos(), struct leases_db_value);
-        if (d == NULL) {
-		DEBUG(1, ("leases_db_traverse_persist_fn: talloc failed\n"));
-                return 0;
-        }
+	d = talloc(talloc_tos(), struct leases_db_value);
+	if (d == NULL) {
+	     	DEBUG(1, ("leases_db_traverse_persist_fn: talloc failed\n"));
+		return 0;
+	}
 
-        blob.data = value.dptr;
-        blob.length = value.dsize;
+	blob.data = value.dptr;
+	blob.length = value.dsize;
 
 	ndr_err = ndr_pull_struct_blob_all(
 		&blob, d, d,
 		(ndr_pull_flags_fn_t)ndr_pull_leases_db_value);
-        if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
-                DEBUG(1, ("leases_db_traverse_persist_fn: ndr_pull_lease failed\n"));
-                return 0;
-        }
+	if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+		DEBUG(1, ("leases_db_traverse_persist_fn: ndr_pull_lease failed\n"));
+		return 0;
+	}
 
-        for (i=0; i<d->num_files; i++) {
-                DEBUG(1, ("leases_db_traverse_persist_fn: Loop iteration %i\n", i));
-                struct leases_db_file *entry = &d->files[i];
-                if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
-                        found_persistent_open = True;
-                        DEBUG(1, ("leases_db_traverse_persist_fn: Found a persistent open, retaining record for id %ld\n", entry->open_persistent_id));
-                }
-        }
+	for (i=0; i<d->num_files; i++) {
+		DEBUG(1, ("leases_db_traverse_persist_fn: Loop iteration %i\n", i));
+		struct leases_db_file *entry = &d->files[i];
+		if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
+			entry->stale = false; /* [skip] in idl */
+			found_persistent_open = True;
+			DEBUG(1, ("leases_db_traverse_persist_fn: Found a persistent open, retaining record for id %ld\n", entry->open_persistent_id));
+		} else {
+			entry->stale = true; /* [skip] in idl */
+		}
+	}
 
-        if ( !found_persistent_open ) {
-                DEBUG(1, ("leases_db_traverse_persist_fn: Removing record from leases.tdb\n"));
-                dbwrap_record_delete(rec);
-        }
+	if ( !found_persistent_open ) {
+		DEBUG(1, ("leases_db_traverse_persist_fn: Removing record from leases.tdb\n"));
+		dbwrap_record_delete(rec);
+	} else {
+		remove_stale_lease_entries(d);
 
-        TALLOC_FREE(d);
-        DEBUG(1, ("leases_db_traverse_persist_fn: Leaving leases_db_traverse_persist_fn\n"));
+		if (d->num_files == 0) {
+			DEBUG(10, ("No used lease found\n"));
+			data = make_tdb_data(NULL, 0);
+		} else {
+			ndr_err = ndr_push_struct_blob(
+				&blob, d, d, (ndr_push_flags_fn_t)ndr_push_leases_db_value);
+			if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+				smb_panic("ndr_push_leases_db failed");
+				return 0;
+			}
 
-        return 0;
+			data = make_tdb_data(blob.data, blob.length);
+		}
+
+		if ( data.dptr != NULL ) {
+			status = dbwrap_record_store(rec, data, TDB_REPLACE);
+			if (!NT_STATUS_IS_OK(status)) {
+				DEBUG(1, ("leases_db_traverse_persist_fn: store returned %s\n", nt_errstr(status)));
+			}
+		}
+	}
+
+	TALLOC_FREE(d);
+	DEBUG(1, ("leases_db_traverse_persist_fn: Leaving leases_db_traverse_persist_fn\n"));
+
+	return 0;
 }
 
 bool leases_db_init(bool read_only)
@@ -117,27 +159,27 @@ bool leases_db_init(bool read_only)
 		return false;
 	}
 
-        if ( read_only == false ) {
-                /* traverse the db and only get rid of entries not belonging to a persistent open */
-                status = dbwrap_traverse_read(leases_db, leases_db_traverse_persist_fn, NULL, NULL);
+	if ( read_only == false ) {
+		/* traverse the db and only get rid of entries not belonging to a persistent open */
+		status = dbwrap_traverse(leases_db, leases_db_traverse_persist_fn, NULL, NULL);
 
-                if ( ! NT_STATUS_IS_OK(status) ) {
-                        TALLOC_FREE(leases_db);
-                        /* Cleanup and move on */
-                        DEBUG(0,("ERROR: Failed to recover persistent handle related lease entries. Cleanup and proceed.\n"));
-                        leases_db = db_open(NULL, db_path, 0,
-                                TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
-                                read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
-                                DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
-                        if (!leases_db) {
-                                DEBUG(0,("ERROR: Failed to initialise lease database\n"));
-                                TALLOC_FREE(db_path);
-                                return False;
-                        }
-                } else {
-                        TALLOC_FREE(db_path);
-                }
-        }
+		if ( ! NT_STATUS_IS_OK(status) ) {
+			TALLOC_FREE(leases_db);
+			/* Cleanup and move on */
+			DEBUG(0,("ERROR: Failed to recover persistent handle related lease entries. Cleanup and proceed.\n"));
+			leases_db = db_open(NULL, db_path, 0,
+				TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+				read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+				DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
+			if (!leases_db) {
+				DEBUG(0,("ERROR: Failed to initialise lease database\n"));
+				TALLOC_FREE(db_path);
+				return False;
+			}
+		} else {
+			TALLOC_FREE(db_path);
+		}
+	}
 
 	return true;
 }

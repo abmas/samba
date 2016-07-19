@@ -103,7 +103,12 @@ static int sml_traverse_persist_fn(struct db_record *rec, void *_state)
                 struct share_mode_entry *entry = &d->share_modes[i];
 		if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
                 	entry->stale = false; /* [skip] in idl */
-                	entry->lease = &d->leases[entry->lease_idx];
+			if ( (entry->op_type == LEASE_OPLOCK) &&
+				(entry->lease_idx < d->num_leases) ) {
+				entry->lease = &d->leases[entry->lease_idx];
+			} else {
+				entry->lease = NULL;
+			}
 			found_persistent_open = True;
 			server_id_set_disconnected(&entry->pid);
 			entry->share_file_id = entry->open_persistent_id;
@@ -119,7 +124,7 @@ static int sml_traverse_persist_fn(struct db_record *rec, void *_state)
 	} else {
 		data = unparse_share_modes(d);
 		if ( data.dptr != NULL ) {
-			status = dbwrap_record_store(d->record, data, TDB_REPLACE);
+			status = dbwrap_record_store(rec, data, TDB_REPLACE);
 			if (!NT_STATUS_IS_OK(status)) {
 				DEBUG(1, ("sml_traverse_persist_fn: store returned %s\n", nt_errstr(status)));
 			}
@@ -167,7 +172,7 @@ static bool locking_init_internal(bool read_only)
 
 	if ( read_only == false ) {
 		/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
-		status = dbwrap_traverse_read(lock_db, sml_traverse_persist_fn, NULL, NULL);
+		status = dbwrap_traverse(lock_db, sml_traverse_persist_fn, NULL, NULL);
 
 		if ( ! NT_STATUS_IS_OK(status) ) {
 			TALLOC_FREE(lock_db);

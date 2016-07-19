@@ -987,8 +987,8 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 					   (int)lease_len));
 				NDR_PRINT_DEBUG(smb2_lease, lease_ptr);
 			}
-                        if ( ( durable_requested || do_durable_reconnect ) &&
-                             (! (lease.lease_state & SMB2_LEASE_HANDLE) ) ) {
+			if ( ( durable_requested || do_durable_reconnect ) &&
+				(! (lease.lease_state & SMB2_LEASE_HANDLE) ) ) {
 				/* According to MS_SMB2 spec, 
 				 * 1) if durable is requested and
 				 * 2) lease context is provided/requested and
@@ -1276,6 +1276,13 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 			}
 		}
 
+                if (persistent_handle) {
+                        op->global->durable = true;
+                        op->global->persistent = true;
+                        op->global->durable_timeout_msec = durable_timeout_msec;
+                        update_open = true;
+                }
+
 		if (!replay_operation && durable_requested )
                 /*
                  *  Removed this check:
@@ -1308,13 +1315,6 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
                         }
 			op->global->durable_timeout_msec = durable_timeout_msec;
 		}
-
-                if (persistent_handle) {
-                        op->global->durable = true;
-                        op->global->persistent = true;
-                        op->global->durable_timeout_msec = durable_timeout_msec;
-                        update_open = true;
-                }
 
 		if (update_open) {
 			op->global->create_guid = _create_guid;

@@ -851,11 +851,7 @@ bool set_share_mode(struct share_mode_lock *lck, struct files_struct *fsp,
 	/* For persistent opens, record the persistent id as we will need it when reconnecting after a crash*/
 	/* Note that setting it here does not work for resilient handle for example, which can be made resilient */
 	/* using an ioctl. Persistent handle has to be requested at create time, so setting it here works. */
-	if ( 1 == fsp->op->global->persistent ) {
-		e->open_persistent_id = fsp->op->global->open_persistent_id;
-	} else {
-		e->open_persistent_id = UINT64_MAX;
-	}
+	e->open_persistent_id = fsp->op->global->open_persistent_id;
 	e->uid = (uint32_t)uid;
 	e->flags = (fsp->posix_flags & FSP_POSIX_FLAGS_OPEN) ?
 		SHARE_MODE_FLAG_POSIX_OPEN : 0;
