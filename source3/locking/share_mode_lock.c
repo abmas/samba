@@ -96,6 +96,7 @@ static int sml_traverse_persist_fn(struct db_record *rec, void *_state)
                 &blob, d, d, (ndr_pull_flags_fn_t)ndr_pull_share_mode_data);
         if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
                 DEBUG(1, ("sml_traverse_persist_fn: ndr_pull_share_mode_lock failed\n"));
+		TALLOC_FREE(d);
                 return 0;
         }
 

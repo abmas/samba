@@ -67,13 +67,13 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
 
 	/* Ensure this is a key record. */
 	if (key.dsize != sizeof(struct leases_db_key)) {
-	     	DEBUG(1, ("leases_db_traverse_persist_fn: Record is not a key record - key.dsize is %d\n", (int)key.dsize));
+		DEBUG(1, ("leases_db_traverse_persist_fn: Record is not a key record - key.dsize is %d\n", (int)key.dsize));
 		return 0;
 	}
 
 	d = talloc(talloc_tos(), struct leases_db_value);
 	if (d == NULL) {
-	     	DEBUG(1, ("leases_db_traverse_persist_fn: talloc failed\n"));
+		DEBUG(1, ("leases_db_traverse_persist_fn: talloc failed\n"));
 		return 0;
 	}
 
@@ -85,6 +85,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
 		(ndr_pull_flags_fn_t)ndr_pull_leases_db_value);
 	if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
 		DEBUG(1, ("leases_db_traverse_persist_fn: ndr_pull_lease failed\n"));
+		TALLOC_FREE(d);
 		return 0;
 	}
 
@@ -113,6 +114,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
 			ndr_err = ndr_push_struct_blob(
 				&blob, d, d, (ndr_push_flags_fn_t)ndr_push_leases_db_value);
 			if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+				TALLOC_FREE(d);
 				smb_panic("ndr_push_leases_db failed");
 				return 0;
 			}

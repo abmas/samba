@@ -1887,6 +1887,7 @@ static int brl_traverse_persist_fn(struct db_record *rec, void *state)
 		status = dbwrap_record_delete(rec);
 		if (!NT_STATUS_IS_OK(status)) {
                 	DEBUG(1, ("brl_traverse_persist_fn: Error deleting record for persistent id %lu\n", locks->context.smblctx));
+			TALLOC_FREE(locks);
                 	return 0; /*best effort, try to keep going*/
         	}
                 DEBUG(1, ("brl_traverse_persist_fn: Deleted brl lock record for persistent id %lu\n", locks->context.smblctx));
