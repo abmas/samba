@@ -6406,6 +6406,7 @@ static void rename_open_files(connection_struct *conn,
 	bool did_rename = False;
 	NTSTATUS status;
 	uint32_t new_name_hash = 0;
+	uint64_t open_persistent_id = 0;
 
 	for(fsp = file_find_di_first(conn->sconn, id); fsp;
 	    fsp = file_find_di_next(fsp)) {
@@ -6427,6 +6428,7 @@ static void rename_open_files(connection_struct *conn,
 		status = fsp_set_smb_fname(fsp, smb_fname_dst);
 		if (NT_STATUS_IS_OK(status)) {
 			did_rename = True;
+			open_persistent_id = fsp->op->global->open_persistent_id;
 			new_name_hash = fsp->name_hash;
 		}
 	}
@@ -6440,7 +6442,7 @@ static void rename_open_files(connection_struct *conn,
 	/* Send messages to all smbd's (not ourself) that the name has changed. */
 	rename_share_filename(conn->sconn->msg_ctx, lck, id, conn->connectpath,
 			      orig_name_hash, new_name_hash,
-			      smb_fname_dst, fsp->op->global->open_persistent_id);
+			      smb_fname_dst, open_persistent_id);
 
 }
 
