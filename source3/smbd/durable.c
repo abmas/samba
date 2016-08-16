@@ -682,9 +682,8 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	        break;
         }
         if ( e == NULL ) {
-                DEBUG(1, ("vfs_default_durable_reconnect: denying durable reconnect as no share mode entries available to reconnect\n"));
-                TALLOC_FREE(lck);
-                return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+                DEBUG(1, ("vfs_default_durable_reconnect: Error : no share mode entries available to reconnect, Ignoring...\n"));
+                goto PROCEEDOPEN;
         }
 
 	if ((e->access_mask & (FILE_WRITE_DATA|FILE_APPEND_DATA)) &&
