@@ -91,6 +91,14 @@ void gfree_all( void )
 	gfree_debugsyms();
 }
 
+/**
+ * Destroy global objects allocated by init_iconv()
+ **/
+void gfree_charcnv(void)
+{
+	TALLOC_FREE(global_iconv_handle);
+}
+
 /*******************************************************************
  Check if a file exists - call vfs_file_exist for samba files.
 ********************************************************************/

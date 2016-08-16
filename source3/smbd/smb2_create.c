@@ -388,7 +388,7 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
-	unix_syntax_filename = strdup(requested_filename);
+	unix_syntax_filename = SMB_STRDUP(requested_filename);
 
 	if (unix_syntax_filename == NULL) {
 		DEBUG(1, ("smbd_smb2_create_durable_lease_check: can't dup filename; out of memory\n"));

@@ -26,6 +26,14 @@
 struct libnetapi_ctx *stat_ctx = NULL;
 static bool libnetapi_initialized = false;
 
+/**
+* Destroy global objects allocated by init_iconv()
+ **/
+void gfree_charcnv(void)
+{
+	TALLOC_FREE(global_iconv_handle);
+}
+
 /****************************************************************
 ****************************************************************/
 

@@ -32,6 +32,7 @@
 
 /* the leases database handle */
 static struct db_context *leases_db;
+extern bool smbXsrv_lookup_persistent_id(uint64_t);
 
 void remove_stale_lease_entries(struct leases_db_value *d)
 {
@@ -59,6 +60,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
 	struct leases_db_value *d;
 	bool found_persistent_open = False;
 	NTSTATUS status;
+	struct leases_db_file *entry;
 
 	key = dbwrap_record_get_key(rec);
 	value = dbwrap_record_get_value(rec);
@@ -91,7 +93,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
 
 	for (i=0; i<d->num_files; i++) {
 		DEBUG(1, ("leases_db_traverse_persist_fn: Loop iteration %i\n", i));
-		struct leases_db_file *entry = &d->files[i];
+		entry = &d->files[i];
 		if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
 			entry->stale = false; /* [skip] in idl */
 			found_persistent_open = True;
