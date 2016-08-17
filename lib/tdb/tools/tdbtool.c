@@ -35,7 +35,7 @@ int bIterate = 0;
 char *line;
 TDB_DATA iterate_kbuf;
 char cmdline[1024];
-static int disable_mmap;
+static int disable_mmap = 1;
 static int disable_lock;
 
 enum commands {
