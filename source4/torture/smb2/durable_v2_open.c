@@ -283,7 +283,7 @@ static bool test_one_durable_v2_open_oplock(struct torture_context *tctx,
 				 smb2_util_share_access(test.share_mode),
 				 smb2_util_oplock_level(test.level));
 	io.in.durable_open = false;
-	io.in.durable_open_v2 = true;
+	io.in.durable_open_v2 = test.durable;
 	io.in.persistent_open = request_persistent;
 	io.in.create_guid = GUID_random();
 
@@ -1668,7 +1668,7 @@ bool test_durable_v2_reopen_persistence(struct torture_context *tctx,
        io.in.fname = fname;
        io.in.durable_open = false;
        io.in.durable_open_v2 = false;
-       io.in.persistent_open = false;
+       io.in.persistent_open = true;
        io.in.durable_handle_v2 = h1;
        io.in.create_guid = create_guid_1;
        status = smb2_create(tree, mem_ctx, &io);
@@ -2591,7 +2591,7 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
        /* disconnect, reconnect and then do persistent reopen */
        TALLOC_FREE(tree);
 
-       sleep(20);
+       sleep(50);
 
        if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
                 torture_warning(tctx, "couldn't reconnect, bailing\n");
@@ -2606,7 +2606,7 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
        io.in.fname = fname;
        io.in.durable_open = false;
        io.in.durable_open_v2 = false;
-       io.in.persistent_open = false;
+       io.in.persistent_open = true;
        io.in.durable_handle_v2 = h1;
        io.in.create_guid = create_guid_1;
        status = smb2_create(tree, mem_ctx, &io);
