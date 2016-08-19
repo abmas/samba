@@ -25,24 +25,57 @@
 #include "lib/util/util_tdb.h"
 #include "lib/util/tevent_ntstatus.h"
 
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
 static struct db_context *dbwrap_record_watchers_db(void)
 {
-	static struct db_context *watchers_db;
+#define MAX_WATCHERS_DBS 32
+#define get_watchers_db() watchers_db[svtfs_get_lockdir_index()]
+#define set_watchers_db(value) watchers_db[svtfs_get_lockdir_index()] = value
 
-	if (watchers_db == NULL) {
-		char *db_path = lock_path("dbwrap_watchers.tdb");
-		if (db_path == NULL) {
-			return NULL;
+	static struct db_context *watchers_db[MAX_WATCHERS_DBS] = {NULL};
+
+	int index,saved_index;
+
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
+
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index of 0\n"));
+
+	while (1) {
+
+		if (get_watchers_db() == NULL) {
+			char *db_path = svtfs_lock_path("dbwrap_watchers.tdb");
+			if (db_path == NULL) {
+        			svtfs_set_lockdir_index(saved_index);
+				return NULL;
+			}
+
+			set_watchers_db(db_open(
+				NULL, db_path,	0,
+				TDB_CLEAR_IF_FIRST | TDB_INCOMPATIBLE_HASH,
+				O_RDWR|O_CREAT, 0600, DBWRAP_LOCK_ORDER_3,
+				DBWRAP_FLAG_NONE));
+			TALLOC_FREE(db_path);
 		}
 
-		watchers_db = db_open(
-			NULL, db_path,	0,
-			TDB_CLEAR_IF_FIRST | TDB_INCOMPATIBLE_HASH,
-			O_RDWR|O_CREAT, 0600, DBWRAP_LOCK_ORDER_3,
-			DBWRAP_FLAG_NONE);
-		TALLOC_FREE(db_path);
+		index++;
+		if ( (svtfs_storage_ip[index] == NULL) || (index == MAX_WATCHERS_DBS) ) {
+			DEBUG(5, ("dbwrap_record_watchers_db: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
 	}
-	return watchers_db;
+
+	DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return get_watchers_db();
 }
 
 static size_t dbwrap_record_watchers_key(struct db_context *db,

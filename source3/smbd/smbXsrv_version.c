@@ -43,8 +43,20 @@
  * in a cluster, but for now it is simple.
  */
 
-static struct db_context *smbXsrv_version_global_db_ctx = NULL;
-static uint32_t smbXsrv_version_global_current_version = UINT32_MAX;
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
+#define MAX_VERSION_GLOBAL_DB_CONTEXTS 32
+#define get_smbXsrv_version_global_db_ctx() smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()]
+#define set_smbXsrv_version_global_db_ctx(value) smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()] = value
+
+static struct db_context *smbXsrv_version_global_db_ctx[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {NULL};
+
+#define get_smbXsrv_version_global_current_version() smbXsrv_version_global_current_version[svtfs_get_lockdir_index()]
+#define set_smbXsrv_version_global_current_version(value) smbXsrv_version_global_current_version[svtfs_get_lockdir_index()] = value
+
+static uint32_t smbXsrv_version_global_current_version[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {UINT32_MAX};
 
 NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
 {
@@ -62,204 +74,222 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
 	struct smbXsrv_version_node0 *valid = NULL;
 	struct smbXsrv_version_node0 *local_node = NULL;
 	bool exists;
-	NTSTATUS status;
+	NTSTATUS status = NT_STATUS_OK;
 	const char *key_string = "smbXsrv_version_global";
 	TALLOC_CTX *frame;
+	int index,saved_index;
 
-	if (smbXsrv_version_global_db_ctx != NULL) {
-		return NT_STATUS_OK;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
+
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("smbXsrv_version_global_init: setting lockdir_index of 0\n"));
 
 	frame = talloc_stackframe();
 
-	global_path = lock_path("smbXsrv_version_global.tdb");
-	if (global_path == NULL) {
-		TALLOC_FREE(frame);
-		return NT_STATUS_NO_MEMORY;
-	}
+	while (1) {
 
-	db_ctx = db_open(NULL, global_path,
-			 0, /* hash_size */
-			 TDB_DEFAULT |
-			 TDB_CLEAR_IF_FIRST |
-			 TDB_INCOMPATIBLE_HASH,
-			 O_RDWR | O_CREAT, 0600,
-			 DBWRAP_LOCK_ORDER_1,
-			 DBWRAP_FLAG_NONE);
-	if (db_ctx == NULL) {
-		status = map_nt_error_from_unix_common(errno);
-		DEBUG(0,("smbXsrv_version_global_init: "
-			 "failed to open[%s] - %s\n",
-			 global_path, nt_errstr(status)));
-		TALLOC_FREE(frame);
-		return status;
-	}
-
-	key = string_term_tdb_data(key_string);
-
-	db_rec = dbwrap_fetch_locked(db_ctx, db_ctx, key);
-	if (db_rec == NULL) {
-		status = NT_STATUS_INTERNAL_DB_ERROR;
-		DEBUG(0,("smbXsrv_version_global_init: "
-			 "dbwrap_fetch_locked(%s) - %s\n",
-			 key_string, nt_errstr(status)));
-		TALLOC_FREE(frame);
-		return status;
-	}
-
-	val = dbwrap_record_get_value(db_rec);
-	if (val.dsize == 0) {
-		global = talloc_zero(frame, struct smbXsrv_version_global0);
-		if (global == NULL) {
-			DEBUG(0,("smbXsrv_version_global_init: "
-				 "talloc_zero failed - %s\n", __location__));
-			TALLOC_FREE(frame);
-			return NT_STATUS_NO_MEMORY;
-		}
-		ZERO_STRUCT(global_blob);
-		global_blob.version = SMBXSRV_VERSION_CURRENT;
-		global_blob.info.info0 = global;
-	} else {
-		blob = data_blob_const(val.dptr, val.dsize);
-
-		ndr_err = ndr_pull_struct_blob(&blob, frame, &global_blob,
-			(ndr_pull_flags_fn_t)ndr_pull_smbXsrv_version_globalB);
-		if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
-			status = ndr_map_error2ntstatus(ndr_err);
-			DEBUG(0,("smbXsrv_version_global_init: "
-				 "ndr_pull_smbXsrv_version_globalB - %s\n",
-				 nt_errstr(status)));
-			TALLOC_FREE(frame);
-			return status;
+		if (get_smbXsrv_version_global_db_ctx() != NULL) {
+			break;
 		}
 
-		switch (global_blob.version) {
-		case SMBXSRV_VERSION_0:
-			global = global_blob.info.info0;
+		global_path = svtfs_lock_path("smbXsrv_version_global.tdb");
+		if (global_path == NULL) {
+			status = NT_STATUS_NO_MEMORY;
+			break;
+		}
+
+		db_ctx = db_open(NULL, global_path,
+				 0, /* hash_size */
+				 TDB_DEFAULT |
+				 TDB_CLEAR_IF_FIRST |
+				 TDB_INCOMPATIBLE_HASH,
+				 O_RDWR | O_CREAT, 0600,
+				 DBWRAP_LOCK_ORDER_1,
+				 DBWRAP_FLAG_NONE);
+		if (db_ctx == NULL) {
+			status = map_nt_error_from_unix_common(errno);
+			DEBUG(0,("smbXsrv_version_global_init: "
+				 "failed to open[%s] - %s\n",
+				 global_path, nt_errstr(status)));
+			break;
+		}
+
+		key = string_term_tdb_data(key_string);
+
+		db_rec = dbwrap_fetch_locked(db_ctx, db_ctx, key);
+		if (db_rec == NULL) {
+			status = NT_STATUS_INTERNAL_DB_ERROR;
+			DEBUG(0,("smbXsrv_version_global_init: "
+				 "dbwrap_fetch_locked(%s) - %s\n",
+				 key_string, nt_errstr(status)));
+			break;
+		}
+
+		val = dbwrap_record_get_value(db_rec);
+		if (val.dsize == 0) {
+			global = talloc_zero(frame, struct smbXsrv_version_global0);
 			if (global == NULL) {
-				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+				DEBUG(0,("smbXsrv_version_global_init: "
+					 "talloc_zero failed - %s\n", __location__));
+				status = NT_STATUS_NO_MEMORY;
 				break;
 			}
-			status = NT_STATUS_OK;
+			ZERO_STRUCT(global_blob);
+			global_blob.version = SMBXSRV_VERSION_CURRENT;
+			global_blob.info.info0 = global;
+		} else {
+			blob = data_blob_const(val.dptr, val.dsize);
+
+			ndr_err = ndr_pull_struct_blob(&blob, frame, &global_blob,
+				(ndr_pull_flags_fn_t)ndr_pull_smbXsrv_version_globalB);
+			if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+				status = ndr_map_error2ntstatus(ndr_err);
+				DEBUG(0,("smbXsrv_version_global_init: "
+					 "ndr_pull_smbXsrv_version_globalB - %s\n",
+					 nt_errstr(status)));
+				break;
+			}
+
+			switch (global_blob.version) {
+			case SMBXSRV_VERSION_0:
+				global = global_blob.info.info0;
+				if (global == NULL) {
+					status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+					break;
+				}
+				status = NT_STATUS_OK;
+				break;
+			default:
+				status = NT_STATUS_REVISION_MISMATCH;
+				break;
+			}
+
+			if (!NT_STATUS_IS_OK(status)) {
+				DEBUG(0,("smbXsrv_version_global_init - %s\n",
+					 nt_errstr(status)));
+				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+				break;
+			}
+		}
+
+		valid = talloc_zero_array(global,
+					  struct smbXsrv_version_node0,
+					  global->num_nodes + 1);
+		if (valid == NULL) {
+			DEBUG(0,("smbXsrv_version_global_init: "
+				 "talloc_zero_array failed - %s\n", __location__));
+			status = NT_STATUS_NO_MEMORY;
 			break;
-		default:
-			status = NT_STATUS_REVISION_MISMATCH;
-			break;
+		}
+
+		num_valid = 0;
+		for (i=0; i < global->num_nodes; i++) {
+			struct smbXsrv_version_node0 *n = &global->nodes[i];
+
+			exists = serverid_exists(&n->server_id);
+			if (!exists) {
+				continue;
+			}
+
+			if (n->min_version > n->max_version) {
+				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+				DEBUG(0,("smbXsrv_version_global_init - %s\n",
+					 nt_errstr(status)));
+				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+				break;
+			}
+
+			if (n->min_version > global_blob.version) {
+				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+				DEBUG(0,("smbXsrv_version_global_init - %s\n",
+					 nt_errstr(status)));
+				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+				break;
+			}
+
+			if (n->max_version < global_blob.version) {
+				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+				DEBUG(0,("smbXsrv_version_global_init - %s\n",
+					 nt_errstr(status)));
+				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+				break;
+			}
+
+			valid[num_valid] = *n;
+			if (server_id->vnn == n->server_id.vnn) {
+				local_node = &valid[num_valid];
+			}
+			num_valid++;
 		}
 
 		if (!NT_STATUS_IS_OK(status)) {
-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
-				 nt_errstr(status)));
-			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
-			TALLOC_FREE(frame);
-			return status;
-		}
-	}
-
-	valid = talloc_zero_array(global,
-				  struct smbXsrv_version_node0,
-				  global->num_nodes + 1);
-	if (valid == NULL) {
-		DEBUG(0,("smbXsrv_version_global_init: "
-			 "talloc_zero_array failed - %s\n", __location__));
-		TALLOC_FREE(frame);
-		return NT_STATUS_NO_MEMORY;
-	}
-
-	num_valid = 0;
-	for (i=0; i < global->num_nodes; i++) {
-		struct smbXsrv_version_node0 *n = &global->nodes[i];
-
-		exists = serverid_exists(&n->server_id);
-		if (!exists) {
-			continue;
+			break;
 		}
 
-		if (n->min_version > n->max_version) {
-			status = NT_STATUS_INTERNAL_DB_CORRUPTION;
-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
-				 nt_errstr(status)));
-			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
-			TALLOC_FREE(frame);
-			return status;
-		}
-
-		if (n->min_version > global_blob.version) {
-			status = NT_STATUS_INTERNAL_DB_CORRUPTION;
-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
-				 nt_errstr(status)));
-			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
-			TALLOC_FREE(frame);
-			return status;
-		}
-
-		if (n->max_version < global_blob.version) {
-			status = NT_STATUS_INTERNAL_DB_CORRUPTION;
-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
-				 nt_errstr(status)));
-			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
-			TALLOC_FREE(frame);
-			return status;
-		}
-
-		valid[num_valid] = *n;
-		if (server_id->vnn == n->server_id.vnn) {
+		if (local_node == NULL) {
 			local_node = &valid[num_valid];
+			num_valid++;
 		}
-		num_valid++;
-	}
 
-	if (local_node == NULL) {
-		local_node = &valid[num_valid];
-		num_valid++;
-	}
+		local_node->server_id = *server_id;
+		local_node->min_version = SMBXSRV_VERSION_0;
+		local_node->max_version = SMBXSRV_VERSION_CURRENT;
+		local_node->current_version = global_blob.version;
 
-	local_node->server_id = *server_id;
-	local_node->min_version = SMBXSRV_VERSION_0;
-	local_node->max_version = SMBXSRV_VERSION_CURRENT;
-	local_node->current_version = global_blob.version;
+		global->num_nodes = num_valid;
+		global->nodes = valid;
 
-	global->num_nodes = num_valid;
-	global->nodes = valid;
+		global_blob.seqnum += 1;
+		global_blob.info.info0 = global;
 
-	global_blob.seqnum += 1;
-	global_blob.info.info0 = global;
+		ndr_err = ndr_push_struct_blob(&blob, db_rec, &global_blob,
+				(ndr_push_flags_fn_t)ndr_push_smbXsrv_version_globalB);
+		if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+			status = ndr_map_error2ntstatus(ndr_err);
+			DEBUG(0,("smbXsrv_version_global_init: "
+				 "ndr_push_smbXsrv_version_globalB - %s\n",
+				 nt_errstr(status)));
+			break;
+		}
 
-	ndr_err = ndr_push_struct_blob(&blob, db_rec, &global_blob,
-			(ndr_push_flags_fn_t)ndr_push_smbXsrv_version_globalB);
-	if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
-		status = ndr_map_error2ntstatus(ndr_err);
-		DEBUG(0,("smbXsrv_version_global_init: "
-			 "ndr_push_smbXsrv_version_globalB - %s\n",
-			 nt_errstr(status)));
-		TALLOC_FREE(frame);
-		return status;
-	}
+		val = make_tdb_data(blob.data, blob.length);
+		status = dbwrap_record_store(db_rec, val, TDB_REPLACE);
+		TALLOC_FREE(db_rec);
+		if (!NT_STATUS_IS_OK(status)) {
+			DEBUG(0,("smbXsrv_version_global_init: "
+				 "dbwrap_record_store - %s\n",
+				 nt_errstr(status)));
+			break;
+		}
 
-	val = make_tdb_data(blob.data, blob.length);
-	status = dbwrap_record_store(db_rec, val, TDB_REPLACE);
-	TALLOC_FREE(db_rec);
-	if (!NT_STATUS_IS_OK(status)) {
-		DEBUG(0,("smbXsrv_version_global_init: "
-			 "dbwrap_record_store - %s\n",
-			 nt_errstr(status)));
-		TALLOC_FREE(frame);
-		return status;
-	}
+		DEBUG(10,("smbXsrv_version_global_init\n"));
+		if (DEBUGLVL(10)) {
+			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+		}
 
-	DEBUG(10,("smbXsrv_version_global_init\n"));
-	if (DEBUGLVL(10)) {
-		NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
-	}
+		set_smbXsrv_version_global_db_ctx(db_ctx);
+		set_smbXsrv_version_global_current_version(global_blob.version);
 
-	smbXsrv_version_global_db_ctx = db_ctx;
-	smbXsrv_version_global_current_version = global_blob.version;
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_VERSION_GLOBAL_DB_CONTEXTS ) ) {
+			DEBUG(5, ("smbXsrv_version_global_init: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("smbXsrv_version_global_init: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
 
 	TALLOC_FREE(frame);
-	return NT_STATUS_OK;
+
+	DEBUG(5, ("smbXsrv_version_global_init: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return status;
 }
 
 uint32_t smbXsrv_version_global_current(void)
 {
-	return smbXsrv_version_global_current_version;
+	return get_smbXsrv_version_global_current_version();
 }

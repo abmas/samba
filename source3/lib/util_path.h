@@ -25,6 +25,7 @@
 #define __LIB_UTIL_PATH_H__
 
 char *lock_path(const char *name);
+char *svtfs_lock_path(const char *name);
 char *state_path(const char *name);
 char *cache_path(const char *name);
 

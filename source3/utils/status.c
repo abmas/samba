@@ -48,6 +48,12 @@
 #include "status_profile.h"
 #include "smbd/notifyd/notifyd.h"
 
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
+#define MAX_LOCK_DBS 32
+
 #define SMB_MAXPIDS		2048
 static uid_t 		Ucrit_uid = 0;               /* added by OH */
 static struct server_id	Ucrit_pid[SMB_MAXPIDS];  /* Ugly !!! */   /* added by OH */
@@ -627,11 +633,30 @@ int main(int argc, const char *argv[])
 	}
 
 	if ( show_processes ) {
+		int index,saved_index;
+
 		d_printf("\nSamba version %s\n",samba_version_string());
 		d_printf("%-7s %-12s %-12s %-41s %-17s %-20s %-21s\n", "PID", "Username", "Group", "Machine", "Protocol Version", "Encryption", "Signing");
 		d_printf("----------------------------------------------------------------------------------------------------------------------------------------\n");
 
-		sessionid_traverse_read(traverse_sessionid, frame);
+		index = 0;
+		saved_index = svtfs_get_lockdir_index();
+
+		svtfs_set_lockdir_index(index);
+
+		while (1) {
+
+			sessionid_traverse_read(traverse_sessionid, frame);
+
+			index++;
+			if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
+				break;
+			}
+
+			svtfs_set_lockdir_index(index);
+		} /* end while(1) */
+
+		svtfs_set_lockdir_index(saved_index);
 
 		if (processes_only) {
 			goto done;
@@ -639,6 +664,8 @@ int main(int argc, const char *argv[])
 	}
 
 	if ( show_shares ) {
+		int index,saved_index;
+
 		if (brief) {
 			goto done;
 		}
@@ -646,7 +673,24 @@ int main(int argc, const char *argv[])
 		d_printf("\n%-12s %-7s %-13s %-32s %-12s %-12s\n", "Service", "pid", "Machine", "Connected at", "Encryption", "Signing");
 		d_printf("---------------------------------------------------------------------------------------------\n");
 
-		connections_forall_read(traverse_connections, frame);
+		index = 0;
+		saved_index = svtfs_get_lockdir_index();
+
+		svtfs_set_lockdir_index(index);
+
+		while (1) {
+
+			connections_forall_read(traverse_connections, frame);
+
+			index++;
+			if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
+				break;
+			}
+
+			svtfs_set_lockdir_index(index);
+		} /* end while(1) */
+
+		svtfs_set_lockdir_index(saved_index);
 
 		d_printf("\n");
 
@@ -658,50 +702,69 @@ int main(int argc, const char *argv[])
 	if ( show_locks ) {
 		int result;
 		struct db_context *db;
+		int index,saved_index;
 
-		db_path = lock_path("locking.tdb");
-		if (db_path == NULL) {
-			d_printf("Out of memory - exiting\n");
-			ret = -1;
-			goto done;
-		}
+		index = 0;
+		saved_index = svtfs_get_lockdir_index();
 
-		db = db_open(NULL, db_path, 0,
-			     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH, O_RDONLY, 0,
-			     DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
+		svtfs_set_lockdir_index(index);
 
-		if (!db) {
-			d_printf("%s not initialised\n", db_path);
-			d_printf("This is normal if an SMB client has never "
-				 "connected to your server.\n");
-			TALLOC_FREE(db_path);
-			exit(0);
-		} else {
-			TALLOC_FREE(db);
-			TALLOC_FREE(db_path);
-		}
+		while (1) {
 
-		if (!locking_init_readonly()) {
-			d_printf("Can't initialise locking module - exiting\n");
-			ret = 1;
-			goto done;
-		}
+			db_path = svtfs_lock_path("locking.tdb");
+			if (db_path == NULL) {
+				d_printf("Out of memory - exiting\n");
+				ret = -1;
+				goto done;
+			}
 
-		result = share_entry_forall(print_share_mode, NULL);
+			db = db_open(NULL, db_path, 0,
+				     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH, O_RDONLY, 0,
+				     DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
 
-		if (result == 0) {
-			d_printf("No locked files\n");
-		} else if (result < 0) {
-			d_printf("locked file list truncated\n");
-		}
+			if (!db) {
+				d_printf("%s not initialised\n", db_path);
+				d_printf("This is normal if an SMB client has never "
+					 "connected to your server.\n");
+				TALLOC_FREE(db_path);
+				exit(0);
+			} else {
+				TALLOC_FREE(db);
+				TALLOC_FREE(db_path);
+			}
 
-		d_printf("\n");
+			if (!locking_init_readonly()) {
+				d_printf("Can't initialise locking module - exiting\n");
+				ret = 1;
+				goto done;
+			}
 
-		if (show_brl) {
-			brl_forall(print_brl, NULL);
-		}
+			result = share_entry_forall(print_share_mode, NULL);
 
-		locking_end();
+			if (result == 0) {
+				d_printf("No locked files\n");
+			} else if (result < 0) {
+				d_printf("locked file list truncated\n");
+			}
+
+			d_printf("\n");
+
+			if (show_brl) {
+				brl_forall(print_brl, NULL);
+			}
+
+			locking_end();
+
+			index++;
+			if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
+				break;
+			}
+
+			svtfs_set_lockdir_index(index);
+		} /* end while(1) */
+
+		svtfs_set_lockdir_index(saved_index);
+
 	}
 
 	if (show_notify) {

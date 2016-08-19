@@ -43,42 +43,72 @@ struct smbXsrv_tcon_table {
 	} global;
 };
 
-static struct db_context *smbXsrv_tcon_global_db_ctx = NULL;
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
+#define MAX_TCON_GLOBAL_DB_CONTEXTS 32
+#define get_smbXsrv_tcon_global_db_ctx() smbXsrv_tcon_global_db_ctx[svtfs_get_lockdir_index()]
+#define set_smbXsrv_tcon_global_db_ctx(value) smbXsrv_tcon_global_db_ctx[svtfs_get_lockdir_index()] = value
+
+static struct db_context *smbXsrv_tcon_global_db_ctx[MAX_TCON_GLOBAL_DB_CONTEXTS] = {NULL};
 
 NTSTATUS smbXsrv_tcon_global_init(void)
 {
 	char *global_path = NULL;
 	struct db_context *db_ctx = NULL;
+	int index,saved_index;
+	NTSTATUS status = NT_STATUS_OK;
 
-	if (smbXsrv_tcon_global_db_ctx != NULL) {
-		return NT_STATUS_OK;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	global_path = lock_path("smbXsrv_tcon_global.tdb");
-	if (global_path == NULL) {
-		return NT_STATUS_NO_MEMORY;
-	}
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("smbXsrv_tcon_global_init: setting lockdir_index of 0\n"));
 
-	db_ctx = db_open(NULL, global_path,
-			 0, /* hash_size */
-			 TDB_DEFAULT |
-			 TDB_CLEAR_IF_FIRST |
-			 TDB_INCOMPATIBLE_HASH,
-			 O_RDWR | O_CREAT, 0600,
-			 DBWRAP_LOCK_ORDER_1,
-			 DBWRAP_FLAG_NONE);
-	TALLOC_FREE(global_path);
-	if (db_ctx == NULL) {
-		NTSTATUS status;
+	while (1) {
 
-		status = map_nt_error_from_unix_common(errno);
+		if (get_smbXsrv_tcon_global_db_ctx() != NULL) {
+			break;
+		}
 
-		return status;
-	}
+		global_path = svtfs_lock_path("smbXsrv_tcon_global.tdb");
+		if (global_path == NULL) {
+			status = NT_STATUS_NO_MEMORY;
+			break;
+		}
 
-	smbXsrv_tcon_global_db_ctx = db_ctx;
+		db_ctx = db_open(NULL, global_path,
+				 0, /* hash_size */
+				 TDB_DEFAULT |
+				 TDB_CLEAR_IF_FIRST |
+				 TDB_INCOMPATIBLE_HASH,
+				 O_RDWR | O_CREAT, 0600,
+				 DBWRAP_LOCK_ORDER_1,
+				 DBWRAP_FLAG_NONE);
+		TALLOC_FREE(global_path);
+		if (db_ctx == NULL) {
 
-	return NT_STATUS_OK;
+			status = map_nt_error_from_unix_common(errno);
+			break;
+		}
+
+		set_smbXsrv_tcon_global_db_ctx(db_ctx);
+
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL)  || ( index >= MAX_TCON_GLOBAL_DB_CONTEXTS ) ) {
+                        DEBUG(5, ("smbXsrv_tcon_global_init: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("smbXsrv_tcon_global_init: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("smbXsrv_tcon_global_init: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return status;
 }
 
 /*
@@ -227,7 +257,7 @@ static NTSTATUS smbXsrv_tcon_table_init(TALLOC_CTX *mem_ctx,
 		return status;
 	}
 
-	table->global.db_ctx = smbXsrv_tcon_global_db_ctx;
+	table->global.db_ctx = get_smbXsrv_tcon_global_db_ctx();
 
 	return NT_STATUS_OK;
 }
@@ -758,7 +788,7 @@ static NTSTATUS smbXsrv_tcon_create(struct smbXsrv_tcon_table *table,
 	tcon->status = NT_STATUS_INTERNAL_ERROR;
 	tcon->idle_time = now;
 
-	status = smbXsrv_tcon_global_allocate(table->global.db_ctx,
+	status = smbXsrv_tcon_global_allocate(get_smbXsrv_tcon_global_db_ctx(),
 					      tcon, &global);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(tcon);
@@ -848,6 +878,8 @@ NTSTATUS smbXsrv_tcon_update(struct smbXsrv_tcon *tcon)
 {
 	struct smbXsrv_tcon_table *table = tcon->table;
 	NTSTATUS status;
+	uint8_t key_buf[SMBXSRV_TCON_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 
 	if (tcon->global->db_rec != NULL) {
 		DEBUG(0, ("smbXsrv_tcon_update(0x%08x): "
@@ -856,11 +888,17 @@ NTSTATUS smbXsrv_tcon_update(struct smbXsrv_tcon *tcon)
 		return NT_STATUS_INTERNAL_ERROR;
 	}
 
-	tcon->global->db_rec = smbXsrv_tcon_global_fetch_locked(
-						table->global.db_ctx,
-						tcon->global->tcon_global_id,
-						tcon->global /* TALLOC_CTX */);
+	key = smbXsrv_tcon_global_id_to_key(tcon->global->tcon_global_id,
+					    key_buf);
+
+	tcon->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_tcon_global_db_ctx(),
+						   tcon->global, key);
 	if (tcon->global->db_rec == NULL) {
+		DEBUG(0, ("smbXsrv_tcon_update(0x%08x): "
+			  "Failed to lock global key '%s'\n",
+			  tcon->global->tcon_global_id,
+			  hex_encode_talloc(talloc_tos(), key.dptr,
+					    key.dsize)));
 		return NT_STATUS_INTERNAL_DB_ERROR;
 	}
 
@@ -908,11 +946,22 @@ NTSTATUS smbXsrv_tcon_disconnect(struct smbXsrv_tcon *tcon, uint64_t vuid)
 	global_rec = tcon->global->db_rec;
 	tcon->global->db_rec = NULL;
 	if (global_rec == NULL) {
-		global_rec = smbXsrv_tcon_global_fetch_locked(
-						table->global.db_ctx,
+		uint8_t key_buf[SMBXSRV_TCON_GLOBAL_TDB_KEY_SIZE];
+		TDB_DATA key;
+
+		key = smbXsrv_tcon_global_id_to_key(
 						tcon->global->tcon_global_id,
-						tcon->global /* TALLOC_CTX */);
+						key_buf);
+
+		global_rec = dbwrap_fetch_locked(get_smbXsrv_tcon_global_db_ctx(),
+						 tcon->global, key);
 		if (global_rec == NULL) {
+			DEBUG(0, ("smbXsrv_tcon_disconnect(0x%08x, '%s'): "
+				  "Failed to lock global key '%s'\n",
+				  tcon->global->tcon_global_id,
+				  tcon->global->share_name,
+				  hex_encode_talloc(global_rec, key.dptr,
+						    key.dsize)));
 			error = NT_STATUS_INTERNAL_ERROR;
 		}
 	}
@@ -1243,7 +1292,7 @@ NTSTATUS smbXsrv_tcon_global_traverse(
 		return status;
 	}
 
-	status = dbwrap_traverse_read(smbXsrv_tcon_global_db_ctx,
+	status = dbwrap_traverse_read(get_smbXsrv_tcon_global_db_ctx(),
 				      smbXsrv_tcon_global_traverse_fn,
 				      &state,
 				      &count);

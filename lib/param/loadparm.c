@@ -78,6 +78,13 @@
 
 #include "lib/param/param_global.h"
 
+static int lp_svtfs_index = 0; /* Ashok: remember to reset on smb.conf reload.*/
+
+#define MAX_SVTFS_LOCKDIR_PATHS 32
+char  * svtfs_storage_ip[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
+char  * svtfs_lockdir_path[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
+volatile int svtfs_lockdir_index = 0;
+
 struct loadparm_service *lpcfg_default_service(struct loadparm_context *lp_ctx)
 {
 	return lp_ctx->sDefault;
@@ -1242,6 +1249,42 @@ bool handle_logfile(struct loadparm_context *lp_ctx, struct loadparm_service *se
 
 	lpcfg_string_set(lp_ctx->globals->ctx, ptr, pszParmValue);
 
+	return true;
+}
+
+bool handle_svtfs_lockdir(struct loadparm_context *lp_ctx, struct loadparm_service *service,
+		    const char *pszParmValue, char **ptr)
+{
+	int index;
+	DEBUG(0,("handle_svtfs_lockdir: PJC: entering with input %s\n", pszParmValue));
+	for (index = 0; index <= lp_svtfs_index/2; index ++)
+	{
+		if (svtfs_lockdir_path[index] && 0 == strcmp(svtfs_lockdir_path[index],pszParmValue)) {
+			/*Nothing to do */
+			DEBUG(0,("handle_svtfs_lockdir: PJC: %s already has entry, noop\n",pszParmValue));
+			return true;
+		}
+	}
+	svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
+	lp_svtfs_index++;
+	return true;
+}
+
+bool handle_svtfs_storageip(struct loadparm_context *lp_ctx, struct loadparm_service *service,
+		    const char *pszParmValue, char **ptr)
+{
+	int index;
+	DEBUG(0,("handle_svtfs_storageip: PJC: entering with input %s\n", pszParmValue));
+	for (index = 0; index <= lp_svtfs_index/2; index ++)
+	{
+		if (svtfs_storage_ip[index] && 0 == strcmp(svtfs_storage_ip[index],pszParmValue)) {
+			/*Nothing to do */
+			DEBUG(0,("handle_svtfs_storage_ip: PJC: %s already has entry, noop\n",pszParmValue));
+			return true;
+		}
+	}
+	svtfs_storage_ip[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
+        lp_svtfs_index++;
 	return true;
 }
 

@@ -58,7 +58,15 @@ struct db_record {
         void *private_data;
 };
 
-static struct db_context *smbXsrv_open_global_db_ctx = NULL;
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
+#define MAX_OPEN_GLOBAL_DB_CONTEXTS 32
+#define get_smbXsrv_open_global_db_ctx() smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()]
+#define set_smbXsrv_open_global_db_ctx(value) smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()] = value
+
+static struct db_context *smbXsrv_open_global_db_ctx[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {NULL};
 
 struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
 
@@ -114,7 +122,7 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
                 } else {
                        smbXsrv_open_global_persistent_ids = persistent_id_element;
                 }
-		smbXsrv_open_disconnect(global, smbXsrv_open_global_db_ctx, 0);
+		smbXsrv_open_disconnect(global, get_smbXsrv_open_global_db_ctx(), 0);
         } else {
                 status = dbwrap_record_delete(rec);
 	        if (!NT_STATUS_IS_OK(status)) {
@@ -135,7 +143,7 @@ bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find)
 {
 
         struct smbXsrv_open_persistent_id *current_id;
-	if ( smbXsrv_open_global_db_ctx == NULL ) {
+	if ( get_smbXsrv_open_global_db_ctx() == NULL ) {
 		DEBUG(1,("smbXsrv_lookup_persistent_id with smbXsrv_open_global_db_ctx = NULL\n"));
 	}
 
@@ -156,7 +164,8 @@ NTSTATUS smbXsrv_open_global_init(void)
 {
 	char *global_path = NULL;
 	struct db_context *db_ctx = NULL;
-	NTSTATUS status;
+	NTSTATUS status = NT_STATUS_OK;
+	int index,saved_index;
 
         /**
          *  Not using the 'state' feature at the moment, so commenting it out
@@ -167,36 +176,57 @@ NTSTATUS smbXsrv_open_global_init(void)
 	};
         */
 
-	if (smbXsrv_open_global_db_ctx != NULL) {
-		return NT_STATUS_OK;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	global_path = lock_path("smbXsrv_open_global.tdb");
-	if (global_path == NULL) {
-		return NT_STATUS_NO_MEMORY;
-	}
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("smbXsrv_open_global_init: setting lockdir_index of 0\n"));
 
-	db_ctx = db_open(NULL, global_path,
-			 0, /* hash_size */
-			 TDB_DEFAULT |
-			 TDB_INCOMPATIBLE_HASH,
-			 O_RDWR | O_CREAT, 0600,
-			 DBWRAP_LOCK_ORDER_1,
-			 DBWRAP_FLAG_NONE);
-	TALLOC_FREE(global_path);
-	if (db_ctx == NULL) {
-	        DEBUG(1, ("Null context on open_global\n"));
-		status = map_nt_error_from_unix_common(errno);
+	while (1) {
 
-		return status;
-	}
+		if (get_smbXsrv_open_global_db_ctx() != NULL) {
+			break;
+		}
 
-	smbXsrv_open_global_db_ctx = db_ctx;
-	status = dbwrap_traverse(smbXsrv_open_global_db_ctx,
-				 smbXsrv_open_global_traverse_persist_fn,
-				 NULL, NULL);
+		global_path = svtfs_lock_path("smbXsrv_open_global.tdb");
+		if (global_path == NULL) {
+			status = NT_STATUS_NO_MEMORY;
+			break;
+		}
 
-	return NT_STATUS_OK;
+		db_ctx = db_open(NULL, global_path,
+				 0, /* hash_size */
+				 TDB_DEFAULT |
+				 TDB_INCOMPATIBLE_HASH,
+				 O_RDWR | O_CREAT, 0600,
+				 DBWRAP_LOCK_ORDER_1,
+				 DBWRAP_FLAG_NONE);
+		TALLOC_FREE(global_path);
+		if (db_ctx == NULL) {
+			DEBUG(1, ("Null context on open_global\n"));
+			status = map_nt_error_from_unix_common(errno);
+			break;
+		}
+
+		set_smbXsrv_open_global_db_ctx(db_ctx);
+		status = dbwrap_traverse(get_smbXsrv_open_global_db_ctx(),
+					 smbXsrv_open_global_traverse_persist_fn,
+					 NULL, NULL);
+
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
+			DEBUG(5, ("smbXsrv_session_open_init: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return status;
 }
 
 /*
@@ -357,7 +387,7 @@ static NTSTATUS smbXsrv_open_table_init(struct smbXsrv_connection *conn,
 		return status;
 	}
 
-	table->global.db_ctx = smbXsrv_open_global_db_ctx;
+	table->global.db_ctx = get_smbXsrv_open_global_db_ctx();
 
 	client->open_table = table;
 	return NT_STATUS_OK;
@@ -869,19 +899,26 @@ static NTSTATUS smbXsrv_open_global_lookup(struct smbXsrv_open_table *table,
 					   TALLOC_CTX *mem_ctx,
 					   struct smbXsrv_open_global0 **_global)
 {
+	TDB_DATA key;
+	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
 	struct db_record *global_rec = NULL;
 	bool is_free = false;
 
 	*_global = NULL;
 
-	if (table->global.db_ctx == NULL) {
+	if (get_smbXsrv_open_global_db_ctx() == NULL) {
 		return NT_STATUS_INTERNAL_ERROR;
 	}
 
-	global_rec = smbXsrv_open_global_fetch_locked(table->global.db_ctx,
-						      open_global_id,
-						      mem_ctx);
+	key = smbXsrv_open_global_id_to_key(open_global_id, key_buf);
+
+	global_rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(), mem_ctx, key);
 	if (global_rec == NULL) {
+		DEBUG(0, ("smbXsrv_open_global_lookup(0x%08x): "
+			  "Failed to lock global key '%s'\n",
+			  open_global_id,
+			  hex_encode_talloc(talloc_tos(), key.dptr,
+					    key.dsize)));
 		return NT_STATUS_INTERNAL_DB_ERROR;
 	}
 
@@ -963,7 +1000,7 @@ NTSTATUS smbXsrv_open_create(struct smbXsrv_connection *conn,
 	op->status = NT_STATUS_OK; /* TODO: start with INTERNAL_ERROR */
 	op->idle_time = now;
 
-	status = smbXsrv_open_global_allocate(table->global.db_ctx,
+	status = smbXsrv_open_global_allocate(get_smbXsrv_open_global_db_ctx(),
 					      op, &global);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(op);
@@ -1127,6 +1164,8 @@ NTSTATUS smbXsrv_open_update(struct smbXsrv_open *op)
 {
 	struct smbXsrv_open_table *table = op->table;
 	NTSTATUS status;
+	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 
 	if (op->global->db_rec != NULL) {
 		DEBUG(0, ("smbXsrv_open_update(0x%08x): "
@@ -1135,11 +1174,17 @@ NTSTATUS smbXsrv_open_update(struct smbXsrv_open *op)
 		return NT_STATUS_INTERNAL_ERROR;
 	}
 
-	op->global->db_rec = smbXsrv_open_global_fetch_locked(
-						table->global.db_ctx,
-						op->global->open_global_id,
-						op->global /* TALLOC_CTX */);
+	key = smbXsrv_open_global_id_to_key(op->global->open_global_id,
+					    key_buf);
+
+	op->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(),
+						 op->global, key);
 	if (op->global->db_rec == NULL) {
+		DEBUG(0, ("smbXsrv_open_update(0x%08x): "
+			  "Failed to lock global key '%s'\n",
+			  op->global->open_global_id,
+			  hex_encode_talloc(talloc_tos(), key.dptr,
+					    key.dsize)));
 		return NT_STATUS_INTERNAL_DB_ERROR;
 	}
 
@@ -1276,11 +1321,21 @@ NTSTATUS smbXsrv_open_close(struct smbXsrv_open *op, NTTIME now)
 	global_rec = op->global->db_rec;
 	op->global->db_rec = NULL;
 	if (global_rec == NULL) {
-		global_rec = smbXsrv_open_global_fetch_locked(
-					table->global.db_ctx,
-					op->global->open_global_id,
-					op->global /* TALLOC_CTX */);
+		uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
+		TDB_DATA key;
+
+		key = smbXsrv_open_global_id_to_key(
+						op->global->open_global_id,
+						key_buf);
+
+		global_rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(),
+						 op->global, key);
 		if (global_rec == NULL) {
+			DEBUG(0, ("smbXsrv_open_close(0x%08x): "
+				  "Failed to lock global key '%s'\n",
+				  op->global->open_global_id,
+				  hex_encode_talloc(global_rec, key.dptr,
+						    key.dsize)));
 			error = NT_STATUS_INTERNAL_ERROR;
 		}
 	}
@@ -1726,7 +1781,7 @@ NTSTATUS smbXsrv_open_global_traverse(
 		return status;
 	}
 
-	status = dbwrap_traverse_read(smbXsrv_open_global_db_ctx,
+	status = dbwrap_traverse_read(get_smbXsrv_open_global_db_ctx(),
 				      smbXsrv_open_global_traverse_fn,
 				      &state,
 				      &count);
@@ -1740,16 +1795,21 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 	NTSTATUS status = NT_STATUS_OK;
 	TALLOC_CTX *frame = talloc_stackframe();
 	struct smbXsrv_open_global0 *op = NULL;
+	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 	TDB_DATA val;
 	struct db_record *rec;
 	bool delete_open = false;
 	uint32_t global_id = persistent_id & UINT32_MAX;
 
-	rec = smbXsrv_open_global_fetch_locked(smbXsrv_open_global_db_ctx,
-					       global_id,
-					       frame);
+	key = smbXsrv_open_global_id_to_key(global_id, key_buf);
+	rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(), frame, key);
 	if (rec == NULL) {
 		status = NT_STATUS_NOT_FOUND;
+		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
+			  "failed to fetch record from %s - %s\n",
+			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx()),
+			   nt_errstr(status)));
 		goto done;
 	}
 
@@ -1757,7 +1817,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 	if (val.dsize == 0) {
 		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
 			  "empty record in %s, skipping...\n",
-			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx)));
+			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx())));
 		goto done;
 	}
 
@@ -1803,7 +1863,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
 			  "failed to delete record"
 			  "from %s: %s\n", global_id,
-			  dbwrap_name(smbXsrv_open_global_db_ctx),
+			  dbwrap_name(get_smbXsrv_open_global_db_ctx()),
 			  nt_errstr(status)));
 		goto done;
 	}
@@ -1811,7 +1871,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 	DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
 		   "delete record from %s\n",
 		   global_id,
-		   dbwrap_name(smbXsrv_open_global_db_ctx)));
+		   dbwrap_name(get_smbXsrv_open_global_db_ctx())));
 
 done:
 	talloc_free(frame);
@@ -1831,12 +1891,12 @@ bool smbXsrv_open_is_resilient(uint64_t persistent_id)
 	uint32_t global_id = persistent_id & UINT32_MAX;
 
 	key = smbXsrv_open_global_id_to_key(global_id, key_buf);
-	rec = dbwrap_fetch_locked(smbXsrv_open_global_db_ctx, frame, key);
+	rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(), frame, key);
 	if (rec == NULL) {
 		status = NT_STATUS_NOT_FOUND;
 		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x] "
 			  "failed to fetch record from %s - %s\n",
-			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx),
+			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx()),
 			   nt_errstr(status)));
 		goto done;
 	}
@@ -1845,7 +1905,7 @@ bool smbXsrv_open_is_resilient(uint64_t persistent_id)
 	if (val.dsize == 0) {
 		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x] "
 			  "empty record in %s, skipping...\n",
-			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx)));
+			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx())));
 		goto done;
 	}
 

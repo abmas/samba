@@ -29,6 +29,8 @@
 struct share_params;
 #include "source3/param/param_proto.h"
 
+extern char * svtfs_lockdir_path[];
+
 /**
  * @brief Returns an absolute path to a file concatenating the provided
  * @a rootpath and @a basename
@@ -66,6 +68,16 @@ static char *xx_path(const char *name, const char *rootpath)
 char *lock_path(const char *name)
 {
 	return xx_path(name, lp_lock_directory());
+}
+
+extern int svtfs_get_lockdir_index(void);
+
+char *svtfs_lock_path(const char *name)
+{
+	if ( svtfs_lockdir_path[svtfs_get_lockdir_index()] == NULL )
+		return xx_path(name, lp_lock_directory());
+        else
+		return xx_path(name, svtfs_lockdir_path[svtfs_get_lockdir_index()]);
 }
 
 /**

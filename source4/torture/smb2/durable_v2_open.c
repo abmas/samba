@@ -63,6 +63,13 @@ static struct {
 	struct smb2_close cl;
 } break_info;
 
+volatile int sigcont_rcvd = 0;
+
+static void sigcont_handler(int signo)
+{
+  if (signo == SIGCONT)
+	sigcont_rcvd = 1;
+}
 
 static void torture_oplock_close_callback(struct smb2_request *req)
 {
@@ -2512,6 +2519,13 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
        struct smb2_lock lck;
        struct smb2_lock_element lock[1];
 
+       /* setup signal handler for sigcont */
+       if (signal(SIGCONT, sigcont_handler) == SIG_ERR) {
+		torture_warning(tctx, "Can't catch SIGCONT. bailing...\n");
+		ret = false;
+		goto done;
+       }
+
        /* Choose a random name in case the state is left a little funky. */
        snprintf(fname, 256, "persist_samba_kill_%s.dat",
                 generate_random_str(tctx, 8));
@@ -2549,49 +2563,14 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
        status = smb2_lock(tree, &lck);
        torture_assert_ntstatus_ok(tctx, status, "Incorrect status");
 
-#ifdef WHATEVER
-       if (!(dir = opendir("/proc"))) {
-           return false;
-       }
-
-       while((ent = readdir(dir)) != NULL) {
-           /* if endptr is not a null character, the directory is not
-            * entirely numeric, so ignore it */
-	   FILE * fp = NULL;
-           long lpid = strtol(ent->d_name, &endptr, 10);
-           if (*endptr != '\0') {
-               continue;
-           }   
-
-           /* try to open the cmdline file */
-           snprintf(buf, sizeof(buf), "/proc/%ld/cmdline", lpid);
-           fp = fopen(buf, "r");
-        
-           if (fp) {
-               if (fgets(buf, sizeof(buf), fp) != NULL) {
-                   /* check the first token in the file, the program name */
-                   char* first = strtok(buf, " ");
-                   if (!strcmp(first, "smbd")) {
-                       fclose(fp);
-                       kill(lpid, SIGKILL);
-                       found_process = true;
-                       break;
-                   }
-               }
-               fclose(fp);
-           }   
-        
-       }
-    
-       closedir(dir);
-       if (!found_process) return false;
-#endif
-       system("/etc/init.d/samba restart");
+       /* Pause until a SIGCONT is received. */
+       sigcont_rcvd = 0;
+       torture_comment(tctx, "pausing persistent handle test until signalled...\n");
+       while (sigcont_rcvd == 0) sleep(1);
+       torture_comment(tctx, "signal to resume received.\n");
 
        /* disconnect, reconnect and then do persistent reopen */
        TALLOC_FREE(tree);
-
-       sleep(50);
 
        if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
                 torture_warning(tctx, "couldn't reconnect, bailing\n");

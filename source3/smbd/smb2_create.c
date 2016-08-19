@@ -996,20 +996,21 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 				 * 4) then, durable and lease context requests should be ignored.
 				 */
 				durable_requested = false;
+#ifdef MICROSOFT_FRAMEWORK_TESTS
 				requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
 				lease_ptr = NULL;
-			} else {
+#endif
+			}
 
-				if (!smb2_lease_key_valid(&lease.lease_key)) {
-					lease_ptr = NULL;
-					requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
-				}
+			if (!smb2_lease_key_valid(&lease.lease_key)) {
+				lease_ptr = NULL;
+				requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
+			}
 
-				if ((smb2req->xconn->protocol < PROTOCOL_SMB3_00) &&
-						(lease.lease_version != 1)) {
-					DEBUG(10, ("v2 lease key only for SMB3\n"));
-					lease_ptr = NULL;
-				}
+			if ((smb2req->xconn->protocol < PROTOCOL_SMB3_00) &&
+					(lease.lease_version != 1)) {
+				DEBUG(10, ("v2 lease key only for SMB3\n"));
+				lease_ptr = NULL;
 			}
 
 			/*

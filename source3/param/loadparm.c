@@ -109,6 +109,37 @@ static bool defaults_saved = false;
 
 static struct loadparm_global Globals;
 
+extern char  * svtfs_storage_ip[];
+extern char  * svtfs_lockdir_path[];
+extern volatile int svtfs_lockdir_index;
+
+void svtfs_set_lockdir_index (int index)
+{
+	svtfs_lockdir_index = index;
+	DEBUG(2,("svtfs_set_lockdir_index: setting lockdir index to %d\n",svtfs_lockdir_index));
+}
+
+int svtfs_get_lockdir_index (void)
+{
+	DEBUG(2,("svtfs_get_lockdir_index: returning lockdir index of %d\n",svtfs_lockdir_index));
+	return svtfs_lockdir_index;
+}
+
+void svtfs_set_index_for_ip (const char * ipv4addr)
+{
+	int index;
+	DEBUG(2,("PJC: Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
+	index = 0;
+	while (svtfs_storage_ip[index] != NULL) {
+		if ( 0 == strcmp(svtfs_storage_ip[index],ipv4addr)) {
+			svtfs_lockdir_index = index;
+			DEBUG(2,("PJC: svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
+			return;
+		}
+		index++;
+	}
+}
+
 /* This is a default service used to prime a services structure */
 static struct loadparm_service sDefault =
 {
@@ -677,6 +708,8 @@ static void init_globals(struct loadparm_context *lp_ctx, bool reinit_globals)
 	lpcfg_string_set(Globals.ctx, &Globals.homedir_map, "auto.home");
 #endif
 #endif
+	lpcfg_string_set(Globals.ctx, &Globals.svtfs_lockdir, "/var/svtfs/samba");
+	lpcfg_string_set(Globals.ctx, &Globals.svtfs_storageip, "0.0.0.0");
 	Globals.time_server = false;
 	Globals.bind_interfaces_only = false;
 	Globals.unix_password_sync = false;

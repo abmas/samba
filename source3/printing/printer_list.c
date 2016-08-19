@@ -30,26 +30,64 @@
 #define PL_DATA_FORMAT "ddPPP"
 #define PL_TSTAMP_FORMAT "dd"
 
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
 static struct db_context *get_printer_list_db(void)
 {
-	static struct db_context *db;
+#define MAX_PRINTER_LIST_DBS 32
+#define get_db() db[svtfs_get_lockdir_index()]
+#define set_db(value) db[svtfs_get_lockdir_index()] = value
+
+	struct db_context *db[MAX_PRINTER_LIST_DBS] = {NULL};
+
 	char *db_path;
+	int index,saved_index;
+	bool return_null = false;
 
-	if (db != NULL) {
-		return db;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	db_path = lock_path("printer_list.tdb");
-	if (db_path == NULL) {
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("get_printer_list_db: setting lockdir_index of 0\n"));
+
+	while (1) {
+
+		if (get_db() != NULL) {
+			break;
+		}
+
+		db_path = svtfs_lock_path("printer_list.tdb");
+		if (db_path == NULL) {
+			return_null = true;
+			break;
+		}
+
+		set_db(db_open(NULL, db_path, 0,
+			     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+			     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_1,
+			     DBWRAP_FLAG_NONE));
+		TALLOC_FREE(db_path);
+
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_PRINTER_LIST_DBS ) ) {
+			DEBUG(5, ("get_printer_list_db: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("get_printer_list_db: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("get_printer_list_db: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	if ( return_null == true ) {
 		return NULL;
+	} else {
+		return get_db();
 	}
-
-	db = db_open(NULL, db_path, 0,
-		     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
-		     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_1,
-		     DBWRAP_FLAG_NONE);
-	TALLOC_FREE(db_path);
-	return db;
 }
 
 bool printer_list_parent_init(void)

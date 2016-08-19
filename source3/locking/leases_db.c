@@ -30,8 +30,17 @@
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_LOCKING
 
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
 /* the leases database handle */
-static struct db_context *leases_db;
+#define MAX_LEASES_DBS 32
+#define get_leases_db() leases_db[svtfs_get_lockdir_index()]
+#define set_leases_db(value) leases_db[svtfs_get_lockdir_index()] = value
+
+static struct db_context *leases_db[MAX_LEASES_DBS] = {NULL};
+
 extern bool smbXsrv_lookup_persistent_id(uint64_t);
 
 void remove_stale_lease_entries(struct leases_db_value *d)
@@ -142,50 +151,77 @@ bool leases_db_init(bool read_only)
 {
 	char *db_path;
 	NTSTATUS status;
+	int index,saved_index;
+	bool return_bool = true;
 
-	if (leases_db) {
-		return true;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	db_path = lock_path("leases.tdb");
-	if (db_path == NULL) {
-		return false;
-	}
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("leases_db_init: setting lockdir_index of 0\n"));
 
-	leases_db = db_open(NULL, db_path, 0,
-			    TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/
-			    TDB_INCOMPATIBLE_HASH,
-			    read_only ? O_RDONLY : O_RDWR|O_CREAT, 0644,
-			    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
-	TALLOC_FREE(db_path);
-	if (leases_db == NULL) {
-		DEBUG(1, ("ERROR: Failed to initialise leases database\n"));
-		return false;
-	}
+	while (1) {
 
-	if ( read_only == false ) {
-		/* traverse the db and only get rid of entries not belonging to a persistent open */
-		status = dbwrap_traverse(leases_db, leases_db_traverse_persist_fn, NULL, NULL);
-
-		if ( ! NT_STATUS_IS_OK(status) ) {
-			TALLOC_FREE(leases_db);
-			/* Cleanup and move on */
-			DEBUG(0,("ERROR: Failed to recover persistent handle related lease entries. Cleanup and proceed.\n"));
-			leases_db = db_open(NULL, db_path, 0,
-				TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
-				read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
-				DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
-			if (!leases_db) {
-				DEBUG(0,("ERROR: Failed to initialise lease database\n"));
-				TALLOC_FREE(db_path);
-				return False;
-			}
-		} else {
-			TALLOC_FREE(db_path);
+		if (get_leases_db()) {
+			return_bool = true;
+			break;
 		}
-	}
 
-	return true;
+		db_path = svtfs_lock_path("leases.tdb");
+		if (db_path == NULL) {
+			return_bool = false;
+			break;
+		}
+
+		set_leases_db(db_open(NULL, db_path, 0,
+				    TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/
+				    TDB_INCOMPATIBLE_HASH,
+				    read_only ? O_RDONLY : O_RDWR|O_CREAT, 0644,
+				    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
+		TALLOC_FREE(db_path);
+		if (get_leases_db() == NULL) {
+			DEBUG(1, ("ERROR: Failed to initialise leases database\n"));
+			return_bool = false;
+			break;
+		}
+
+		if ( read_only == false ) {
+			/* traverse the db and only get rid of entries not belonging to a persistent open */
+			status = dbwrap_traverse(get_leases_db(), leases_db_traverse_persist_fn, NULL, NULL);
+
+			if ( ! NT_STATUS_IS_OK(status) ) {
+				TALLOC_FREE(get_leases_db());
+				/* Cleanup and move on */
+				DEBUG(0,("ERROR: Failed to recover persistent handle related lease entries. Cleanup and proceed.\n"));
+				set_leases_db(db_open(NULL, db_path, 0,
+					TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+					DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
+				if (!get_leases_db()) {
+					DEBUG(0,("ERROR: Failed to initialise lease database\n"));
+					TALLOC_FREE(db_path);
+					return_bool = False;
+					break;
+				}
+			} else {
+				TALLOC_FREE(db_path);
+			}
+		}
+
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LEASES_DBS ) ) {
+			DEBUG(5, ("leases_db_init: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("leases_db_init: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("leases_db_init: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return return_bool;
 }
 
 static bool leases_db_key(TALLOC_CTX *mem_ctx,
@@ -245,7 +281,7 @@ NTSTATUS leases_db_add(const struct GUID *client_guid,
 		return NT_STATUS_NO_MEMORY;
 	}
 
-	rec = dbwrap_fetch_locked(leases_db, talloc_tos(), db_key);
+	rec = dbwrap_fetch_locked(get_leases_db(), talloc_tos(), db_key);
 	TALLOC_FREE(db_key.dptr);
 	if (rec == NULL) {
 		return NT_STATUS_INTERNAL_ERROR;
@@ -370,7 +406,7 @@ NTSTATUS leases_db_del(const struct GUID *client_guid,
 		return NT_STATUS_NO_MEMORY;
 	}
 
-	rec = dbwrap_fetch_locked(leases_db, talloc_tos(), db_key);
+	rec = dbwrap_fetch_locked(get_leases_db(), talloc_tos(), db_key);
 	TALLOC_FREE(db_key.dptr);
 	if (rec == NULL) {
 		return NT_STATUS_NOT_FOUND;
@@ -523,7 +559,7 @@ NTSTATUS leases_db_parse(const struct GUID *client_guid,
 		.status = NT_STATUS_OK
 	};
 
-	status = dbwrap_parse_record(leases_db, db_key, leases_db_parser,
+	status = dbwrap_parse_record(get_leases_db(), db_key, leases_db_parser,
 				     &state);
 	TALLOC_FREE(db_key.dptr);
 	if (!NT_STATUS_IS_OK(status)) {

@@ -58,6 +58,8 @@ struct pending_message_list {
 	struct deferred_open_record *open_rec;
 };
 
+extern void svtfs_set_index_for_ip (const char *);
+
 static void construct_reply_common(uint8_t cmd, const uint8_t *inbuf,
 				   char *outbuf);
 static struct pending_message_list *get_deferred_open_message_smb(
@@ -4005,6 +4007,9 @@ void smbd_process(struct tevent_context *ev_ctx,
 	} else {
 		remaddr = "0.0.0.0";
 	}
+
+	/* Ashok: Set the svtfs_lockdir_index based on the locaddr */
+	svtfs_set_index_for_ip (locaddr);
 
 	/* this is needed so that we get decent entries
 	   in smbstatus for port 445 connects */

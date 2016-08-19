@@ -38,6 +38,10 @@
 #include "lib/util/tevent_ntstatus.h"
 #include "lib/util/iov_buf.h"
 
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
 struct smbXsrv_client_table {
 	struct {
 		uint32_t max_clients;
@@ -48,44 +52,70 @@ struct smbXsrv_client_table {
 	} global;
 };
 
-static struct db_context *smbXsrv_client_global_db_ctx = NULL;
+#define MAX_CLIENT_GLOBAL_DB_CONTEXTS 32
+#define get_smbXsrv_client_global_db_ctx() smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()]
+#define set_smbXsrv_client_global_db_ctx(value) smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()] = value
+
+static struct db_context *smbXsrv_client_global_db_ctx[MAX_CLIENT_GLOBAL_DB_CONTEXTS] = {NULL};
 
 NTSTATUS smbXsrv_client_global_init(void)
 {
 	const char *global_path = NULL;
 	struct db_context *db_ctx = NULL;
+	int index,saved_index;
+	NTSTATUS status = NT_STATUS_OK;
 
-	if (smbXsrv_client_global_db_ctx != NULL) {
-		return NT_STATUS_OK;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	/*
-	 * This contains secret information like client keys!
-	 */
-	global_path = lock_path("smbXsrv_client_global.tdb");
-	if (global_path == NULL) {
-		return NT_STATUS_NO_MEMORY;
-	}
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("smbXsrv_client_global_init: setting lockdir_index of 0\n"));
 
-	db_ctx = db_open(NULL, global_path,
-			 0, /* hash_size */
-			 TDB_DEFAULT |
-			 TDB_CLEAR_IF_FIRST |
-			 TDB_INCOMPATIBLE_HASH,
-			 O_RDWR | O_CREAT, 0600,
-			 DBWRAP_LOCK_ORDER_1,
-			 DBWRAP_FLAG_NONE);
-	if (db_ctx == NULL) {
-		NTSTATUS status;
+	while (1) {
 
-		status = map_nt_error_from_unix_common(errno);
+		if (get_smbXsrv_client_global_db_ctx() != NULL) {
+			break;
+		}
 
-		return status;
-	}
+		/*
+		 * This contains secret information like client keys!
+		 */
+		global_path = svtfs_lock_path("smbXsrv_client_global.tdb");
+		if (global_path == NULL) {
+			status = NT_STATUS_NO_MEMORY;
+			break;
+		}
 
-	smbXsrv_client_global_db_ctx = db_ctx;
+		db_ctx = db_open(NULL, global_path,
+				 0, /* hash_size */
+				 TDB_DEFAULT |
+				 TDB_CLEAR_IF_FIRST |
+				 TDB_INCOMPATIBLE_HASH,
+				 O_RDWR | O_CREAT, 0600,
+				 DBWRAP_LOCK_ORDER_1,
+				 DBWRAP_FLAG_NONE);
+		if (db_ctx == NULL) {
 
-	return NT_STATUS_OK;
+			status = map_nt_error_from_unix_common(errno);
+			break;
+		}
+
+		set_smbXsrv_client_global_db_ctx(db_ctx);
+
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_CLIENT_GLOBAL_DB_CONTEXTS ) ) {
+			DEBUG(5, ("smbXsrv_client_global_init: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("smbXsrv_client_global_init: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("smbXsrv_client_global_init: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return status;
 }
 
 /*
@@ -165,9 +195,9 @@ static NTSTATUS smbXsrv_client_table_create(TALLOC_CTX *mem_ctx,
 		return status;
 	}
 
-	table->global.db_ctx = smbXsrv_client_global_db_ctx;
+	table->global.db_ctx = get_smbXsrv_client_global_db_ctx();
 
-	dbwrap_watch_db(table->global.db_ctx, msg_ctx);
+	dbwrap_watch_db(get_smbXsrv_client_global_db_ctx(), msg_ctx);
 
 	*_table = table;
 	return NT_STATUS_OK;
@@ -274,12 +304,18 @@ NTSTATUS smb2srv_client_lookup_global(struct smbXsrv_client *client,
 	struct smbXsrv_client_table *table = client->table;
 	struct smbXsrv_client_global0 *global = NULL;
 	bool is_free = false;
+	uint8_t key_buf[SMBXSRV_CLIENT_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 	struct db_record *db_rec;
 
-	db_rec = smbXsrv_client_global_fetch_locked(table->global.db_ctx,
-						    &client_guid,
-						    talloc_tos());
+	key = smbXsrv_client_global_id_to_key(&client_guid, key_buf);
+
+	db_rec = dbwrap_fetch_locked(get_smbXsrv_client_global_db_ctx(),
+				     talloc_tos(), key);
 	if (db_rec == NULL) {
+		DBG_ERR("guid [%s]: Failed to lock key '%s'\n",
+			GUID_string(talloc_tos(), &client_guid),
+			hex_encode_talloc(talloc_tos(), key.dptr, key.dsize));
 		return NT_STATUS_INTERNAL_DB_ERROR;
 	}
 
@@ -428,6 +464,7 @@ static NTSTATUS smbXsrv_client_global_store(struct smbXsrv_client_global0 *globa
 
 static NTSTATUS smbXsrv_client_global_remove(struct smbXsrv_client_global0 *global)
 {
+	struct smbXsrv_client_globalB global_blob;
 	TDB_DATA key;
 	NTSTATUS status;
 
@@ -452,8 +489,11 @@ static NTSTATUS smbXsrv_client_global_remove(struct smbXsrv_client_global0 *glob
 		return status;
 	}
 	global->stored = false;
-	DBG_DEBUG("key '%s' delete\n",
-		  hex_encode_talloc(global->db_rec, key.dptr, key.dsize));
+	if (DEBUGLVL(DBGLVL_DEBUG)) {
+		DBG_DEBUG("key '%s' delete\n",
+			hex_encode_talloc(global->db_rec, key.dptr, key.dsize));
+		NDR_PRINT_DEBUG(smbXsrv_client_globalB, &global_blob);
+	}
 
 	TALLOC_FREE(global->db_rec);
 
@@ -695,6 +735,8 @@ NTSTATUS smbXsrv_client_update(struct smbXsrv_client *client)
 {
 	struct smbXsrv_client_table *table = client->table;
 	NTSTATUS status;
+	uint8_t key_buf[SMBXSRV_CLIENT_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 
 	if (client->global->db_rec != NULL) {
 		DBG_ERR("guid [%s]: Called with db_rec != NULL'\n",
@@ -703,11 +745,15 @@ NTSTATUS smbXsrv_client_update(struct smbXsrv_client *client)
 		return NT_STATUS_INTERNAL_ERROR;
 	}
 
-	client->global->db_rec = smbXsrv_client_global_fetch_locked(
-					table->global.db_ctx,
-					&client->global->client_guid,
-					client->global /* TALLOC_CTX */);
+	key = smbXsrv_client_global_id_to_key(&client->global->client_guid,
+					      key_buf);
+
+	client->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_client_global_db_ctx(),
+						     client->global, key);
 	if (client->global->db_rec == NULL) {
+		DBG_ERR("guid [%s]: Failed to lock key '%s'\n",
+			GUID_string(talloc_tos(), &client->global->client_guid),
+			hex_encode_talloc(talloc_tos(), key.dptr, key.dsize));
 		return NT_STATUS_INTERNAL_DB_ERROR;
 	}
 
@@ -738,6 +784,8 @@ NTSTATUS smbXsrv_client_remove(struct smbXsrv_client *client)
 {
 	struct smbXsrv_client_table *table = client->table;
 	NTSTATUS status;
+	uint8_t key_buf[SMBXSRV_CLIENT_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 
 	if (client->global->db_rec != NULL) {
 		DBG_ERR("client_guid[%s]: Called with db_rec != NULL'\n",
@@ -749,11 +797,15 @@ NTSTATUS smbXsrv_client_remove(struct smbXsrv_client *client)
 		return NT_STATUS_OK;
 	}
 
-	client->global->db_rec = smbXsrv_client_global_fetch_locked(
-					table->global.db_ctx,
-					&client->global->client_guid,
-					client->global /* TALLOC_CTX */);
+	key = smbXsrv_client_global_id_to_key(&client->global->client_guid,
+					      key_buf);
+
+	client->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_client_global_db_ctx(),
+						     client->global, key);
 	if (client->global->db_rec == NULL) {
+		DBG_ERR("client_guid[%s]: Failed to lock key '%s'\n",
+			GUID_string(talloc_tos(), &client->global->client_guid),
+			hex_encode_talloc(talloc_tos(), key.dptr, key.dsize));
 		return NT_STATUS_INTERNAL_DB_ERROR;
 	}
 

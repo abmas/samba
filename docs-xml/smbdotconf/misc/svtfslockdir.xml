@@ -1,0 +1,22 @@
+<samba:parameter name="svtfs lockdir"
+                 context="G"
+                 type="string"
+                 constant="1"
+		 handler="handle_svtfs_lockdir"
+                 xmlns:samba="http://www.samba.org/samba/DTD/samba-doc">
+<synonym>lock dir</synonym>
+<description>
+	<para>This option specifies the directory where lock 
+	files will be placed.  The lock files are used to implement the 
+	<smbconfoption name="max connections"/> option.
+	</para>
+
+	<para>
+		Note: This option can not be set inside registry
+		configurations.
+	</para>
+</description>
+
+<value type="default">/var/svtfs/samba</value>
+<value type="example">/var/run/samba/locks</value>
+</samba:parameter>

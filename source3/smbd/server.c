@@ -52,9 +52,15 @@
 #include "smbd/smbd_cleanupd.h"
 #include "lib/util/sys_rw.h"
 
+#define MAX_LOCKDIRS 32
+
 #ifdef CLUSTER_SUPPORT
 #include "ctdb_protocol.h"
 #endif
+
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
 
 struct smbd_open_socket;
 struct smbd_child_pid;
@@ -1207,6 +1213,7 @@ extern void build_options(bool screen);
 	int opt;
 	poptContext pc;
 	bool print_build_options = False;
+	int index,saved_index;
         enum {
 		OPT_DAEMON = 1000,
 		OPT_INTERACTIVE,
@@ -1634,6 +1641,7 @@ extern void build_options(bool screen);
 		DEBUG(0, ("ERROR: file_init_global() failed\n"));
 		return -1;
 	}
+
 	status = smbXsrv_open_global_init();
 	if (!NT_STATUS_IS_OK(status)) {
 		exit_daemon("Samba cannot init global open", map_errno_from_nt_status(status));

@@ -39,9 +39,16 @@
 
 #define ZERO_ZERO 0
 
-/* The open brlock.tdb database. */
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
 
-static struct db_context *brlock_db;
+/* The open brlock.tdb database. */
+#define MAX_BRLOCK_DBS 32
+#define get_brlock_db() brlock_db[svtfs_get_lockdir_index()]
+#define set_brlock_db(value) brlock_db[svtfs_get_lockdir_index()] = value
+
+static struct db_context *brlock_db[MAX_BRLOCK_DBS] = {NULL};
 
 struct byte_range_lock {
 	struct files_struct *fsp;
@@ -349,57 +356,80 @@ void brl_init(bool read_only)
 	int tdb_flags;
 	char *db_path;
 	NTSTATUS status;
+	int index,saved_index;
 
-	if (brlock_db) {
-		return;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	tdb_flags = TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH;
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("brl_init: setting lockdir_index of 0\n"));
 
-	if (!lp_clustering()) {
-		/*
-		 * We can't use the SEQNUM trick to cache brlock
-		 * entries in the clustering case because ctdb seqnum
-		 * propagation has a delay.
-		 */
-		tdb_flags |= TDB_SEQNUM;
-	}
+	while (1) {
 
-	db_path = lock_path("brlock.tdb");
-	if (db_path == NULL) {
-		DEBUG(0, ("out of memory!\n"));
-		return;
-	}
+		if (get_brlock_db()) {
+			break;
+		}
 
-	brlock_db = db_open(NULL, db_path,
-			    SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
-			    read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
-			    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
-	if (!brlock_db) {
-		DEBUG(0,("Failed to open byte range locking database %s\n",
-			 db_path));
-		TALLOC_FREE(db_path);
-		return;
-	}
+		tdb_flags = TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH;
 
-	if ( read_only == false ) {
-		status = dbwrap_traverse(brlock_db, brl_traverse_persist_fn, NULL, NULL);
-		if ( ! NT_STATUS_IS_OK(status) ) {
-			TALLOC_FREE(brlock_db);
-			DEBUG(0,("brl_init: ERROR: Failed to recover persistent handle related brlock entries. Cleanup and proceed.\n"));
-			tdb_flags |= TDB_CLEAR_IF_FIRST;
-			brlock_db = db_open(NULL, db_path,
-                            		SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
-                            		read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
-                            		DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
-			if (!brlock_db) {
-				DEBUG(0,("brl_init: Failed to open byte range locking database %s\n", db_path));
-				TALLOC_FREE(db_path);
-				return;
+		if (!lp_clustering()) {
+			/*
+			 * We can't use the SEQNUM trick to cache brlock
+			 * entries in the clustering case because ctdb seqnum
+			 * propagation has a delay.
+			 */
+			tdb_flags |= TDB_SEQNUM;
+		}
+
+		db_path = svtfs_lock_path("brlock.tdb");
+		if (db_path == NULL) {
+			DEBUG(0, ("out of memory!\n"));
+			break;
+		}
+
+		set_brlock_db(db_open(NULL, db_path,
+				    SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
+				    read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
+				    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
+		if (!get_brlock_db()) {
+			DEBUG(0,("Failed to open byte range locking database %s\n",
+				 db_path));
+			TALLOC_FREE(db_path);
+			break;
+		}
+
+		if ( read_only == false ) {
+			status = dbwrap_traverse(get_brlock_db(), brl_traverse_persist_fn, NULL, NULL);
+			if ( ! NT_STATUS_IS_OK(status) ) {
+				TALLOC_FREE(get_brlock_db());
+				DEBUG(0,("brl_init: ERROR: Failed to recover persistent handle related brlock entries. Cleanup and proceed.\n"));
+				tdb_flags |= TDB_CLEAR_IF_FIRST;
+				set_brlock_db(db_open(NULL, db_path,
+						SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
+						read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
+						DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
+				if (!get_brlock_db()) {
+					DEBUG(0,("brl_init: Failed to open byte range locking database %s\n", db_path));
+					TALLOC_FREE(db_path);
+					break;
+				}
 			}
 		}
-	}
-	TALLOC_FREE(db_path);
+		TALLOC_FREE(db_path);
+
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_BRLOCK_DBS ) ) {
+			DEBUG(5, ("brl_init: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("brl_init: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("brl_init: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
 }
 
 /****************************************************************************
@@ -408,7 +438,7 @@ void brl_init(bool read_only)
 
 void brl_shutdown(void)
 {
-	TALLOC_FREE(brlock_db);
+	TALLOC_FREE(get_brlock_db());
 }
 
 #if ZERO_ZERO
@@ -1914,12 +1944,12 @@ int brl_forall(void (*fn)(struct file_id id, struct server_id pid,
 	NTSTATUS status;
 	int count = 0;
 
-	if (!brlock_db) {
+	if (!get_brlock_db()) {
 		return 0;
 	}
 	cb.fn = fn;
 	cb.private_data = private_data;
-	status = dbwrap_traverse(brlock_db, brl_traverse_fn, &cb, &count);
+	status = dbwrap_traverse(get_brlock_db(), brl_traverse_fn, &cb, &count);
 
 	if (!NT_STATUS_IS_OK(status)) {
 		return -1;
@@ -1991,7 +2021,7 @@ static void byte_range_lock_flush(struct byte_range_lock *br_lck)
 		}
 	}
 
-	DEBUG(10, ("seqnum=%d\n", dbwrap_get_seqnum(brlock_db)));
+	DEBUG(10, ("seqnum=%d\n", dbwrap_get_seqnum(get_brlock_db())));
 
  done:
 	br_lck->modified = false;
@@ -2051,7 +2081,7 @@ struct byte_range_lock *brl_get_locks(TALLOC_CTX *mem_ctx, files_struct *fsp)
 	key.dptr = (uint8_t *)&fsp->file_id;
 	key.dsize = sizeof(struct file_id);
 
-	br_lck->record = dbwrap_fetch_locked(brlock_db, br_lck, key);
+	br_lck->record = dbwrap_fetch_locked(get_brlock_db(), br_lck, key);
 
 	if (br_lck->record == NULL) {
 		DEBUG(3, ("Could not lock byte range lock entry\n"));
@@ -2115,10 +2145,10 @@ struct byte_range_lock *brl_get_locks_readonly(files_struct *fsp)
 	NTSTATUS status;
 
 	DEBUG(10, ("seqnum=%d, fsp->brlock_seqnum=%d\n",
-		   dbwrap_get_seqnum(brlock_db), fsp->brlock_seqnum));
+		   dbwrap_get_seqnum(get_brlock_db()), fsp->brlock_seqnum));
 
 	if ((fsp->brlock_rec != NULL)
-	    && (dbwrap_get_seqnum(brlock_db) == fsp->brlock_seqnum)) {
+	    && (dbwrap_get_seqnum(get_brlock_db()) == fsp->brlock_seqnum)) {
 		/*
 		 * We have cached the brlock_rec and the database did not
 		 * change.
@@ -2134,7 +2164,7 @@ struct byte_range_lock *brl_get_locks_readonly(files_struct *fsp)
 	state.br_lock = &br_lock;
 
 	status = dbwrap_parse_record(
-		brlock_db,
+		get_brlock_db(),
 		make_tdb_data((uint8_t *)&fsp->file_id,
 			      sizeof(fsp->file_id)),
 		brl_get_locks_readonly_parser, &state);
@@ -2179,7 +2209,7 @@ struct byte_range_lock *brl_get_locks_readonly(files_struct *fsp)
 		 */
 		TALLOC_FREE(fsp->brlock_rec);
 		fsp->brlock_rec = br_lock;
-		fsp->brlock_seqnum = dbwrap_get_seqnum(brlock_db);
+		fsp->brlock_seqnum = dbwrap_get_seqnum(get_brlock_db());
 	}
 
 	return br_lock;
@@ -2296,7 +2326,7 @@ bool brl_cleanup_disconnected(struct file_id fid, uint64_t open_persistent_id)
 
 	key = make_tdb_data((void*)&fid, sizeof(fid));
 
-	rec = dbwrap_fetch_locked(brlock_db, frame, key);
+	rec = dbwrap_fetch_locked(get_brlock_db(), frame, key);
 	if (rec == NULL) {
 		DEBUG(5, ("brl_cleanup_disconnected: failed to fetch record "
 			  "for file %s\n", file_id_string(frame, &fid)));
@@ -2344,7 +2374,7 @@ bool brl_cleanup_disconnected(struct file_id fid, uint64_t open_persistent_id)
 	if (!NT_STATUS_IS_OK(status)) {
 		DEBUG(5, ("brl_cleanup_disconnected: failed to delete record "
 			  "for file %s from %s, open %llu: %s\n",
-			  file_id_string(frame, &fid), dbwrap_name(brlock_db),
+			  file_id_string(frame, &fid), dbwrap_name(get_brlock_db()),
 			  (unsigned long long)open_persistent_id,
 			  nt_errstr(status)));
 		goto done;

@@ -55,8 +55,16 @@
 
 #define NO_LOCKING_COUNT (-1)
 
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
 /* the locking database handle */
-static struct db_context *lock_db;
+#define MAX_LOCK_DBS 32
+#define get_lock_db() lock_db[svtfs_get_lockdir_index()]
+#define set_lock_db(value) lock_db[svtfs_get_lockdir_index()] = value
+
+static struct db_context *lock_db[MAX_LOCK_DBS] = {NULL};
 
 /* forward decl */
 static TDB_DATA unparse_share_modes(struct share_mode_data *d);
@@ -146,60 +154,88 @@ static int sml_traverse_persist_fn(struct db_record *rec, void *_state)
 static bool locking_init_internal(bool read_only)
 {
 	char *db_path;
-	NTSTATUS status;
+        NTSTATUS status;
+	bool return_bool = true;
+	int index,saved_index;
 
-	brl_init(read_only);
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	if (lock_db)
-		return True;
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("locking_init_internal: setting lockdir_index of 0\n"));
 
-	db_path = lock_path("locking.tdb");
-	if (db_path == NULL) {
-		return false;
-	}
+	while (1) {
 
-	/* open the lock db without clearing existing entries, first. Let's try to keep the persistent */
-	/* handle related entries. If something fails in the middle, we will get rid of the db and move on*/
-	lock_db = db_open(NULL, db_path,
-			  SMB_OPEN_DATABASE_TDB_HASH_SIZE,
-			  TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH,
-			  read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
-			  DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
-	if (!lock_db) {
-		DEBUG(0,("ERROR: Failed to initialise locking database\n"));
-		TALLOC_FREE(db_path);
-		return False;
-	}
+		brl_init(read_only);
 
-	if ( read_only == false ) {
-		/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
-		status = dbwrap_traverse(lock_db, sml_traverse_persist_fn, NULL, NULL);
+		if (get_lock_db())
+			break;
 
-		if ( ! NT_STATUS_IS_OK(status) ) {
-			TALLOC_FREE(lock_db);
-			/* Cleanup and move on */
-			DEBUG(0,("ERROR: Failed to recover persistent handle related lock entries. Cleanup and proceed.\n"));
-			lock_db = db_open(NULL, db_path,
-				SMB_OPEN_DATABASE_TDB_HASH_SIZE,
-				TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
-				read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
-				DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
-			if (!lock_db) {
-				DEBUG(0,("ERROR: Failed to initialise locking database\n"));
-				TALLOC_FREE(db_path);
-				return False;
-			}
-		} else {
-			TALLOC_FREE(db_path);
+		db_path = svtfs_lock_path("locking.tdb");
+		if (db_path == NULL) {
+			return_bool = false;
+			break;
 		}
-	}
 
-	if (!posix_locking_init(read_only))
-		return False;
+		/* open the lock db without clearing existing entries, first. Let's try to keep the persistent */
+		/* handle related entries. If something fails in the middle, we will get rid of the db and move on*/
+		set_lock_db(db_open(NULL, db_path,
+				  SMB_OPEN_DATABASE_TDB_HASH_SIZE,
+				  TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH,
+				  read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+				  DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE));
+		if (!get_lock_db()) {
+			DEBUG(0,("ERROR: Failed to initialise locking database\n"));
+			TALLOC_FREE(db_path);
+			return_bool = False;
+			break;
+		}
 
-	dbwrap_watch_db(lock_db, server_messaging_context());
+		if ( read_only == false ) {
+			/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
+			status = dbwrap_traverse(get_lock_db(), sml_traverse_persist_fn, NULL, NULL);
 
-	return True;
+			if ( ! NT_STATUS_IS_OK(status) ) {
+				TALLOC_FREE(get_lock_db());
+				/* Cleanup and move on */
+				DEBUG(0,("ERROR: Failed to recover persistent handle related lock entries. Cleanup and proceed.\n"));
+				set_lock_db(db_open(NULL, db_path,
+					SMB_OPEN_DATABASE_TDB_HASH_SIZE,
+					TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+					DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE));
+				if (!get_lock_db()) {
+					DEBUG(0,("ERROR: Failed to initialise locking database\n"));
+					TALLOC_FREE(db_path);
+					return_bool = False;
+					break;
+				}
+			} else {
+				TALLOC_FREE(db_path);
+			}
+		}
+
+		if (!posix_locking_init(read_only)) {
+			return_bool = False;
+			break;
+		}
+
+		dbwrap_watch_db(get_lock_db(), server_messaging_context());
+
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
+			DEBUG(5, ("locking_init_internal: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("locking_init_internal: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("locking_init_internal: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return return_bool;
 }
 
 bool locking_init(void)
@@ -219,7 +255,7 @@ bool locking_init_readonly(void)
 bool locking_end(void)
 {
 	brl_shutdown();
-	TALLOC_FREE(lock_db);
+	TALLOC_FREE(get_lock_db());
 	return true;
 }
 
@@ -630,7 +666,7 @@ static struct share_mode_lock *get_share_mode_lock_internal(
 	TDB_DATA key = locking_key(&id);
 	TDB_DATA value;
 
-	rec = dbwrap_fetch_locked(lock_db, mem_ctx, key);
+	rec = dbwrap_fetch_locked(get_lock_db(), mem_ctx, key);
 	if (rec == NULL) {
 		DEBUG(3, ("Could not lock share entry\n"));
 		return NULL;
@@ -752,7 +788,7 @@ struct share_mode_lock *fetch_share_mode_unlocked(TALLOC_CTX *mem_ctx,
 		return NULL;
 	}
 	status = dbwrap_parse_record(
-		lock_db, key, fetch_share_mode_unlocked_parser, lck);
+		get_lock_db(), key, fetch_share_mode_unlocked_parser, lck);
 	if (!NT_STATUS_IS_OK(status) ||
 	    (lck->data == NULL)) {
 		TALLOC_FREE(lck);
@@ -833,11 +869,11 @@ int share_mode_forall(int (*fn)(struct file_id fid,
 	NTSTATUS status;
 	int count;
 
-	if (lock_db == NULL) {
+	if (get_lock_db() == NULL) {
 		return 0;
 	}
 
-	status = dbwrap_traverse_read(lock_db, share_mode_traverse_fn,
+	status = dbwrap_traverse_read(get_lock_db(), share_mode_traverse_fn,
 				      &state, &count);
 	if (!NT_STATUS_IS_OK(status)) {
 		return -1;

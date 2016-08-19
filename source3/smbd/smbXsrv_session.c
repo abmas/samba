@@ -51,45 +51,73 @@ struct smbXsrv_session_table {
 	} global;
 };
 
-static struct db_context *smbXsrv_session_global_db_ctx = NULL;
+extern char * svtfs_storage_ip[];
+extern int svtfs_get_lockdir_index(void);
+extern void svtfs_set_lockdir_index(int);
+
+#define MAX_SESSION_GLOBAL_DB_CONTEXTS 32
+#define get_smbXsrv_session_global_db_ctx() smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()]
+#define set_smbXsrv_session_global_db_ctx(value) smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()] = value
+
+static struct db_context *smbXsrv_session_global_db_ctx[MAX_SESSION_GLOBAL_DB_CONTEXTS] = {NULL};
 
 NTSTATUS smbXsrv_session_global_init(void)
 {
 	char *global_path = NULL;
 	struct db_context *db_ctx = NULL;
+	int index,saved_index;
+	NTSTATUS status = NT_STATUS_OK;
 
-	if (smbXsrv_session_global_db_ctx != NULL) {
-		return NT_STATUS_OK;
-	}
+	index = 0;
+	saved_index = svtfs_get_lockdir_index();
 
-	/*
-	 * This contains secret information like session keys!
-	 */
-	global_path = lock_path("smbXsrv_session_global.tdb");
-	if (global_path == NULL) {
-		return NT_STATUS_NO_MEMORY;
-	}
+	svtfs_set_lockdir_index(index);
+	DEBUG(5, ("smbXsrv_session_global_init: setting lockdir_index of 0\n"));
 
-	db_ctx = db_open(NULL, global_path,
-			 0, /* hash_size */
-			 TDB_DEFAULT |
-			 TDB_CLEAR_IF_FIRST |
-			 TDB_INCOMPATIBLE_HASH,
-			 O_RDWR | O_CREAT, 0600,
-			 DBWRAP_LOCK_ORDER_1,
-			 DBWRAP_FLAG_NONE);
-	TALLOC_FREE(global_path);
-	if (db_ctx == NULL) {
-		NTSTATUS status;
+	while (1) {
+		if (get_smbXsrv_session_global_db_ctx() != NULL) {
+			break;
+		}
 
-		status = map_nt_error_from_unix_common(errno);
+		/*
+		 * This contains secret information like session keys!
+		 */
+		global_path = svtfs_lock_path("smbXsrv_session_global.tdb");
+		if (global_path == NULL) {
+			status = NT_STATUS_NO_MEMORY;
+			break;
+		}
 
-		return status;
-	}
+		db_ctx = db_open(NULL, global_path,
+				 0, /* hash_size */
+				 TDB_DEFAULT |
+				 TDB_CLEAR_IF_FIRST |
+				 TDB_INCOMPATIBLE_HASH,
+				 O_RDWR | O_CREAT, 0600,
+				 DBWRAP_LOCK_ORDER_1,
+				 DBWRAP_FLAG_NONE);
+		TALLOC_FREE(global_path);
+		if (db_ctx == NULL) {
+			status = map_nt_error_from_unix_common(errno);
+			break;
+		}
 
-	smbXsrv_session_global_db_ctx = db_ctx;
+		set_smbXsrv_session_global_db_ctx(db_ctx);
 
-	return NT_STATUS_OK;
+		index++;
+		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_SESSION_GLOBAL_DB_CONTEXTS ) ) {
+			DEBUG(5, ("smbXsrv_session_global_init: breaking with lockdir_index of %i\n", index));
+			break;
+		}
+
+		DEBUG(5, ("smbXsrv_session_global_init: setting lockdir_index of %i\n", index));
+		svtfs_set_lockdir_index(index);
+	} /* end while(1) */
+
+	DEBUG(5, ("smbXsrv_session_global_init: setting lockdir_index back to %d\n", saved_index));
+	svtfs_set_lockdir_index(saved_index);
+
+	return status;
 }
 
 /*
@@ -248,9 +276,9 @@ static NTSTATUS smbXsrv_session_table_init(struct smbXsrv_connection *conn,
 		return status;
 	}
 
-	table->global.db_ctx = smbXsrv_session_global_db_ctx;
+	table->global.db_ctx = get_smbXsrv_session_global_db_ctx();
 
-	dbwrap_watch_db(table->global.db_ctx, client->msg_ctx);
+	dbwrap_watch_db(get_smbXsrv_session_global_db_ctx(), client->msg_ctx);
 
 	subreq = messaging_read_send(table, client->ev_ctx, client->msg_ctx,
 				     MSG_SMBXSRV_SESSION_CLOSE);
@@ -962,6 +990,8 @@ struct tevent_req *smb2srv_session_close_previous_send(TALLOC_CTX *mem_ctx,
 	uint64_t global_zeros = previous_session_id & 0xFFFFFFFF00000000LLU;
 	struct smbXsrv_session_table *table = conn->client->session_table;
 	struct security_token *current_token = NULL;
+	uint8_t key_buf[SMBXSRV_SESSION_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 
 	DEBUG(2,("smb2srv_session_close_previous_send: called with global_id 0x%08x"
 			" previous session id 0x%16lx current session id 0x%16lx\n",
@@ -1002,10 +1032,10 @@ struct tevent_req *smb2srv_session_close_previous_send(TALLOC_CTX *mem_ctx,
 		return tevent_req_post(req, ev);
 	}
 
-	state->db_rec = smbXsrv_session_global_fetch_locked(
-							table->global.db_ctx,
-							global_id,
-							state /* TALLOC_CTX */);
+	key = smbXsrv_session_global_id_to_key(global_id, key_buf);
+
+	state->db_rec = dbwrap_fetch_locked(get_smbXsrv_session_global_db_ctx(),
+					    state, key);
 	if (state->db_rec == NULL) {
 		tevent_req_nterror(req, NT_STATUS_UNSUCCESSFUL);
 		return tevent_req_post(req, ev);
@@ -1212,7 +1242,7 @@ NTSTATUS smbXsrv_session_create(struct smbXsrv_connection *conn,
 	session->status = NT_STATUS_MORE_PROCESSING_REQUIRED;
 	session->client = conn->client;
 
-	status = smbXsrv_session_global_allocate(table->global.db_ctx,
+	status = smbXsrv_session_global_allocate(get_smbXsrv_session_global_db_ctx(),
 						 session,
 						 &global);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -1367,6 +1397,8 @@ NTSTATUS smbXsrv_session_update(struct smbXsrv_session *session)
 {
 	struct smbXsrv_session_table *table = session->table;
 	NTSTATUS status;
+	uint8_t key_buf[SMBXSRV_SESSION_GLOBAL_TDB_KEY_SIZE];
+	TDB_DATA key;
 
 	if (session->global->db_rec != NULL) {
 		DEBUG(0, ("smbXsrv_session_update(0x%08x): "
@@ -1375,11 +1407,18 @@ NTSTATUS smbXsrv_session_update(struct smbXsrv_session *session)
 		return NT_STATUS_INTERNAL_ERROR;
 	}
 
-	session->global->db_rec = smbXsrv_session_global_fetch_locked(
-					table->global.db_ctx,
+	key = smbXsrv_session_global_id_to_key(
 					session->global->session_global_id,
-					session->global /* TALLOC_CTX */);
+					key_buf);
+
+	session->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_session_global_db_ctx(),
+						      session->global, key);
 	if (session->global->db_rec == NULL) {
+		DEBUG(0, ("smbXsrv_session_update(0x%08x): "
+			  "Failed to lock global key '%s'\n",
+			  session->global->session_global_id,
+			  hex_encode_talloc(talloc_tos(), key.dptr,
+					    key.dsize)));
 		return NT_STATUS_INTERNAL_DB_ERROR;
 	}
 
@@ -1643,11 +1682,21 @@ NTSTATUS smbXsrv_session_logoff(struct smbXsrv_session *session)
 	global_rec = session->global->db_rec;
 	session->global->db_rec = NULL;
 	if (global_rec == NULL) {
-		global_rec = smbXsrv_session_global_fetch_locked(
-					table->global.db_ctx,
+		uint8_t key_buf[SMBXSRV_SESSION_GLOBAL_TDB_KEY_SIZE];
+		TDB_DATA key;
+
+		key = smbXsrv_session_global_id_to_key(
 					session->global->session_global_id,
-					session->global /* TALLOC_CTX */);
+					key_buf);
+
+		global_rec = dbwrap_fetch_locked(get_smbXsrv_session_global_db_ctx(),
+						 session->global, key);
 		if (global_rec == NULL) {
+			DEBUG(0, ("smbXsrv_session_logoff(0x%08x): "
+				  "Failed to lock global key '%s'\n",
+				  session->global->session_global_id,
+				  hex_encode_talloc(global_rec, key.dptr,
+						    key.dsize)));
 			error = NT_STATUS_INTERNAL_ERROR;
 		}
 	}
@@ -1933,7 +1982,7 @@ NTSTATUS smbXsrv_session_global_traverse(
 		return status;
 	}
 
-	status = dbwrap_traverse_read(smbXsrv_session_global_db_ctx,
+	status = dbwrap_traverse_read(get_smbXsrv_session_global_db_ctx(),
 				      smbXsrv_session_global_traverse_fn,
 				      &state,
 				      &count);
