@@ -1,9 +1,18 @@
-Description: Patch in symbol table from rfc3454, for Heimdal scripts.
-Author: Brian May <bam@debian.org>
-Status: cherry-picked from heimdal package
+From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
+Date: Tue, 23 Aug 2016 10:25:39 -0400
+Subject: heimdal-rfc3454.txt
 
---- /dev/null	2015-06-04 12:39:41.770564441 +0000
-+++ a/source4/heimdal/lib/wind/rfc3454.txt-table	2015-06-05 23:09:32.545337704 +0000
+---
+ source4/heimdal/lib/wind/rfc3454.txt-table | 7074 ++++++++++++++++++++++++++++
+ source4/heimdal_build/wscript_build        |    6 +-
+ 2 files changed, 7077 insertions(+), 3 deletions(-)
+ create mode 100644 source4/heimdal/lib/wind/rfc3454.txt-table
+
+diff --git a/source4/heimdal/lib/wind/rfc3454.txt-table b/source4/heimdal/lib/wind/rfc3454.txt-table
+new file mode 100644
+index 0000000..5bef0b5
+--- /dev/null
++++ b/source4/heimdal/lib/wind/rfc3454.txt-table
 @@ -0,0 +1,7074 @@
 +   ----- Start Table A.1 -----
 +
@@ -7080,7 +7089,7 @@ Status: cherry-picked from heimdal package
 +   ----- End Table D.2 -----
 +
 diff --git a/source4/heimdal_build/wscript_build b/source4/heimdal_build/wscript_build
-index 0eb1e38..633fec9 100644
+index c733b8f..f3e9ab2 100644
 --- a/source4/heimdal_build/wscript_build
 +++ b/source4/heimdal_build/wscript_build
 @@ -843,7 +843,7 @@ if not bld.CONFIG_SET('USING_SYSTEM_WIND'):

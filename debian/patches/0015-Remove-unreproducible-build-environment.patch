@@ -1,7 +1,6 @@
-From b387c7c7a0c935841c3b6446cc0685dfe611179b Mon Sep 17 00:00:00 2001
 From: Mathieu Parent <math.parent@gmail.com>
 Date: Thu, 28 Apr 2016 09:35:59 +0200
-Subject: [PATCH] Remove unreproducible build environment
+Subject: Remove unreproducible build environment
 
 ---
  source3/script/build_env.sh | 11 -----------
@@ -27,6 +26,3 @@ index eb54f37..bdaa2c6 100755
 -#define BUILD_ENV_COMPILER "${compiler}"
 -#endif /* _BUILD_ENV_H */
  EOF
--- 
-2.8.0.rc3
-

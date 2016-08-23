@@ -1,4 +1,3 @@
-From a8fe4ce53f23667684883000f9dbec1b4c149f76 Mon Sep 17 00:00:00 2001
 From: Mathieu Parent <math.parent@gmail.com>
 Date: Thu, 12 May 2016 22:04:24 +0200
 Subject: systemd: syslog.target is obsolete
@@ -14,7 +13,7 @@ Ref: https://lintian.debian.org/tags/systemd-service-file-refers-to-obsolete-tar
  4 files changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/packaging/systemd/nmb.service b/packaging/systemd/nmb.service
-index 3d71a7d..98d8080 100644
+index 992c0cd..b8aba50 100644
 --- a/packaging/systemd/nmb.service
 +++ b/packaging/systemd/nmb.service
 @@ -1,6 +1,6 @@
@@ -38,7 +37,7 @@ index 824f89c..83e0daf 100644
  [Service]
  Type=notify
 diff --git a/packaging/systemd/smb.service b/packaging/systemd/smb.service
-index 9810891..949f798 100644
+index 6053a5c..7509407 100644
 --- a/packaging/systemd/smb.service
 +++ b/packaging/systemd/smb.service
 @@ -1,6 +1,6 @@
@@ -50,7 +49,7 @@ index 9810891..949f798 100644
  [Service]
  Type=notify
 diff --git a/packaging/systemd/winbind.service b/packaging/systemd/winbind.service
-index f711a17..26c6752 100644
+index c511488..b412533 100644
 --- a/packaging/systemd/winbind.service
 +++ b/packaging/systemd/winbind.service
 @@ -1,6 +1,6 @@
@@ -61,6 +60,3 @@ index f711a17..26c6752 100644
  
  [Service]
  Type=notify
--- 
-2.8.1
-

@@ -1,6 +1,6 @@
 From: Steven Chamberlain <steven@pyro.eu.org>
 Date: Thu, 11 Feb 2016 02:27:29 +0000
-Subject: [PATCH] ctdb: Fix detection of gnukfreebsd
+Subject: ctdb: Fix detection of gnukfreebsd
 
 GNU/kFreeBSD's platform name is 'gnukfreebsd', not just 'kfreebsd'.
 
@@ -17,10 +17,10 @@ Debian-Bug: https://bugs.debian.org/802621
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/ctdb/wscript b/ctdb/wscript
-index 055c853..6e07aed 100755
+index 5739269..7e6d264 100755
 --- a/ctdb/wscript
 +++ b/ctdb/wscript
-@@ -306,7 +306,7 @@ def build(bld):
+@@ -318,7 +318,7 @@ def build(bld):
          CTDB_SYSTEM_SRC = bld.SUBDIR('common', 'system_aix.c')
      elif sys.platform.startswith('freebsd'):
          CTDB_SYSTEM_SRC = bld.SUBDIR('common', 'system_freebsd.c')
@@ -29,6 +29,3 @@ index 055c853..6e07aed 100755
          CTDB_SYSTEM_SRC = bld.SUBDIR('common', 'system_kfreebsd.c')
      elif sys.platform == 'gnu':
          CTDB_SYSTEM_SRC = bld.SUBDIR('common', 'system_gnu.c')
--- 
-2.8.0.rc3
-

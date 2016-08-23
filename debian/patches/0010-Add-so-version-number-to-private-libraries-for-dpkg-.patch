@@ -1,17 +1,19 @@
 From: Jeroen Dekkers <jeroen@dekkers.ch>
+Date: Tue, 23 Aug 2016 10:25:39 -0400
 Subject: Add so version number to private libraries for dpkg-shlibdeps
-Origin: vendor
-Forwarded: not-needed
 
 We also want dpkg-shlibdeps to generate correct dependency information
 for the private libraries in our binary packages, but dpkg-shlibdeps
 only works when the library has a version number.
+---
+ buildtools/wafsamba/wafsamba.py | 3 +++
+ 1 file changed, 3 insertions(+)
 
 diff --git a/buildtools/wafsamba/wafsamba.py b/buildtools/wafsamba/wafsamba.py
-index 188e535..a7cc5d1 100644
+index 4a47dbf..4a502f2 100644
 --- a/buildtools/wafsamba/wafsamba.py
 +++ b/buildtools/wafsamba/wafsamba.py
-@@ -224,6 +224,9 @@ def SAMBA_LIBRARY(bld, libname, source,
+@@ -232,6 +232,9 @@ def SAMBA_LIBRARY(bld, libname, source,
              raise Utils.WafError("public library '%s' must have header files" %
                         libname)
  

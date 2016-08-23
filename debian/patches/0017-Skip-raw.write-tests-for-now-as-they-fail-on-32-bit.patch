@@ -20,6 +20,3 @@ index 7605f3f..19903c6 100644
  raw.read
  raw.close
  raw.ioctl
--- 
-2.8.1
-

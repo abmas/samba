@@ -1,7 +1,18 @@
-Description: Compatibility fixes for gcc-6
-Author: Douglas Bagnall <douglas.bagnall@catalyst.net.nz>
-Bug-Debian: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=812264
-Status: cherry-picked from upstream
+From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
+Date: Tue, 23 Aug 2016 10:25:39 -0400
+Subject: gcc_6
+
+---
+ buildtools/wafsamba/wscript               | 16 ++++++++++++++++
+ lib/replace/replace.h                     |  4 ++--
+ lib/tevent/tevent.h                       |  2 +-
+ lib/util/attr.h                           | 16 ++++++++--------
+ source3/modules/getdate.c                 |  2 +-
+ source3/modules/getdate.y                 |  2 +-
+ source3/rpc_server/mdssvc/sparql_parser.c |  4 +---
+ source4/lib/wmi/wmi_wrap.c                |  8 +-------
+ third_party/zlib/zlib.h                   |  2 +-
+ 9 files changed, 32 insertions(+), 24 deletions(-)
 
 diff --git a/buildtools/wafsamba/wscript b/buildtools/wafsamba/wscript
 index 9e437e3..ad5bb0c 100755

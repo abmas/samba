@@ -1,12 +1,16 @@
-From: Jelmer Vernooĳ <jelmer@jelmer.uk>
+From: =?utf-8?q?Jelmer_Vernoo=C4=B3?= <jelmer@jelmer.uk>
 Date: Sat, 9 Apr 2016 12:18:38 +0000
 Subject: drop host-specific define that prevents reproducible builds
 
+---
+ buildtools/wafsamba/wscript | 1 -
+ 1 file changed, 1 deletion(-)
+
 diff --git a/buildtools/wafsamba/wscript b/buildtools/wafsamba/wscript
-index d6bb688..7831b75 100755
+index 586cc4b..9e437e3 100755
 --- a/buildtools/wafsamba/wscript
 +++ b/buildtools/wafsamba/wscript
-@@ -296,7 +296,6 @@ def configure(conf):
+@@ -303,7 +303,6 @@ def configure(conf):
  
      conf.CHECK_COMMAND(['uname', '-a'],
                         msg='Checking build system',

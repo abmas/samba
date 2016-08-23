@@ -1,12 +1,16 @@
-Description: Add build option for default smbpasswd location
-Author: Ivo De Decker <ivo.dedecker@ugent.be>
-Bug-Debian: http://bugs.debian.org/705449
-Bug: https://github.com/samba-team/samba/pull/60
-Last-Update: 20130518
+From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
+Date: Tue, 23 Aug 2016 10:25:39 -0400
+Subject: waf_smbpasswd_location
 
+---
+ dynconfig/wscript | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/dynconfig/wscript b/dynconfig/wscript
+index dba74f6..2d17e7c 100755
 --- a/dynconfig/wscript
 +++ b/dynconfig/wscript
-@@ -248,6 +248,8 @@
+@@ -254,6 +254,8 @@ dynconfig = {
      'SMB_PASSWD_FILE' : {
           'STD-PATH':  '${PRIVATE_DIR}/smbpasswd',
           'FHS-PATH':  '${PRIVATE_DIR}/smbpasswd',
