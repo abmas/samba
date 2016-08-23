@@ -1,0 +1,173 @@
+From: Kevin Pease <kevin.pease@simplivity.com>
+Date: Mon, 7 Mar 2016 10:27:52 -0500
+Subject: Add support for LMR REQ RESILIENCY IOCTL.
+
+---
+ source3/smbd/smb2_ioctl_network_fs.c   | 39 ++++++++++++++++
+ source4/torture/smb2/durable_v2_open.c | 82 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 121 insertions(+)
+
+diff --git a/source3/smbd/smb2_ioctl_network_fs.c b/source3/smbd/smb2_ioctl_network_fs.c
+index d8590de..f3d65d4 100644
+--- a/source3/smbd/smb2_ioctl_network_fs.c
++++ b/source3/smbd/smb2_ioctl_network_fs.c
+@@ -620,6 +620,35 @@ static NTSTATUS fsctl_srv_req_resume_key(TALLOC_CTX *mem_ctx,
+ 	return NT_STATUS_OK;
+ }
+ 
++static NTSTATUS fsctl_lmr_req_resiliency(TALLOC_CTX *mem_ctx,
++                                        struct tevent_context *ev,
++                                        struct files_struct *fsp,
++                                        DATA_BLOB *in_input,
++                                        uint32_t in_max_output,
++                                        DATA_BLOB *out_output)
++{
++       struct req_resume_key_rsp rkey_rsp;
++       enum ndr_err_code ndr_ret;
++       struct network_resiliency_request *lmr_req;
++       struct smbXsrv_open *op = fsp->op;
++       NTSTATUS status = NT_STATUS_OK;
++
++       if (in_max_output != 0) {
++               DEBUG(10, ("Invalid output size %d\n", in_max_output));
++               return NT_STATUS_INVALID_PARAMETER;
++       }
++
++       lmr_req = (struct network_resiliency_request *)in_input->data;
++
++       DEBUG(10, ("Setting timeout to %u\n", lmr_req->timeout));
++
++       op->global->durable_timeout_msec = lmr_req->timeout;
++       status = smbXsrv_open_update(op);
++       DEBUG(10, ("smbXsrv_open_update returning %s\n", nt_errstr(status)));
++
++       return status;
++}
++
+ static void smb2_ioctl_network_fs_copychunk_done(struct tevent_req *subreq);
+ 
+ struct tevent_req *smb2_ioctl_network_fs(uint32_t ctl_code,
+@@ -698,6 +727,16 @@ struct tevent_req *smb2_ioctl_network_fs(uint32_t ctl_code,
+ 		}
+ 		return tevent_req_post(req, ev);
+ 		break;
++       case FSCTL_LMR_REQ_RESILIENCY:
++               status = fsctl_lmr_req_resiliency(state, ev, state->fsp,
++                                                 &state->in_input,
++                                                 state->in_max_output,
++                                                 &state->out_output);
++               if (!tevent_req_nterror(req, status)) {
++                       tevent_req_done(req);
++               }
++               return tevent_req_post(req, ev);
++               break;
+ 	default: {
+ 		uint8_t *out_data = NULL;
+ 		uint32_t out_data_len = 0;
+diff --git a/source4/torture/smb2/durable_v2_open.c b/source4/torture/smb2/durable_v2_open.c
+index f3ec344..f715f9e 100644
+--- a/source4/torture/smb2/durable_v2_open.c
++++ b/source4/torture/smb2/durable_v2_open.c
+@@ -26,6 +26,7 @@
+ #include "torture/torture.h"
+ #include "torture/smb2/proto.h"
+ #include "librpc/ndr/libndr.h"
++#include "librpc/gen_ndr/ndr_ioctl.h"
+ 
+ #define CHECK_VAL(v, correct) do { \
+ 	if ((v) != (correct)) { \
+@@ -1494,6 +1495,86 @@ done:
+ 	return ret;
+ }
+ 
++/*
++ * Test persistent open request with FSCTL to set/change persistence time
++ */
++
++bool test_durable_v2_open_set_persistence(struct torture_context *tctx,
++                                         struct smb2_tree *tree)
++{
++       NTSTATUS status;
++       TALLOC_CTX *mem_ctx = talloc_new(tctx);
++       char fname[256];
++       struct smb2_handle _h1;
++       struct smb2_handle *h1 = NULL;
++       union smb_ioctl ioctl;
++       struct smb2_create io;
++       struct network_resiliency_request lmr_req;
++       bool ret = true;
++       enum ndr_err_code ndr_ret;
++       struct GUID create_guid_1 = GUID_random();
++
++       /* Choose a random name in case the state is left a little funky. */
++       snprintf(fname, 256, "durable_v2_open_persist_fsctl_%s.dat",
++                generate_random_str(tctx, 8));
++
++       smb2_util_unlink(tree, fname);
++
++       ZERO_STRUCT(break_info);
++       tree->session->transport->oplock.handler = torture_oplock_handler;
++       tree->session->transport->oplock.private_data = tree;
++
++       smb2_oplock_create_share(&io, fname,
++                                smb2_util_share_access(""),
++                                smb2_util_oplock_level("b"));
++       io.in.durable_open = false;
++       io.in.durable_open_v2 = true;
++       io.in.persistent_open = true;
++       io.in.create_guid = create_guid_1;
++       io.in.timeout = UINT32_MAX;
++
++       status = smb2_create(tree, mem_ctx, &io);
++       CHECK_STATUS(status, NT_STATUS_OK);
++
++       h1 = &_h1;
++
++       /*
++        * Now, set resiliency ...
++        */
++       ZERO_STRUCT(ioctl);
++       ioctl.smb2.level = RAW_IOCTL_SMB2;
++       ioctl.smb2.in.file.handle = io.out.file.handle;
++       ioctl.smb2.in.function = FSCTL_LMR_REQ_RESILIENCY;
++       ioctl.smb2.in.max_response_size = 0;
++       ioctl.smb2.in.flags = SMB2_IOCTL_FLAG_IS_FSCTL;
++
++       lmr_req.timeout = 30000; /* 30 seconds */
++       lmr_req.reserved = 0;
++
++       ndr_ret = ndr_push_struct_blob(&ioctl.smb2.in.out, mem_ctx, &lmr_req,
++                               (ndr_push_flags_fn_t)ndr_push_network_resiliency_request);
++       torture_assert_ndr_success(tctx, ndr_ret,
++                               "ndr_push_network_resiliency_request");
++
++       status = smb2_ioctl(tree, mem_ctx, &ioctl.smb2);
++       torture_assert_ntstatus_ok(tctx, status, "FSCTL_LMR_REQUEST_RESILIENCY");
++
++       status = smb2_util_close(tree, *h1);
++       CHECK_STATUS(status, NT_STATUS_FILE_CLOSED);
++       h1 = NULL;
++
++done:
++       if (h1 != NULL) {
++              smb2_util_close(tree, *h1);
++       }
++       smb2_util_close(tree, io.out.file.handle);
++
++       smb2_util_unlink(tree, fname);
++
++       talloc_free(mem_ctx);
++       return ret;
++}
++
+ /**
+  * Test durable request / reconnect with AppInstanceId
+  */
+@@ -1782,6 +1863,7 @@ struct torture_suite *torture_smb2_durable_v2_open_init(void)
+ 	torture_suite_add_2smb2_test(suite, "app-instance", test_durable_v2_open_app_instance);
+ 	torture_suite_add_1smb2_test(suite, "persistent-open-oplock", test_persistent_open_oplock);
+ 	torture_suite_add_1smb2_test(suite, "persistent-open-lease", test_persistent_open_lease);
++	torture_suite_add_1smb2_test(suite, "persistent-open-set-persistent", test_durable_v2_open_set_persistence);
+ 
+ 	suite->description = talloc_strdup(suite, "SMB2-DURABLE-V2-OPEN tests");
+ 
