@@ -23,3 +23,14 @@
 0023-Microsoft-Protocol-Framework-tests-related-fixes.patch
 0024-HYP-1683-Oplock-lease-changes-to-pass-Microsoft-test.patch
 0025-HYP-1683-Persist-lease-information-to-survive-samba-.patch
+0026-HYP-2636-Support-SVA-hard-reset-use-case.patch
+0027-HYP-2636-Code-cleanup-for-surviving-SVA-hard-restart.patch
+0028-HYP-2212-Ignore-the-fact-that-there-is-no-share-mode.patch
+0029-HYP-none-Changes-to-enable-building-samba-on-SVA.patch
+0030-HYP-none-Fix-compile-failure-when-using-configure.de.patch
+0031-HYP-none-Changes-to-support-debug-build.patch
+0032-HYP-2861-Fix-smbd-core-dump-on-accessing-NULL-pointe.patch
+0033-HYP-none-Disable-mmap-by-default-in-tdbtool.patch
+0034-HYP-2824-Fix-smbtorture-persistent-tests.patch
+0035-HYP-1934-Getting-smbtorture-lease-tests-to-pass-agai.patch
+0036-HYP-2087-Pause-and-resume-support-for-durable_v2_ope.patch
