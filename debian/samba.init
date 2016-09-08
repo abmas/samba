@@ -15,8 +15,6 @@
 # the init scripts themselves check if they are needed or not
 case $1 in
 	start)
-		[ -f /var/svtfs/SambaInstall/fw.stop ] && /var/svtfs/SambaInstall/fw.stop &> /dev/null
-		echo "manual" > /etc/init/svt-firewall.override &> /dev/null
 		initctl start nmbd
 		initctl start smbd
 		initctl start winbind
@@ -30,8 +28,6 @@ case $1 in
 		killall -HUP smbd; initctl reload smbd
 		;;
 	restart|force-reload)
-		[ -f /var/svtfs/SambaInstall/fw.stop ] && /var/svtfs/SambaInstall/fw.stop &> /dev/null
-		echo "manual" > /etc/init/svt-firewall.override &> /dev/null
 		initctl "$1" nmbd
 		initctl "$1" smbd
 		initctl "$1" winbind
