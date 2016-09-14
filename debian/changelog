@@ -1,3 +1,13 @@
+samba (2:4.4.5+dfsg-2+svt2) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * Reapplying changes from debian/* after the 4.4.5 merge.
+  * All commited changes in HYP2019 branch - up until clustering support.
+  * HYP-1970 : remove manual overide of firewall
+  * Enable smb2 leases by default
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Wed, 14 Sep 2016 13:06:55 -0400
+
 samba (2:4.4.5+dfsg-2+svt1) trusty; urgency=medium
 
   [ Kevin Pease ]
