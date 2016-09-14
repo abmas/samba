@@ -1,0 +1,3299 @@
+From: Paul Cerqua <paul.cerqua@simplivity.com>
+Date: Fri, 19 Aug 2016 20:04:16 +0000
+Subject: HYP-1934: Clustering support for Samba on svtfs
+
+HYP-2087: Pause and resume support for durable_v2_open tests.
+---
+ docs-xml/smbdotconf/misc/svtfslockdir.xml   |  22 ++
+ docs-xml/smbdotconf/misc/svtfsstorageip.xml |  22 ++
+ lib/param/loadparm.c                        |  43 ++++
+ source3/lib/dbwrap/dbwrap_watch.c           |  57 ++++-
+ source3/lib/g_lock.c                        |  87 +++++--
+ source3/lib/gencache.c                      | 167 ++++++++-----
+ source3/lib/server_mutex.c                  |   2 +-
+ source3/lib/serverid.c                      |  64 ++++-
+ source3/lib/util_path.c                     |  12 +
+ source3/lib/util_path.h                     |   1 +
+ source3/locking/brlock.c                    | 140 ++++++-----
+ source3/locking/leases_db.c                 | 116 +++++----
+ source3/locking/share_mode_lock.c           | 134 +++++++----
+ source3/param/loadparm.c                    |  33 +++
+ source3/printing/printer_list.c             |  64 ++++-
+ source3/smbd/process.c                      |   5 +
+ source3/smbd/server.c                       |   8 +
+ source3/smbd/smb2_create.c                  |  21 +-
+ source3/smbd/smbXsrv_client.c               | 134 +++++++----
+ source3/smbd/smbXsrv_open.c                 | 166 +++++++++----
+ source3/smbd/smbXsrv_session.c              | 131 ++++++----
+ source3/smbd/smbXsrv_tcon.c                 | 117 ++++++---
+ source3/smbd/smbXsrv_version.c              | 358 +++++++++++++++-------------
+ source3/utils/status.c                      | 137 ++++++++---
+ source4/torture/smb2/durable_v2_open.c      |  59 ++---
+ 25 files changed, 1412 insertions(+), 688 deletions(-)
+ create mode 100644 docs-xml/smbdotconf/misc/svtfslockdir.xml
+ create mode 100644 docs-xml/smbdotconf/misc/svtfsstorageip.xml
+
+diff --git a/docs-xml/smbdotconf/misc/svtfslockdir.xml b/docs-xml/smbdotconf/misc/svtfslockdir.xml
+new file mode 100644
+index 0000000..cd320f0
+--- /dev/null
++++ b/docs-xml/smbdotconf/misc/svtfslockdir.xml
+@@ -0,0 +1,22 @@
++<samba:parameter name="svtfs lockdir"
++                 context="G"
++                 type="string"
++                 constant="1"
++		 handler="handle_svtfs_lockdir"
++                 xmlns:samba="http://www.samba.org/samba/DTD/samba-doc">
++<synonym>lock dir</synonym>
++<description>
++	<para>This option specifies the directory where lock 
++	files will be placed.  The lock files are used to implement the 
++	<smbconfoption name="max connections"/> option.
++	</para>
++
++	<para>
++		Note: This option can not be set inside registry
++		configurations.
++	</para>
++</description>
++
++<value type="default">/var/svtfs/samba</value>
++<value type="example">/var/run/samba/locks</value>
++</samba:parameter>
+diff --git a/docs-xml/smbdotconf/misc/svtfsstorageip.xml b/docs-xml/smbdotconf/misc/svtfsstorageip.xml
+new file mode 100644
+index 0000000..a96180d
+--- /dev/null
++++ b/docs-xml/smbdotconf/misc/svtfsstorageip.xml
+@@ -0,0 +1,22 @@
++<samba:parameter name="svtfs storageip"
++                 context="G"
++                 type="string"
++                 constant="1"
++		 handler="handle_svtfs_storageip"
++                 xmlns:samba="http://www.samba.org/samba/DTD/samba-doc">
++<synonym>lock dir</synonym>
++<description>
++	<para>This option specifies the directory where lock 
++	files will be placed.  The lock files are used to implement the 
++	<smbconfoption name="max connections"/> option.
++	</para>
++
++	<para>
++		Note: This option can not be set inside registry
++		configurations.
++	</para>
++</description>
++
++<value type="default">0.0.0.0</value>
++<value type="example">/var/run/samba/locks</value>
++</samba:parameter>
+diff --git a/lib/param/loadparm.c b/lib/param/loadparm.c
+index 4f1bd9c..3cb8ea0 100644
+--- a/lib/param/loadparm.c
++++ b/lib/param/loadparm.c
+@@ -78,6 +78,13 @@
+ 
+ #include "lib/param/param_global.h"
+ 
++static int lp_svtfs_index = 0; /* Ashok: remember to reset on smb.conf reload.*/
++
++#define MAX_SVTFS_LOCKDIR_PATHS 32
++char  * svtfs_storage_ip[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
++char  * svtfs_lockdir_path[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
++volatile int svtfs_lockdir_index = 0;
++
+ struct loadparm_service *lpcfg_default_service(struct loadparm_context *lp_ctx)
+ {
+ 	return lp_ctx->sDefault;
+@@ -1245,6 +1252,42 @@ bool handle_logfile(struct loadparm_context *lp_ctx, struct loadparm_service *se
+ 	return true;
+ }
+ 
++bool handle_svtfs_lockdir(struct loadparm_context *lp_ctx, struct loadparm_service *service,
++		    const char *pszParmValue, char **ptr)
++{
++	int index;
++	DEBUG(0,("handle_svtfs_lockdir: PJC: entering with input %s\n", pszParmValue));
++	for (index = 0; index <= lp_svtfs_index/2; index ++)
++	{
++		if (svtfs_lockdir_path[index] && 0 == strcmp(svtfs_lockdir_path[index],pszParmValue)) {
++			/*Nothing to do */
++			DEBUG(0,("handle_svtfs_lockdir: PJC: %s already has entry, noop\n",pszParmValue));
++			return true;
++		}
++	}
++	svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
++	lp_svtfs_index++;
++	return true;
++}
++
++bool handle_svtfs_storageip(struct loadparm_context *lp_ctx, struct loadparm_service *service,
++		    const char *pszParmValue, char **ptr)
++{
++	int index;
++	DEBUG(0,("handle_svtfs_storageip: PJC: entering with input %s\n", pszParmValue));
++	for (index = 0; index <= lp_svtfs_index/2; index ++)
++	{
++		if (svtfs_storage_ip[index] && 0 == strcmp(svtfs_storage_ip[index],pszParmValue)) {
++			/*Nothing to do */
++			DEBUG(0,("handle_svtfs_storage_ip: PJC: %s already has entry, noop\n",pszParmValue));
++			return true;
++		}
++	}
++	svtfs_storage_ip[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
++        lp_svtfs_index++;
++	return true;
++}
++
+ /*
+  * These special charset handling methods only run in the source3 code.
+  */
+diff --git a/source3/lib/dbwrap/dbwrap_watch.c b/source3/lib/dbwrap/dbwrap_watch.c
+index 09e67fb..e56a0b2 100644
+--- a/source3/lib/dbwrap/dbwrap_watch.c
++++ b/source3/lib/dbwrap/dbwrap_watch.c
+@@ -25,24 +25,57 @@
+ #include "lib/util/util_tdb.h"
+ #include "lib/util/tevent_ntstatus.h"
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ static struct db_context *dbwrap_record_watchers_db(void)
+ {
+-	static struct db_context *watchers_db;
++#define MAX_WATCHERS_DBS 32
++#define get_watchers_db() watchers_db[svtfs_get_lockdir_index()]
++#define set_watchers_db(value) watchers_db[svtfs_get_lockdir_index()] = value
+ 
+-	if (watchers_db == NULL) {
+-		char *db_path = lock_path("dbwrap_watchers.tdb");
+-		if (db_path == NULL) {
+-			return NULL;
++	static struct db_context *watchers_db[MAX_WATCHERS_DBS] = {NULL};
++
++	int index,saved_index;
++
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
++
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index of 0\n"));
++
++	while (1) {
++
++		if (get_watchers_db() == NULL) {
++			char *db_path = svtfs_lock_path("dbwrap_watchers.tdb");
++			if (db_path == NULL) {
++        			svtfs_set_lockdir_index(saved_index);
++				return NULL;
++			}
++
++			set_watchers_db(db_open(
++				NULL, db_path,	0,
++				TDB_CLEAR_IF_FIRST | TDB_INCOMPATIBLE_HASH,
++				O_RDWR|O_CREAT, 0600, DBWRAP_LOCK_ORDER_3,
++				DBWRAP_FLAG_NONE));
++			TALLOC_FREE(db_path);
++		}
++
++		index++;
++		if ( (svtfs_storage_ip[index] == NULL) || (index == MAX_WATCHERS_DBS) ) {
++			DEBUG(5, ("dbwrap_record_watchers_db: breaking with lockdir_index of %i\n", index));
++			break;
+ 		}
+ 
+-		watchers_db = db_open(
+-			NULL, db_path,	0,
+-			TDB_CLEAR_IF_FIRST | TDB_INCOMPATIBLE_HASH,
+-			O_RDWR|O_CREAT, 0600, DBWRAP_LOCK_ORDER_3,
+-			DBWRAP_FLAG_NONE);
+-		TALLOC_FREE(db_path);
++		DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
+ 	}
+-	return watchers_db;
++
++	DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	return get_watchers_db();
+ }
+ 
+ static size_t dbwrap_record_watchers_key(struct db_context *db,
+diff --git a/source3/lib/g_lock.c b/source3/lib/g_lock.c
+index 30c5f52..95a1c14 100644
+--- a/source3/lib/g_lock.c
++++ b/source3/lib/g_lock.c
+@@ -31,6 +31,10 @@
+ #include "messages.h"
+ #include "serverid.h"
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ struct g_lock_ctx {
+ 	struct db_context *db;
+ 	struct messaging_context *msg;
+@@ -50,34 +54,77 @@ struct g_lock_rec {
+ struct g_lock_ctx *g_lock_ctx_init(TALLOC_CTX *mem_ctx,
+ 				   struct messaging_context *msg)
+ {
+-	struct g_lock_ctx *result;
++#define MAX_G_LOCK_CONTEXTS 32
++#define get_result() result[svtfs_get_lockdir_index()]
++#define set_result(value) result[svtfs_get_lockdir_index()] = value
++
++	struct g_lock_ctx *result[MAX_G_LOCK_CONTEXTS] = {NULL};
++
+ 	char *db_path;
++	int index,saved_index;
++	bool return_null = false;
+ 
+-	result = talloc(mem_ctx, struct g_lock_ctx);
+-	if (result == NULL) {
+-		return NULL;
+-	}
+-	result->msg = msg;
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	db_path = lock_path("g_lock.tdb");
+-	if (db_path == NULL) {
+-		TALLOC_FREE(result);
++	set_result(talloc(mem_ctx, struct g_lock_ctx));
++	if (get_result() == NULL) {
+ 		return NULL;
+ 	}
++	get_result()->msg = msg;
++
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("g_lock_ctx_init: setting lockdir_index of 0\n"));
+ 
+-	result->db = db_open(result, db_path, 0,
+-			     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+-			     O_RDWR|O_CREAT, 0600,
+-			     DBWRAP_LOCK_ORDER_2,
+-			     DBWRAP_FLAG_NONE);
+-	TALLOC_FREE(db_path);
+-	if (result->db == NULL) {
+-		DEBUG(1, ("g_lock_init: Could not open g_lock.tdb\n"));
+-		TALLOC_FREE(result);
++	while (1) {
++
++		db_path = svtfs_lock_path("g_lock.tdb");
++		if (db_path == NULL) {
++			TALLOC_FREE(get_result());
++			return_null = true;
++			break;
++		}
++
++		if (get_result() == NULL) {
++			set_result(talloc(mem_ctx, struct g_lock_ctx));
++			if (get_result() == NULL) {
++				return_null = true;
++				break;
++			}
++		}
++			
++		get_result()->db = db_open(get_result(), db_path, 0,
++				     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
++				     O_RDWR|O_CREAT, 0600,
++				     DBWRAP_LOCK_ORDER_2,
++				     DBWRAP_FLAG_NONE);
++		TALLOC_FREE(db_path);
++		if (get_result()->db == NULL) {
++			DEBUG(1, ("g_lock_ctx_init: Could not open g_lock.tdb\n"));
++			TALLOC_FREE(get_result());
++			return_null = true;
++			break;
++		}
++		dbwrap_watch_db(get_result()->db, msg);
++
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_G_LOCK_CONTEXTS ) ) {
++                        DEBUG(5, ("g_lock_ctx_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("g_lock_ctx_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("g_lock_ctx_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	if ( return_null == true ) {
+ 		return NULL;
++	} else {
++		return get_result();
+ 	}
+-	dbwrap_watch_db(result->db, msg);
+-	return result;
+ }
+ 
+ static bool g_lock_conflicts(enum g_lock_type l1, enum g_lock_type l2)
+diff --git a/source3/lib/gencache.c b/source3/lib/gencache.c
+index ed16d79..3ebd066 100644
+--- a/source3/lib/gencache.c
++++ b/source3/lib/gencache.c
+@@ -37,9 +37,22 @@
+ #define BLOB_TYPE "DATA_BLOB"
+ #define BLOB_TYPE_LEN 9
+ 
+-static struct tdb_wrap *cache;
+-static struct tdb_wrap *cache_notrans;
+-static int cache_notrans_seqnum;
++#define MAX_CACHES 32
++#define get_cache() cache[svtfs_get_lockdir_index()]
++#define set_cache(value) cache[svtfs_get_lockdir_index()] = value
++#define get_cache_notrans() cache_notrans[svtfs_get_lockdir_index()]
++#define set_cache_notrans(value) cache_notrans[svtfs_get_lockdir_index()] = value
++#define get_cache_notrans_seqnum() cache_notrans_seqnum[svtfs_get_lockdir_index()]
++#define set_cache_notrans_seqnum(value) cache_notrans_seqnum[svtfs_get_lockdir_index()] = value
++
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
++static struct tdb_wrap *cache[MAX_CACHES] = {NULL};
++static struct tdb_wrap *cache_notrans[MAX_CACHES] = {NULL};
++static int cache_notrans_seqnum[MAX_CACHES] = {0};
++
+ 
+ /**
+  * @file gencache.c
+@@ -61,9 +74,10 @@ static bool gencache_init(void)
+ {
+ 	char* cache_fname = NULL;
+ 	int open_flags = O_RDWR|O_CREAT;
++	int index,saved_index;
+ 
+ 	/* skip file open if it's already opened */
+-	if (cache) {
++	if (get_cache()) {
+ 		return true;
+ 	}
+ 
+@@ -74,14 +88,14 @@ static bool gencache_init(void)
+ 
+ 	DEBUG(5, ("Opening cache file at %s\n", cache_fname));
+ 
+-	cache = tdb_wrap_open(NULL, cache_fname, 0,
++	set_cache(tdb_wrap_open(NULL, cache_fname, 0,
+ 			      TDB_DEFAULT|TDB_INCOMPATIBLE_HASH,
+-			      open_flags, 0644);
+-	if (cache) {
++			      open_flags, 0644));
++	if (get_cache()) {
+ 		int ret;
+-		ret = tdb_check(cache->tdb, NULL, NULL);
++		ret = tdb_check(get_cache()->tdb, NULL, NULL);
+ 		if (ret != 0) {
+-			TALLOC_FREE(cache);
++			TALLOC_FREE(get_cache());
+ 
+ 			/*
+ 			 * Retry with CLEAR_IF_FIRST.
+@@ -93,53 +107,76 @@ static bool gencache_init(void)
+ 			 * CLEAR_IF_FIRST databases, so lets use it here to
+ 			 * clean up a broken database.
+ 			 */
+-			cache = tdb_wrap_open(NULL, cache_fname, 0,
++			set_cache(tdb_wrap_open(NULL, cache_fname, 0,
+ 					      TDB_DEFAULT|
+ 					      TDB_INCOMPATIBLE_HASH|
+ 					      TDB_CLEAR_IF_FIRST,
+-					      open_flags, 0644);
++					      open_flags, 0644));
+ 		}
+ 	}
+ 
+-	if (!cache && (errno == EACCES)) {
++	if (!get_cache() && (errno == EACCES)) {
+ 		open_flags = O_RDONLY;
+-		cache = tdb_wrap_open(NULL, cache_fname, 0,
++		set_cache(tdb_wrap_open(NULL, cache_fname, 0,
+ 				      TDB_DEFAULT|TDB_INCOMPATIBLE_HASH,
+-				      open_flags, 0644);
+-		if (cache) {
++				      open_flags, 0644));
++		if (get_cache()) {
+ 			DEBUG(5, ("gencache_init: Opening cache file %s read-only.\n", cache_fname));
+ 		}
+ 	}
+ 	TALLOC_FREE(cache_fname);
+ 
+-	if (!cache) {
++	if (!get_cache()) {
+ 		DEBUG(5, ("Attempt to open gencache.tdb has failed.\n"));
+ 		return false;
+ 	}
+ 
+-	cache_fname = lock_path("gencache_notrans.tdb");
+-	if (cache_fname == NULL) {
+-		TALLOC_FREE(cache);
+-		return false;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	DEBUG(5, ("Opening cache file at %s\n", cache_fname));
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("gencache_init: setting lockdir_index of 0\n"));
++
++	while (1) {
++
++		cache_fname = svtfs_lock_path("gencache_notrans.tdb");
++		if (cache_fname == NULL) {
++			TALLOC_FREE(get_cache());
++        		svtfs_set_lockdir_index(saved_index);
++			return false;
++		}
++
++		DEBUG(5, ("Opening cache file at %s\n", cache_fname));
+ 
+-	cache_notrans = tdb_wrap_open(NULL, cache_fname, 0,
++		set_cache_notrans(tdb_wrap_open(NULL, cache_fname, 0,
+ 				      TDB_CLEAR_IF_FIRST|
+ 				      TDB_INCOMPATIBLE_HASH|
+ 				      TDB_SEQNUM|
+ 				      TDB_NOSYNC|
+ 				      TDB_MUTEX_LOCKING,
+-				      open_flags, 0644);
+-	if (cache_notrans == NULL) {
+-		DEBUG(5, ("Opening %s failed: %s\n", cache_fname,
+-			  strerror(errno)));
++				      open_flags, 0644));
++		if (get_cache_notrans() == NULL) {
++			DEBUG(5, ("Opening %s failed: %s\n", cache_fname,
++				  strerror(errno)));
++        		svtfs_set_lockdir_index(saved_index);
++			TALLOC_FREE(cache_fname);
++			TALLOC_FREE(get_cache());
++			return false;
++		}
+ 		TALLOC_FREE(cache_fname);
+-		TALLOC_FREE(cache);
+-		return false;
++
++		index++;
++		if ( (svtfs_storage_ip[index] == NULL) || (index == MAX_CACHES) ) {
++			DEBUG(5, ("gencache_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("gencache_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
+ 	}
+-	TALLOC_FREE(cache_fname);
++
++	DEBUG(5, ("gencache_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
+ 
+ 	return true;
+ }
+@@ -333,7 +370,7 @@ bool gencache_set_data_blob(const char *keystr, const DATA_BLOB *blob,
+ 		   timeout > time(NULL) ? "ahead" : "in the past"));
+ 
+ 	ret = tdb_store_bystring(
+-		cache_notrans->tdb, keystr,
++		get_cache_notrans()->tdb, keystr,
+ 		make_tdb_data((uint8_t *)val, talloc_array_length(val)),
+ 		0);
+ 	TALLOC_FREE(val);
+@@ -361,7 +398,7 @@ bool gencache_set_data_blob(const char *keystr, const DATA_BLOB *blob,
+ 
+ 	last_stabilize = 0;
+ 
+-	tdb_parse_record(cache_notrans->tdb, last_stabilize_key(),
++	tdb_parse_record(get_cache_notrans()->tdb, last_stabilize_key(),
+ 			 last_stabilize_parser, &last_stabilize);
+ 
+ 	if ((last_stabilize
+@@ -512,8 +549,8 @@ bool gencache_parse(const char *keystr,
+ 		 * Make sure that nobody has changed the gencache behind our
+ 		 * back.
+ 		 */
+-		int current_seqnum = tdb_get_seqnum(cache_notrans->tdb);
+-		if (current_seqnum == cache_notrans_seqnum) {
++		int current_seqnum = tdb_get_seqnum(get_cache_notrans()->tdb);
++		if (current_seqnum == get_cache_notrans_seqnum()) {
+ 			/*
+ 			 * Ok, our memcache is still current, use it without
+ 			 * going to the tdb files.
+@@ -525,17 +562,17 @@ bool gencache_parse(const char *keystr,
+ 			return true;
+ 		}
+ 		memcache_flush(NULL, GENCACHE_RAM);
+-		cache_notrans_seqnum = current_seqnum;
++		set_cache_notrans_seqnum(current_seqnum);
+ 	}
+ 
+ 	state.is_memcache = false;
+ 
+-	ret = tdb_parse_record(cache_notrans->tdb, key,
++	ret = tdb_parse_record(get_cache_notrans()->tdb, key,
+ 			       gencache_parse_fn, &state);
+ 	if (ret == 0) {
+ 		return true;
+ 	}
+-	ret = tdb_parse_record(cache->tdb, key, gencache_parse_fn, &state);
++	ret = tdb_parse_record(get_cache()->tdb, key, gencache_parse_fn, &state);
+ 	return (ret == 0);
+ }
+ 
+@@ -654,9 +691,9 @@ bool gencache_stabilize(void)
+ 		return false;
+ 	}
+ 
+-	res = tdb_transaction_start_nonblock(cache->tdb);
++	res = tdb_transaction_start_nonblock(get_cache()->tdb);
+ 	if (res != 0) {
+-		if (tdb_error(cache->tdb) == TDB_ERR_NOLOCK)
++		if (tdb_error(get_cache()->tdb) == TDB_ERR_NOLOCK)
+ 		{
+ 			/*
+ 			 * Someone else already does the stabilize,
+@@ -666,61 +703,61 @@ bool gencache_stabilize(void)
+ 		}
+ 
+ 		DEBUG(10, ("Could not start transaction on gencache.tdb: "
+-			   "%s\n", tdb_errorstr(cache->tdb)));
++			   "%s\n", tdb_errorstr(get_cache()->tdb)));
+ 		return false;
+ 	}
+ 
+-	res = tdb_lockall(cache_notrans->tdb);
++	res = tdb_lockall(get_cache_notrans()->tdb);
+ 	if (res != 0) {
+-		tdb_transaction_cancel(cache->tdb);
++		tdb_transaction_cancel(get_cache()->tdb);
+ 		DEBUG(10, ("Could not get allrecord lock on "
+ 			   "gencache_notrans.tdb: %s\n",
+-			   tdb_errorstr(cache_notrans->tdb)));
++			   tdb_errorstr(get_cache_notrans()->tdb)));
+ 		return false;
+ 	}
+ 
+ 	state.written = false;
+ 
+-	res = tdb_traverse(cache_notrans->tdb, stabilize_fn, &state);
++	res = tdb_traverse(get_cache_notrans()->tdb, stabilize_fn, &state);
+ 	if (res < 0) {
+-		tdb_unlockall(cache_notrans->tdb);
+-		tdb_transaction_cancel(cache->tdb);
++		tdb_unlockall(get_cache_notrans()->tdb);
++		tdb_transaction_cancel(get_cache()->tdb);
+ 		return false;
+ 	}
+ 
+ 	if (!state.written) {
+-		tdb_unlockall(cache_notrans->tdb);
+-		tdb_transaction_cancel(cache->tdb);
++		tdb_unlockall(get_cache_notrans()->tdb);
++		tdb_transaction_cancel(get_cache()->tdb);
+ 		return true;
+ 	}
+ 
+-	res = tdb_transaction_commit(cache->tdb);
++	res = tdb_transaction_commit(get_cache()->tdb);
+ 	if (res != 0) {
+ 		DEBUG(10, ("tdb_transaction_commit on gencache.tdb failed: "
+-			   "%s\n", tdb_errorstr(cache->tdb)));
+-		tdb_unlockall(cache_notrans->tdb);
++			   "%s\n", tdb_errorstr(get_cache()->tdb)));
++		tdb_unlockall(get_cache_notrans()->tdb);
+ 		return false;
+ 	}
+ 
+-	res = tdb_traverse(cache_notrans->tdb, wipe_fn, NULL);
++	res = tdb_traverse(get_cache_notrans()->tdb, wipe_fn, NULL);
+ 	if (res < 0) {
+ 		DEBUG(10, ("tdb_traverse with wipe_fn on gencache_notrans.tdb "
+ 			  "failed: %s\n",
+-			   tdb_errorstr(cache_notrans->tdb)));
+-		tdb_unlockall(cache_notrans->tdb);
++			   tdb_errorstr(get_cache_notrans()->tdb)));
++		tdb_unlockall(get_cache_notrans()->tdb);
+ 		return false;
+ 	}
+ 
+-	res = tdb_unlockall(cache_notrans->tdb);
++	res = tdb_unlockall(get_cache_notrans()->tdb);
+ 	if (res != 0) {
+ 		DEBUG(10, ("tdb_unlockall on gencache.tdb failed: "
+-			   "%s\n", tdb_errorstr(cache->tdb)));
++			   "%s\n", tdb_errorstr(get_cache()->tdb)));
+ 		return false;
+ 	}
+ 
+ 	now = talloc_asprintf(talloc_tos(), "%d", (int)time(NULL));
+ 	if (now != NULL) {
+-		tdb_store(cache_notrans->tdb, last_stabilize_key(),
++		tdb_store(get_cache_notrans()->tdb, last_stabilize_key(),
+ 			  string_term_tdb_data(now), 0);
+ 		TALLOC_FREE(now);
+ 	}
+@@ -744,14 +781,14 @@ static int stabilize_fn(struct tdb_context *tdb, TDB_DATA key, TDB_DATA val,
+ 		return 0;
+ 	}
+ 	if ((timeout < time(NULL)) || (val.dsize == 0)) {
+-		res = tdb_delete(cache->tdb, key);
++		res = tdb_delete(get_cache()->tdb, key);
+ 		if (res == 0) {
+ 			state->written = true;
+-		} else if (tdb_error(cache->tdb) == TDB_ERR_NOEXIST) {
++		} else if (tdb_error(get_cache()->tdb) == TDB_ERR_NOEXIST) {
+ 			res = 0;
+ 		}
+ 	} else {
+-		res = tdb_store(cache->tdb, key, val, 0);
++		res = tdb_store(get_cache()->tdb, key, val, 0);
+ 		if (res == 0) {
+ 			state->written = true;
+ 		}
+@@ -759,7 +796,7 @@ static int stabilize_fn(struct tdb_context *tdb, TDB_DATA key, TDB_DATA val,
+ 
+ 	if (res != 0) {
+ 		DEBUG(10, ("Transfer to gencache.tdb failed: %s\n",
+-			   tdb_errorstr(cache->tdb)));
++			   tdb_errorstr(get_cache()->tdb)));
+ 		return -1;
+ 	}
+ 
+@@ -787,7 +824,7 @@ static int wipe_fn(struct tdb_context *tdb, TDB_DATA key, TDB_DATA val,
+ 	res = tdb_delete(tdb, key);
+ 	if (res != 0) {
+ 		DEBUG(10, ("tdb_delete from gencache_notrans.tdb failed: "
+-			   "%s\n", tdb_errorstr(cache_notrans->tdb)));
++			   "%s\n", tdb_errorstr(get_cache_notrans()->tdb)));
+ 		return -1;
+ 	}
+ 
+@@ -878,7 +915,7 @@ static int gencache_iterate_blobs_fn(struct tdb_context *tdb, TDB_DATA key,
+ 	if (tdb_data_cmp(key, last_stabilize_key()) == 0) {
+ 		return 0;
+ 	}
+-	if (state->in_persistent && tdb_exists(cache_notrans->tdb, key)) {
++	if (state->in_persistent && tdb_exists(get_cache_notrans()->tdb, key)) {
+ 		return 0;
+ 	}
+ 
+@@ -933,10 +970,10 @@ void gencache_iterate_blobs(void (*fn)(const char *key, DATA_BLOB value,
+ 	state.private_data = private_data;
+ 
+ 	state.in_persistent = false;
+-	tdb_traverse(cache_notrans->tdb, gencache_iterate_blobs_fn, &state);
++	tdb_traverse(get_cache_notrans()->tdb, gencache_iterate_blobs_fn, &state);
+ 
+ 	state.in_persistent = true;
+-	tdb_traverse(cache->tdb, gencache_iterate_blobs_fn, &state);
++	tdb_traverse(get_cache()->tdb, gencache_iterate_blobs_fn, &state);
+ }
+ 
+ /**
+diff --git a/source3/lib/server_mutex.c b/source3/lib/server_mutex.c
+index 56673f6..0891e47 100644
+--- a/source3/lib/server_mutex.c
++++ b/source3/lib/server_mutex.c
+@@ -70,7 +70,7 @@ struct named_mutex *grab_named_mutex(TALLOC_CTX *mem_ctx, const char *name,
+ 		return NULL;
+ 	}
+ 
+-	fname = lock_path("mutex.tdb");
++	fname = svtfs_lock_path("mutex.tdb");
+ 	if (fname == NULL) {
+ 		TALLOC_FREE(result);
+ 		return NULL;
+diff --git a/source3/lib/serverid.c b/source3/lib/serverid.c
+index 5c2fa65..5c554af 100644
+--- a/source3/lib/serverid.c
++++ b/source3/lib/serverid.c
+@@ -40,26 +40,64 @@ struct serverid_data {
+ 	uint32_t msg_flags;
+ };
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ static struct db_context *serverid_db(void)
+ {
+-	static struct db_context *db;
++#define MAX_DBS 32
++#define get_db() db[svtfs_get_lockdir_index()]
++#define set_db(value) db[svtfs_get_lockdir_index()] = value
++
++	static struct db_context *db[MAX_DBS] = {NULL};
++
+ 	char *db_path;
++	int index,saved_index;
++	bool return_null = false;
+ 
+-	if (db != NULL) {
+-		return db;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
++
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("serverid_db: setting lockdir_index of 0\n"));
++
++	while (1) {
++
++		if (get_db() != NULL) {
++			break;
++		}
+ 
+-	db_path = lock_path("serverid.tdb");
+-	if (db_path == NULL) {
++		db_path = svtfs_lock_path("serverid.tdb");
++		if (db_path == NULL) {
++			return_null = true;
++			break;
++		}
++
++		set_db(db_open(NULL, db_path, 0,
++			     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
++			     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_2,
++			     DBWRAP_FLAG_NONE));
++		TALLOC_FREE(db_path);
++
++		index++;
++		if  ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_DBS ) ) {
++			DEBUG(5, ("serverid_db: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("serverid_db: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("serverid_db: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	if (return_null) {
+ 		return NULL;
++	} else {
++		return get_db();
+ 	}
+-
+-	db = db_open(NULL, db_path, 0,
+-		     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+-		     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_2,
+-		     DBWRAP_FLAG_NONE);
+-	TALLOC_FREE(db_path);
+-	return db;
+ }
+ 
+ bool serverid_parent_init(TALLOC_CTX *mem_ctx)
+diff --git a/source3/lib/util_path.c b/source3/lib/util_path.c
+index 509ba5f..20d7c75 100644
+--- a/source3/lib/util_path.c
++++ b/source3/lib/util_path.c
+@@ -29,6 +29,8 @@
+ struct share_params;
+ #include "source3/param/param_proto.h"
+ 
++extern char * svtfs_lockdir_path[];
++
+ /**
+  * @brief Returns an absolute path to a file concatenating the provided
+  * @a rootpath and @a basename
+@@ -68,6 +70,16 @@ char *lock_path(const char *name)
+ 	return xx_path(name, lp_lock_directory());
+ }
+ 
++extern int svtfs_get_lockdir_index(void);
++
++char *svtfs_lock_path(const char *name)
++{
++	if ( svtfs_lockdir_path[svtfs_get_lockdir_index()] == NULL )
++		return xx_path(name, lp_lock_directory());
++        else
++		return xx_path(name, svtfs_lockdir_path[svtfs_get_lockdir_index()]);
++}
++
+ /**
+  * @brief Returns an absolute path to a file in the Samba state directory.
+  *
+diff --git a/source3/lib/util_path.h b/source3/lib/util_path.h
+index 118a4be..f1b4aa5 100644
+--- a/source3/lib/util_path.h
++++ b/source3/lib/util_path.h
+@@ -25,6 +25,7 @@
+ #define __LIB_UTIL_PATH_H__
+ 
+ char *lock_path(const char *name);
++char *svtfs_lock_path(const char *name);
+ char *state_path(const char *name);
+ char *cache_path(const char *name);
+ 
+diff --git a/source3/locking/brlock.c b/source3/locking/brlock.c
+index f051cfd..1329720 100644
+--- a/source3/locking/brlock.c
++++ b/source3/locking/brlock.c
+@@ -39,9 +39,16 @@
+ 
+ #define ZERO_ZERO 0
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ /* The open brlock.tdb database. */
++#define MAX_BRLOCK_DBS 32
++#define get_brlock_db() brlock_db[svtfs_get_lockdir_index()]
++#define set_brlock_db(value) brlock_db[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *brlock_db;
++static struct db_context *brlock_db[MAX_BRLOCK_DBS] = {NULL};
+ 
+ struct byte_range_lock {
+ 	struct files_struct *fsp;
+@@ -349,57 +356,80 @@ void brl_init(bool read_only)
+ 	int tdb_flags;
+ 	char *db_path;
+ 	NTSTATUS status;
++	int index,saved_index;
+ 
+-	if (brlock_db) {
+-		return;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	tdb_flags = TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH;
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("brl_init: setting lockdir_index of 0\n"));
+ 
+-	if (!lp_clustering()) {
+-		/*
+-		 * We can't use the SEQNUM trick to cache brlock
+-		 * entries in the clustering case because ctdb seqnum
+-		 * propagation has a delay.
+-		 */
+-		tdb_flags |= TDB_SEQNUM;
+-	}
++	while (1) {
+ 
+-	db_path = lock_path("brlock.tdb");
+-	if (db_path == NULL) {
+-		DEBUG(0, ("out of memory!\n"));
+-		return;
+-	}
++		if (get_brlock_db()) {
++			break;
++		}
+ 
+-	brlock_db = db_open(NULL, db_path,
+-			    SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
+-			    read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
+-			    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
+-	if (!brlock_db) {
+-		DEBUG(0,("Failed to open byte range locking database %s\n",
+-			 db_path));
+-		TALLOC_FREE(db_path);
+-		return;
+-	}
++		tdb_flags = TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH;
++
++		if (!lp_clustering()) {
++			/*
++			 * We can't use the SEQNUM trick to cache brlock
++			 * entries in the clustering case because ctdb seqnum
++			 * propagation has a delay.
++			 */
++			tdb_flags |= TDB_SEQNUM;
++		}
++
++		db_path = svtfs_lock_path("brlock.tdb");
++		if (db_path == NULL) {
++			DEBUG(0, ("out of memory!\n"));
++			break;
++		}
+ 
+-	if ( read_only == false ) {
+-		status = dbwrap_traverse(brlock_db, brl_traverse_persist_fn, NULL, NULL);
+-		if ( ! NT_STATUS_IS_OK(status) ) {
+-			TALLOC_FREE(brlock_db);
+-			DEBUG(0,("brl_init: ERROR: Failed to recover persistent handle related brlock entries. Cleanup and proceed.\n"));
+-			tdb_flags |= TDB_CLEAR_IF_FIRST;
+-			brlock_db = db_open(NULL, db_path,
+-                            		SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
+-                            		read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
+-                            		DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
+-			if (!brlock_db) {
+-				DEBUG(0,("brl_init: Failed to open byte range locking database %s\n", db_path));
+-				TALLOC_FREE(db_path);
+-				return;
++		set_brlock_db(db_open(NULL, db_path,
++				    SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
++				    read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
++				    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
++		if (!get_brlock_db()) {
++			DEBUG(0,("Failed to open byte range locking database %s\n",
++				 db_path));
++			TALLOC_FREE(db_path);
++			break;
++		}
++
++		if ( read_only == false ) {
++			status = dbwrap_traverse(get_brlock_db(), brl_traverse_persist_fn, NULL, NULL);
++			if ( ! NT_STATUS_IS_OK(status) ) {
++				TALLOC_FREE(get_brlock_db());
++				DEBUG(0,("brl_init: ERROR: Failed to recover persistent handle related brlock entries. Cleanup and proceed.\n"));
++				tdb_flags |= TDB_CLEAR_IF_FIRST;
++				set_brlock_db(db_open(NULL, db_path,
++						SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
++						read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
++						DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
++				if (!get_brlock_db()) {
++					DEBUG(0,("brl_init: Failed to open byte range locking database %s\n", db_path));
++					TALLOC_FREE(db_path);
++					break;
++				}
+ 			}
+ 		}
+-	}
+-	TALLOC_FREE(db_path);
++		TALLOC_FREE(db_path);
++
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_BRLOCK_DBS ) ) {
++			DEBUG(5, ("brl_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("brl_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("brl_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
+ }
+ 
+ /****************************************************************************
+@@ -408,7 +438,7 @@ void brl_init(bool read_only)
+ 
+ void brl_shutdown(void)
+ {
+-	TALLOC_FREE(brlock_db);
++	TALLOC_FREE(get_brlock_db());
+ }
+ 
+ #if ZERO_ZERO
+@@ -1914,12 +1944,12 @@ int brl_forall(void (*fn)(struct file_id id, struct server_id pid,
+ 	NTSTATUS status;
+ 	int count = 0;
+ 
+-	if (!brlock_db) {
++	if (!get_brlock_db()) {
+ 		return 0;
+ 	}
+ 	cb.fn = fn;
+ 	cb.private_data = private_data;
+-	status = dbwrap_traverse(brlock_db, brl_traverse_fn, &cb, &count);
++	status = dbwrap_traverse(get_brlock_db(), brl_traverse_fn, &cb, &count);
+ 
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		return -1;
+@@ -1991,7 +2021,7 @@ static void byte_range_lock_flush(struct byte_range_lock *br_lck)
+ 		}
+ 	}
+ 
+-	DEBUG(10, ("seqnum=%d\n", dbwrap_get_seqnum(brlock_db)));
++	DEBUG(10, ("seqnum=%d\n", dbwrap_get_seqnum(get_brlock_db())));
+ 
+  done:
+ 	br_lck->modified = false;
+@@ -2051,7 +2081,7 @@ struct byte_range_lock *brl_get_locks(TALLOC_CTX *mem_ctx, files_struct *fsp)
+ 	key.dptr = (uint8_t *)&fsp->file_id;
+ 	key.dsize = sizeof(struct file_id);
+ 
+-	br_lck->record = dbwrap_fetch_locked(brlock_db, br_lck, key);
++	br_lck->record = dbwrap_fetch_locked(get_brlock_db(), br_lck, key);
+ 
+ 	if (br_lck->record == NULL) {
+ 		DEBUG(3, ("Could not lock byte range lock entry\n"));
+@@ -2115,10 +2145,10 @@ struct byte_range_lock *brl_get_locks_readonly(files_struct *fsp)
+ 	NTSTATUS status;
+ 
+ 	DEBUG(10, ("seqnum=%d, fsp->brlock_seqnum=%d\n",
+-		   dbwrap_get_seqnum(brlock_db), fsp->brlock_seqnum));
++		   dbwrap_get_seqnum(get_brlock_db()), fsp->brlock_seqnum));
+ 
+ 	if ((fsp->brlock_rec != NULL)
+-	    && (dbwrap_get_seqnum(brlock_db) == fsp->brlock_seqnum)) {
++	    && (dbwrap_get_seqnum(get_brlock_db()) == fsp->brlock_seqnum)) {
+ 		/*
+ 		 * We have cached the brlock_rec and the database did not
+ 		 * change.
+@@ -2134,7 +2164,7 @@ struct byte_range_lock *brl_get_locks_readonly(files_struct *fsp)
+ 	state.br_lock = &br_lock;
+ 
+ 	status = dbwrap_parse_record(
+-		brlock_db,
++		get_brlock_db(),
+ 		make_tdb_data((uint8_t *)&fsp->file_id,
+ 			      sizeof(fsp->file_id)),
+ 		brl_get_locks_readonly_parser, &state);
+@@ -2179,7 +2209,7 @@ struct byte_range_lock *brl_get_locks_readonly(files_struct *fsp)
+ 		 */
+ 		TALLOC_FREE(fsp->brlock_rec);
+ 		fsp->brlock_rec = br_lock;
+-		fsp->brlock_seqnum = dbwrap_get_seqnum(brlock_db);
++		fsp->brlock_seqnum = dbwrap_get_seqnum(get_brlock_db());
+ 	}
+ 
+ 	return br_lock;
+@@ -2296,7 +2326,7 @@ bool brl_cleanup_disconnected(struct file_id fid, uint64_t open_persistent_id)
+ 
+ 	key = make_tdb_data((void*)&fid, sizeof(fid));
+ 
+-	rec = dbwrap_fetch_locked(brlock_db, frame, key);
++	rec = dbwrap_fetch_locked(get_brlock_db(), frame, key);
+ 	if (rec == NULL) {
+ 		DEBUG(5, ("brl_cleanup_disconnected: failed to fetch record "
+ 			  "for file %s\n", file_id_string(frame, &fid)));
+@@ -2344,7 +2374,7 @@ bool brl_cleanup_disconnected(struct file_id fid, uint64_t open_persistent_id)
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		DEBUG(5, ("brl_cleanup_disconnected: failed to delete record "
+ 			  "for file %s from %s, open %llu: %s\n",
+-			  file_id_string(frame, &fid), dbwrap_name(brlock_db),
++			  file_id_string(frame, &fid), dbwrap_name(get_brlock_db()),
+ 			  (unsigned long long)open_persistent_id,
+ 			  nt_errstr(status)));
+ 		goto done;
+diff --git a/source3/locking/leases_db.c b/source3/locking/leases_db.c
+index 6d40874..539abda 100644
+--- a/source3/locking/leases_db.c
++++ b/source3/locking/leases_db.c
+@@ -30,8 +30,17 @@
+ #undef DBGC_CLASS
+ #define DBGC_CLASS DBGC_LOCKING
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ /* the leases database handle */
+-static struct db_context *leases_db;
++#define MAX_LEASES_DBS 32
++#define get_leases_db() leases_db[svtfs_get_lockdir_index()]
++#define set_leases_db(value) leases_db[svtfs_get_lockdir_index()] = value
++
++static struct db_context *leases_db[MAX_LEASES_DBS] = {NULL};
++
+ extern bool smbXsrv_lookup_persistent_id(uint64_t);
+ 
+ void remove_stale_lease_entries(struct leases_db_value *d)
+@@ -142,50 +151,77 @@ bool leases_db_init(bool read_only)
+ {
+ 	char *db_path;
+ 	NTSTATUS status;
++	int index,saved_index;
++	bool return_bool = true;
+ 
+-	if (leases_db) {
+-		return true;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	db_path = lock_path("leases.tdb");
+-	if (db_path == NULL) {
+-		return false;
+-	}
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("leases_db_init: setting lockdir_index of 0\n"));
+ 
+-	leases_db = db_open(NULL, db_path, 0,
+-			    TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/
+-			    TDB_INCOMPATIBLE_HASH,
+-			    read_only ? O_RDONLY : O_RDWR|O_CREAT, 0644,
+-			    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
+-	TALLOC_FREE(db_path);
+-	if (leases_db == NULL) {
+-		DEBUG(1, ("ERROR: Failed to initialise leases database\n"));
+-		return false;
+-	}
++	while (1) {
++
++		if (get_leases_db()) {
++			return_bool = true;
++			break;
++		}
+ 
+-	if ( read_only == false ) {
+-		/* traverse the db and only get rid of entries not belonging to a persistent open */
+-		status = dbwrap_traverse(leases_db, leases_db_traverse_persist_fn, NULL, NULL);
+-
+-		if ( ! NT_STATUS_IS_OK(status) ) {
+-			TALLOC_FREE(leases_db);
+-			/* Cleanup and move on */
+-			DEBUG(0,("ERROR: Failed to recover persistent handle related lease entries. Cleanup and proceed.\n"));
+-			leases_db = db_open(NULL, db_path, 0,
+-				TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+-				read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+-				DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE);
+-			if (!leases_db) {
+-				DEBUG(0,("ERROR: Failed to initialise lease database\n"));
++		db_path = svtfs_lock_path("leases.tdb");
++		if (db_path == NULL) {
++			return_bool = false;
++			break;
++		}
++
++		set_leases_db(db_open(NULL, db_path, 0,
++				    TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/
++				    TDB_INCOMPATIBLE_HASH,
++				    read_only ? O_RDONLY : O_RDWR|O_CREAT, 0644,
++				    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
++		TALLOC_FREE(db_path);
++		if (get_leases_db() == NULL) {
++			DEBUG(1, ("ERROR: Failed to initialise leases database\n"));
++			return_bool = false;
++			break;
++		}
++
++		if ( read_only == false ) {
++			/* traverse the db and only get rid of entries not belonging to a persistent open */
++			status = dbwrap_traverse(get_leases_db(), leases_db_traverse_persist_fn, NULL, NULL);
++
++			if ( ! NT_STATUS_IS_OK(status) ) {
++				TALLOC_FREE(get_leases_db());
++				/* Cleanup and move on */
++				DEBUG(0,("ERROR: Failed to recover persistent handle related lease entries. Cleanup and proceed.\n"));
++				set_leases_db(db_open(NULL, db_path, 0,
++					TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
++					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
++					DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
++				if (!get_leases_db()) {
++					DEBUG(0,("ERROR: Failed to initialise lease database\n"));
++					TALLOC_FREE(db_path);
++					return_bool = False;
++					break;
++				}
++			} else {
+ 				TALLOC_FREE(db_path);
+-				return False;
+ 			}
+-		} else {
+-			TALLOC_FREE(db_path);
+ 		}
+-	}
+ 
+-	return true;
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LEASES_DBS ) ) {
++			DEBUG(5, ("leases_db_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("leases_db_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("leases_db_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	return return_bool;
+ }
+ 
+ static bool leases_db_key(TALLOC_CTX *mem_ctx,
+@@ -245,7 +281,7 @@ NTSTATUS leases_db_add(const struct GUID *client_guid,
+ 		return NT_STATUS_NO_MEMORY;
+ 	}
+ 
+-	rec = dbwrap_fetch_locked(leases_db, talloc_tos(), db_key);
++	rec = dbwrap_fetch_locked(get_leases_db(), talloc_tos(), db_key);
+ 	TALLOC_FREE(db_key.dptr);
+ 	if (rec == NULL) {
+ 		return NT_STATUS_INTERNAL_ERROR;
+@@ -370,7 +406,7 @@ NTSTATUS leases_db_del(const struct GUID *client_guid,
+ 		return NT_STATUS_NO_MEMORY;
+ 	}
+ 
+-	rec = dbwrap_fetch_locked(leases_db, talloc_tos(), db_key);
++	rec = dbwrap_fetch_locked(get_leases_db(), talloc_tos(), db_key);
+ 	TALLOC_FREE(db_key.dptr);
+ 	if (rec == NULL) {
+ 		return NT_STATUS_NOT_FOUND;
+@@ -523,7 +559,7 @@ NTSTATUS leases_db_parse(const struct GUID *client_guid,
+ 		.status = NT_STATUS_OK
+ 	};
+ 
+-	status = dbwrap_parse_record(leases_db, db_key, leases_db_parser,
++	status = dbwrap_parse_record(get_leases_db(), db_key, leases_db_parser,
+ 				     &state);
+ 	TALLOC_FREE(db_key.dptr);
+ 	if (!NT_STATUS_IS_OK(status)) {
+diff --git a/source3/locking/share_mode_lock.c b/source3/locking/share_mode_lock.c
+index 3c4357a..f6c0d4b 100644
+--- a/source3/locking/share_mode_lock.c
++++ b/source3/locking/share_mode_lock.c
+@@ -55,8 +55,16 @@
+ 
+ #define NO_LOCKING_COUNT (-1)
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ /* the locking database handle */
+-static struct db_context *lock_db;
++#define MAX_LOCK_DBS 32
++#define get_lock_db() lock_db[svtfs_get_lockdir_index()]
++#define set_lock_db(value) lock_db[svtfs_get_lockdir_index()] = value
++
++static struct db_context *lock_db[MAX_LOCK_DBS] = {NULL};
+ 
+ /* forward decl */
+ static TDB_DATA unparse_share_modes(struct share_mode_data *d);
+@@ -146,60 +154,88 @@ static int sml_traverse_persist_fn(struct db_record *rec, void *_state)
+ static bool locking_init_internal(bool read_only)
+ {
+ 	char *db_path;
+-	NTSTATUS status;
++        NTSTATUS status;
++	bool return_bool = true;
++	int index,saved_index;
+ 
+-	brl_init(read_only);
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	if (lock_db)
+-		return True;
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("locking_init_internal: setting lockdir_index of 0\n"));
+ 
+-	db_path = lock_path("locking.tdb");
+-	if (db_path == NULL) {
+-		return false;
+-	}
++	while (1) {
+ 
+-	/* open the lock db without clearing existing entries, first. Let's try to keep the persistent */
+-	/* handle related entries. If something fails in the middle, we will get rid of the db and move on*/
+-	lock_db = db_open(NULL, db_path,
+-			  SMB_OPEN_DATABASE_TDB_HASH_SIZE,
+-			  TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH,
+-			  read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+-			  DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
+-	if (!lock_db) {
+-		DEBUG(0,("ERROR: Failed to initialise locking database\n"));
+-		TALLOC_FREE(db_path);
+-		return False;
+-	}
++		brl_init(read_only);
++
++		if (get_lock_db())
++			break;
++
++		db_path = svtfs_lock_path("locking.tdb");
++		if (db_path == NULL) {
++			return_bool = false;
++			break;
++		}
++
++		/* open the lock db without clearing existing entries, first. Let's try to keep the persistent */
++		/* handle related entries. If something fails in the middle, we will get rid of the db and move on*/
++		set_lock_db(db_open(NULL, db_path,
++				  SMB_OPEN_DATABASE_TDB_HASH_SIZE,
++				  TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH,
++				  read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
++				  DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE));
++		if (!get_lock_db()) {
++			DEBUG(0,("ERROR: Failed to initialise locking database\n"));
++			TALLOC_FREE(db_path);
++			return_bool = False;
++			break;
++		}
+ 
+-	if ( read_only == false ) {
+-		/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
+-		status = dbwrap_traverse(lock_db, sml_traverse_persist_fn, NULL, NULL);
+-
+-		if ( ! NT_STATUS_IS_OK(status) ) {
+-			TALLOC_FREE(lock_db);
+-			/* Cleanup and move on */
+-			DEBUG(0,("ERROR: Failed to recover persistent handle related lock entries. Cleanup and proceed.\n"));
+-			lock_db = db_open(NULL, db_path,
+-				SMB_OPEN_DATABASE_TDB_HASH_SIZE,
+-				TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+-				read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+-				DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
+-			if (!lock_db) {
+-				DEBUG(0,("ERROR: Failed to initialise locking database\n"));
++		if ( read_only == false ) {
++			/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
++			status = dbwrap_traverse(get_lock_db(), sml_traverse_persist_fn, NULL, NULL);
++
++			if ( ! NT_STATUS_IS_OK(status) ) {
++				TALLOC_FREE(get_lock_db());
++				/* Cleanup and move on */
++				DEBUG(0,("ERROR: Failed to recover persistent handle related lock entries. Cleanup and proceed.\n"));
++				set_lock_db(db_open(NULL, db_path,
++					SMB_OPEN_DATABASE_TDB_HASH_SIZE,
++					TDB_DEFAULT|TDB_VOLATILE|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
++					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
++					DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE));
++				if (!get_lock_db()) {
++					DEBUG(0,("ERROR: Failed to initialise locking database\n"));
++					TALLOC_FREE(db_path);
++					return_bool = False;
++					break;
++				}
++			} else {
+ 				TALLOC_FREE(db_path);
+-				return False;
+ 			}
+-		} else {
+-			TALLOC_FREE(db_path);
+ 		}
+-	}
+ 
+-	if (!posix_locking_init(read_only))
+-		return False;
++		if (!posix_locking_init(read_only)) {
++			return_bool = False;
++			break;
++		}
++
++		dbwrap_watch_db(get_lock_db(), server_messaging_context());
++
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
++			DEBUG(5, ("locking_init_internal: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("locking_init_internal: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
+ 
+-	dbwrap_watch_db(lock_db, server_messaging_context());
++	DEBUG(5, ("locking_init_internal: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
+ 
+-	return True;
++	return return_bool;
+ }
+ 
+ bool locking_init(void)
+@@ -219,7 +255,7 @@ bool locking_init_readonly(void)
+ bool locking_end(void)
+ {
+ 	brl_shutdown();
+-	TALLOC_FREE(lock_db);
++	TALLOC_FREE(get_lock_db());
+ 	return true;
+ }
+ 
+@@ -630,7 +666,7 @@ static struct share_mode_lock *get_share_mode_lock_internal(
+ 	TDB_DATA key = locking_key(&id);
+ 	TDB_DATA value;
+ 
+-	rec = dbwrap_fetch_locked(lock_db, mem_ctx, key);
++	rec = dbwrap_fetch_locked(get_lock_db(), mem_ctx, key);
+ 	if (rec == NULL) {
+ 		DEBUG(3, ("Could not lock share entry\n"));
+ 		return NULL;
+@@ -752,7 +788,7 @@ struct share_mode_lock *fetch_share_mode_unlocked(TALLOC_CTX *mem_ctx,
+ 		return NULL;
+ 	}
+ 	status = dbwrap_parse_record(
+-		lock_db, key, fetch_share_mode_unlocked_parser, lck);
++		get_lock_db(), key, fetch_share_mode_unlocked_parser, lck);
+ 	if (!NT_STATUS_IS_OK(status) ||
+ 	    (lck->data == NULL)) {
+ 		TALLOC_FREE(lck);
+@@ -833,11 +869,11 @@ int share_mode_forall(int (*fn)(struct file_id fid,
+ 	NTSTATUS status;
+ 	int count;
+ 
+-	if (lock_db == NULL) {
++	if (get_lock_db() == NULL) {
+ 		return 0;
+ 	}
+ 
+-	status = dbwrap_traverse_read(lock_db, share_mode_traverse_fn,
++	status = dbwrap_traverse_read(get_lock_db(), share_mode_traverse_fn,
+ 				      &state, &count);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		return -1;
+diff --git a/source3/param/loadparm.c b/source3/param/loadparm.c
+index f409676..7f805a2 100644
+--- a/source3/param/loadparm.c
++++ b/source3/param/loadparm.c
+@@ -109,6 +109,37 @@ static bool defaults_saved = false;
+ 
+ static struct loadparm_global Globals;
+ 
++extern char  * svtfs_storage_ip[];
++extern char  * svtfs_lockdir_path[];
++extern volatile int svtfs_lockdir_index;
++
++void svtfs_set_lockdir_index (int index)
++{
++	svtfs_lockdir_index = index;
++	DEBUG(2,("svtfs_set_lockdir_index: setting lockdir index to %d\n",svtfs_lockdir_index));
++}
++
++int svtfs_get_lockdir_index (void)
++{
++	DEBUG(2,("svtfs_get_lockdir_index: returning lockdir index of %d\n",svtfs_lockdir_index));
++	return svtfs_lockdir_index;
++}
++
++void svtfs_set_index_for_ip (const char * ipv4addr)
++{
++	int index;
++	DEBUG(2,("PJC: Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
++	index = 0;
++	while (svtfs_storage_ip[index] != NULL) {
++		if ( 0 == strcmp(svtfs_storage_ip[index],ipv4addr)) {
++			svtfs_lockdir_index = index;
++			DEBUG(2,("PJC: svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
++			return;
++		}
++		index++;
++	}
++}
++
+ /* This is a default service used to prime a services structure */
+ static struct loadparm_service sDefault =
+ {
+@@ -677,6 +708,8 @@ static void init_globals(struct loadparm_context *lp_ctx, bool reinit_globals)
+ 	lpcfg_string_set(Globals.ctx, &Globals.homedir_map, "auto.home");
+ #endif
+ #endif
++	lpcfg_string_set(Globals.ctx, &Globals.svtfs_lockdir, "/var/svtfs/samba");
++	lpcfg_string_set(Globals.ctx, &Globals.svtfs_storageip, "0.0.0.0");
+ 	Globals.time_server = false;
+ 	Globals.bind_interfaces_only = false;
+ 	Globals.unix_password_sync = false;
+diff --git a/source3/printing/printer_list.c b/source3/printing/printer_list.c
+index 9b20dc1..b1661d1 100644
+--- a/source3/printing/printer_list.c
++++ b/source3/printing/printer_list.c
+@@ -30,26 +30,64 @@
+ #define PL_DATA_FORMAT "ddPPP"
+ #define PL_TSTAMP_FORMAT "dd"
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ static struct db_context *get_printer_list_db(void)
+ {
+-	static struct db_context *db;
++#define MAX_PRINTER_LIST_DBS 32
++#define get_db() db[svtfs_get_lockdir_index()]
++#define set_db(value) db[svtfs_get_lockdir_index()] = value
++
++	struct db_context *db[MAX_PRINTER_LIST_DBS] = {NULL};
++
+ 	char *db_path;
++	int index,saved_index;
++	bool return_null = false;
+ 
+-	if (db != NULL) {
+-		return db;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
++
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("get_printer_list_db: setting lockdir_index of 0\n"));
+ 
+-	db_path = lock_path("printer_list.tdb");
+-	if (db_path == NULL) {
++	while (1) {
++
++		if (get_db() != NULL) {
++			break;
++		}
++
++		db_path = svtfs_lock_path("printer_list.tdb");
++		if (db_path == NULL) {
++			return_null = true;
++			break;
++		}
++
++		set_db(db_open(NULL, db_path, 0,
++			     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
++			     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_1,
++			     DBWRAP_FLAG_NONE));
++		TALLOC_FREE(db_path);
++
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_PRINTER_LIST_DBS ) ) {
++			DEBUG(5, ("get_printer_list_db: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("get_printer_list_db: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("get_printer_list_db: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	if ( return_null == true ) {
+ 		return NULL;
++	} else {
++		return get_db();
+ 	}
+-
+-	db = db_open(NULL, db_path, 0,
+-		     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+-		     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_1,
+-		     DBWRAP_FLAG_NONE);
+-	TALLOC_FREE(db_path);
+-	return db;
+ }
+ 
+ bool printer_list_parent_init(void)
+diff --git a/source3/smbd/process.c b/source3/smbd/process.c
+index 25c6d05..842143f 100644
+--- a/source3/smbd/process.c
++++ b/source3/smbd/process.c
+@@ -58,6 +58,8 @@ struct pending_message_list {
+ 	struct deferred_open_record *open_rec;
+ };
+ 
++extern void svtfs_set_index_for_ip (const char *);
++
+ static void construct_reply_common(uint8_t cmd, const uint8_t *inbuf,
+ 				   char *outbuf);
+ static struct pending_message_list *get_deferred_open_message_smb(
+@@ -4006,6 +4008,9 @@ void smbd_process(struct tevent_context *ev_ctx,
+ 		remaddr = "0.0.0.0";
+ 	}
+ 
++	/* Ashok: Set the svtfs_lockdir_index based on the locaddr */
++	svtfs_set_index_for_ip (locaddr);
++
+ 	/* this is needed so that we get decent entries
+ 	   in smbstatus for port 445 connects */
+ 	set_remote_machine_name(remaddr, false);
+diff --git a/source3/smbd/server.c b/source3/smbd/server.c
+index cc1e14e..c999a4f 100644
+--- a/source3/smbd/server.c
++++ b/source3/smbd/server.c
+@@ -52,10 +52,16 @@
+ #include "smbd/smbd_cleanupd.h"
+ #include "lib/util/sys_rw.h"
+ 
++#define MAX_LOCKDIRS 32
++
+ #ifdef CLUSTER_SUPPORT
+ #include "ctdb_protocol.h"
+ #endif
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ struct smbd_open_socket;
+ struct smbd_child_pid;
+ 
+@@ -1207,6 +1213,7 @@ extern void build_options(bool screen);
+ 	int opt;
+ 	poptContext pc;
+ 	bool print_build_options = False;
++	int index,saved_index;
+         enum {
+ 		OPT_DAEMON = 1000,
+ 		OPT_INTERACTIVE,
+@@ -1634,6 +1641,7 @@ extern void build_options(bool screen);
+ 		DEBUG(0, ("ERROR: file_init_global() failed\n"));
+ 		return -1;
+ 	}
++
+ 	status = smbXsrv_open_global_init();
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		exit_daemon("Samba cannot init global open", map_errno_from_nt_status(status));
+diff --git a/source3/smbd/smb2_create.c b/source3/smbd/smb2_create.c
+index 9612b86..a534e45 100644
+--- a/source3/smbd/smb2_create.c
++++ b/source3/smbd/smb2_create.c
+@@ -996,20 +996,21 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
+ 				 * 4) then, durable and lease context requests should be ignored.
+ 				 */
+ 				durable_requested = false;
++#ifdef MICROSOFT_FRAMEWORK_TESTS
+ 				requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
+ 				lease_ptr = NULL;
+-			} else {
++#endif
++			}
+ 
+-				if (!smb2_lease_key_valid(&lease.lease_key)) {
+-					lease_ptr = NULL;
+-					requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
+-				}
++			if (!smb2_lease_key_valid(&lease.lease_key)) {
++				lease_ptr = NULL;
++				requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
++			}
+ 
+-				if ((smb2req->xconn->protocol < PROTOCOL_SMB3_00) &&
+-						(lease.lease_version != 1)) {
+-					DEBUG(10, ("v2 lease key only for SMB3\n"));
+-					lease_ptr = NULL;
+-				}
++			if ((smb2req->xconn->protocol < PROTOCOL_SMB3_00) &&
++					(lease.lease_version != 1)) {
++				DEBUG(10, ("v2 lease key only for SMB3\n"));
++				lease_ptr = NULL;
+ 			}
+ 
+ 			/*
+diff --git a/source3/smbd/smbXsrv_client.c b/source3/smbd/smbXsrv_client.c
+index 7286b6e..b253aba 100644
+--- a/source3/smbd/smbXsrv_client.c
++++ b/source3/smbd/smbXsrv_client.c
+@@ -38,6 +38,10 @@
+ #include "lib/util/tevent_ntstatus.h"
+ #include "lib/util/iov_buf.h"
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
+ struct smbXsrv_client_table {
+ 	struct {
+ 		uint32_t max_clients;
+@@ -48,44 +52,70 @@ struct smbXsrv_client_table {
+ 	} global;
+ };
+ 
+-static struct db_context *smbXsrv_client_global_db_ctx = NULL;
++#define MAX_CLIENT_GLOBAL_DB_CONTEXTS 32
++#define get_smbXsrv_client_global_db_ctx() smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()]
++#define set_smbXsrv_client_global_db_ctx(value) smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()] = value
++
++static struct db_context *smbXsrv_client_global_db_ctx[MAX_CLIENT_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ NTSTATUS smbXsrv_client_global_init(void)
+ {
+ 	const char *global_path = NULL;
+ 	struct db_context *db_ctx = NULL;
++	int index,saved_index;
++	NTSTATUS status = NT_STATUS_OK;
+ 
+-	if (smbXsrv_client_global_db_ctx != NULL) {
+-		return NT_STATUS_OK;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	/*
+-	 * This contains secret information like client keys!
+-	 */
+-	global_path = lock_path("smbXsrv_client_global.tdb");
+-	if (global_path == NULL) {
+-		return NT_STATUS_NO_MEMORY;
+-	}
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("smbXsrv_client_global_init: setting lockdir_index of 0\n"));
++
++	while (1) {
+ 
+-	db_ctx = db_open(NULL, global_path,
+-			 0, /* hash_size */
+-			 TDB_DEFAULT |
+-			 TDB_CLEAR_IF_FIRST |
+-			 TDB_INCOMPATIBLE_HASH,
+-			 O_RDWR | O_CREAT, 0600,
+-			 DBWRAP_LOCK_ORDER_1,
+-			 DBWRAP_FLAG_NONE);
+-	if (db_ctx == NULL) {
+-		NTSTATUS status;
++		if (get_smbXsrv_client_global_db_ctx() != NULL) {
++			break;
++		}
+ 
+-		status = map_nt_error_from_unix_common(errno);
++		/*
++		 * This contains secret information like client keys!
++		 */
++		global_path = svtfs_lock_path("smbXsrv_client_global.tdb");
++		if (global_path == NULL) {
++			status = NT_STATUS_NO_MEMORY;
++			break;
++		}
+ 
+-		return status;
+-	}
++		db_ctx = db_open(NULL, global_path,
++				 0, /* hash_size */
++				 TDB_DEFAULT |
++				 TDB_CLEAR_IF_FIRST |
++				 TDB_INCOMPATIBLE_HASH,
++				 O_RDWR | O_CREAT, 0600,
++				 DBWRAP_LOCK_ORDER_1,
++				 DBWRAP_FLAG_NONE);
++		if (db_ctx == NULL) {
++
++			status = map_nt_error_from_unix_common(errno);
++			break;
++		}
+ 
+-	smbXsrv_client_global_db_ctx = db_ctx;
++		set_smbXsrv_client_global_db_ctx(db_ctx);
+ 
+-	return NT_STATUS_OK;
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_CLIENT_GLOBAL_DB_CONTEXTS ) ) {
++			DEBUG(5, ("smbXsrv_client_global_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("smbXsrv_client_global_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("smbXsrv_client_global_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	return status;
+ }
+ 
+ /*
+@@ -165,9 +195,9 @@ static NTSTATUS smbXsrv_client_table_create(TALLOC_CTX *mem_ctx,
+ 		return status;
+ 	}
+ 
+-	table->global.db_ctx = smbXsrv_client_global_db_ctx;
++	table->global.db_ctx = get_smbXsrv_client_global_db_ctx();
+ 
+-	dbwrap_watch_db(table->global.db_ctx, msg_ctx);
++	dbwrap_watch_db(get_smbXsrv_client_global_db_ctx(), msg_ctx);
+ 
+ 	*_table = table;
+ 	return NT_STATUS_OK;
+@@ -274,12 +304,18 @@ NTSTATUS smb2srv_client_lookup_global(struct smbXsrv_client *client,
+ 	struct smbXsrv_client_table *table = client->table;
+ 	struct smbXsrv_client_global0 *global = NULL;
+ 	bool is_free = false;
++	uint8_t key_buf[SMBXSRV_CLIENT_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 	struct db_record *db_rec;
+ 
+-	db_rec = smbXsrv_client_global_fetch_locked(table->global.db_ctx,
+-						    &client_guid,
+-						    talloc_tos());
++	key = smbXsrv_client_global_id_to_key(&client_guid, key_buf);
++
++	db_rec = dbwrap_fetch_locked(get_smbXsrv_client_global_db_ctx(),
++				     talloc_tos(), key);
+ 	if (db_rec == NULL) {
++		DBG_ERR("guid [%s]: Failed to lock key '%s'\n",
++			GUID_string(talloc_tos(), &client_guid),
++			hex_encode_talloc(talloc_tos(), key.dptr, key.dsize));
+ 		return NT_STATUS_INTERNAL_DB_ERROR;
+ 	}
+ 
+@@ -428,6 +464,7 @@ static NTSTATUS smbXsrv_client_global_store(struct smbXsrv_client_global0 *globa
+ 
+ static NTSTATUS smbXsrv_client_global_remove(struct smbXsrv_client_global0 *global)
+ {
++	struct smbXsrv_client_globalB global_blob;
+ 	TDB_DATA key;
+ 	NTSTATUS status;
+ 
+@@ -452,8 +489,11 @@ static NTSTATUS smbXsrv_client_global_remove(struct smbXsrv_client_global0 *glob
+ 		return status;
+ 	}
+ 	global->stored = false;
+-	DBG_DEBUG("key '%s' delete\n",
+-		  hex_encode_talloc(global->db_rec, key.dptr, key.dsize));
++	if (DEBUGLVL(DBGLVL_DEBUG)) {
++		DBG_DEBUG("key '%s' delete\n",
++			hex_encode_talloc(global->db_rec, key.dptr, key.dsize));
++		NDR_PRINT_DEBUG(smbXsrv_client_globalB, &global_blob);
++	}
+ 
+ 	TALLOC_FREE(global->db_rec);
+ 
+@@ -695,6 +735,8 @@ NTSTATUS smbXsrv_client_update(struct smbXsrv_client *client)
+ {
+ 	struct smbXsrv_client_table *table = client->table;
+ 	NTSTATUS status;
++	uint8_t key_buf[SMBXSRV_CLIENT_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 
+ 	if (client->global->db_rec != NULL) {
+ 		DBG_ERR("guid [%s]: Called with db_rec != NULL'\n",
+@@ -703,11 +745,15 @@ NTSTATUS smbXsrv_client_update(struct smbXsrv_client *client)
+ 		return NT_STATUS_INTERNAL_ERROR;
+ 	}
+ 
+-	client->global->db_rec = smbXsrv_client_global_fetch_locked(
+-					table->global.db_ctx,
+-					&client->global->client_guid,
+-					client->global /* TALLOC_CTX */);
++	key = smbXsrv_client_global_id_to_key(&client->global->client_guid,
++					      key_buf);
++
++	client->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_client_global_db_ctx(),
++						     client->global, key);
+ 	if (client->global->db_rec == NULL) {
++		DBG_ERR("guid [%s]: Failed to lock key '%s'\n",
++			GUID_string(talloc_tos(), &client->global->client_guid),
++			hex_encode_talloc(talloc_tos(), key.dptr, key.dsize));
+ 		return NT_STATUS_INTERNAL_DB_ERROR;
+ 	}
+ 
+@@ -738,6 +784,8 @@ NTSTATUS smbXsrv_client_remove(struct smbXsrv_client *client)
+ {
+ 	struct smbXsrv_client_table *table = client->table;
+ 	NTSTATUS status;
++	uint8_t key_buf[SMBXSRV_CLIENT_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 
+ 	if (client->global->db_rec != NULL) {
+ 		DBG_ERR("client_guid[%s]: Called with db_rec != NULL'\n",
+@@ -749,11 +797,15 @@ NTSTATUS smbXsrv_client_remove(struct smbXsrv_client *client)
+ 		return NT_STATUS_OK;
+ 	}
+ 
+-	client->global->db_rec = smbXsrv_client_global_fetch_locked(
+-					table->global.db_ctx,
+-					&client->global->client_guid,
+-					client->global /* TALLOC_CTX */);
++	key = smbXsrv_client_global_id_to_key(&client->global->client_guid,
++					      key_buf);
++
++	client->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_client_global_db_ctx(),
++						     client->global, key);
+ 	if (client->global->db_rec == NULL) {
++		DBG_ERR("client_guid[%s]: Failed to lock key '%s'\n",
++			GUID_string(talloc_tos(), &client->global->client_guid),
++			hex_encode_talloc(talloc_tos(), key.dptr, key.dsize));
+ 		return NT_STATUS_INTERNAL_DB_ERROR;
+ 	}
+ 
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index da364eb..a885fd6 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -58,7 +58,15 @@ struct db_record {
+         void *private_data;
+ };
+ 
+-static struct db_context *smbXsrv_open_global_db_ctx = NULL;
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
++#define MAX_OPEN_GLOBAL_DB_CONTEXTS 32
++#define get_smbXsrv_open_global_db_ctx() smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()]
++#define set_smbXsrv_open_global_db_ctx(value) smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()] = value
++
++static struct db_context *smbXsrv_open_global_db_ctx[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
+ 
+@@ -114,7 +122,7 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
+                 } else {
+                        smbXsrv_open_global_persistent_ids = persistent_id_element;
+                 }
+-		smbXsrv_open_disconnect(global, smbXsrv_open_global_db_ctx, 0);
++		smbXsrv_open_disconnect(global, get_smbXsrv_open_global_db_ctx(), 0);
+         } else {
+                 status = dbwrap_record_delete(rec);
+ 	        if (!NT_STATUS_IS_OK(status)) {
+@@ -135,7 +143,7 @@ bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find)
+ {
+ 
+         struct smbXsrv_open_persistent_id *current_id;
+-	if ( smbXsrv_open_global_db_ctx == NULL ) {
++	if ( get_smbXsrv_open_global_db_ctx() == NULL ) {
+ 		DEBUG(1,("smbXsrv_lookup_persistent_id with smbXsrv_open_global_db_ctx = NULL\n"));
+ 	}
+ 
+@@ -156,7 +164,8 @@ NTSTATUS smbXsrv_open_global_init(void)
+ {
+ 	char *global_path = NULL;
+ 	struct db_context *db_ctx = NULL;
+-	NTSTATUS status;
++	NTSTATUS status = NT_STATUS_OK;
++	int index,saved_index;
+ 
+         /**
+          *  Not using the 'state' feature at the moment, so commenting it out
+@@ -167,36 +176,57 @@ NTSTATUS smbXsrv_open_global_init(void)
+ 	};
+         */
+ 
+-	if (smbXsrv_open_global_db_ctx != NULL) {
+-		return NT_STATUS_OK;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	global_path = lock_path("smbXsrv_open_global.tdb");
+-	if (global_path == NULL) {
+-		return NT_STATUS_NO_MEMORY;
+-	}
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("smbXsrv_open_global_init: setting lockdir_index of 0\n"));
+ 
+-	db_ctx = db_open(NULL, global_path,
+-			 0, /* hash_size */
+-			 TDB_DEFAULT |
+-			 TDB_INCOMPATIBLE_HASH,
+-			 O_RDWR | O_CREAT, 0600,
+-			 DBWRAP_LOCK_ORDER_1,
+-			 DBWRAP_FLAG_NONE);
+-	TALLOC_FREE(global_path);
+-	if (db_ctx == NULL) {
+-	        DEBUG(1, ("Null context on open_global\n"));
+-		status = map_nt_error_from_unix_common(errno);
++	while (1) {
+ 
+-		return status;
+-	}
++		if (get_smbXsrv_open_global_db_ctx() != NULL) {
++			break;
++		}
++
++		global_path = svtfs_lock_path("smbXsrv_open_global.tdb");
++		if (global_path == NULL) {
++			status = NT_STATUS_NO_MEMORY;
++			break;
++		}
+ 
+-	smbXsrv_open_global_db_ctx = db_ctx;
+-	status = dbwrap_traverse(smbXsrv_open_global_db_ctx,
+-				 smbXsrv_open_global_traverse_persist_fn,
+-				 NULL, NULL);
++		db_ctx = db_open(NULL, global_path,
++				 0, /* hash_size */
++				 TDB_DEFAULT |
++				 TDB_INCOMPATIBLE_HASH,
++				 O_RDWR | O_CREAT, 0600,
++				 DBWRAP_LOCK_ORDER_1,
++				 DBWRAP_FLAG_NONE);
++		TALLOC_FREE(global_path);
++		if (db_ctx == NULL) {
++			DEBUG(1, ("Null context on open_global\n"));
++			status = map_nt_error_from_unix_common(errno);
++			break;
++		}
+ 
+-	return NT_STATUS_OK;
++		set_smbXsrv_open_global_db_ctx(db_ctx);
++		status = dbwrap_traverse(get_smbXsrv_open_global_db_ctx(),
++					 smbXsrv_open_global_traverse_persist_fn,
++					 NULL, NULL);
++
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
++			DEBUG(5, ("smbXsrv_session_open_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	return status;
+ }
+ 
+ /*
+@@ -357,7 +387,7 @@ static NTSTATUS smbXsrv_open_table_init(struct smbXsrv_connection *conn,
+ 		return status;
+ 	}
+ 
+-	table->global.db_ctx = smbXsrv_open_global_db_ctx;
++	table->global.db_ctx = get_smbXsrv_open_global_db_ctx();
+ 
+ 	client->open_table = table;
+ 	return NT_STATUS_OK;
+@@ -869,19 +899,26 @@ static NTSTATUS smbXsrv_open_global_lookup(struct smbXsrv_open_table *table,
+ 					   TALLOC_CTX *mem_ctx,
+ 					   struct smbXsrv_open_global0 **_global)
+ {
++	TDB_DATA key;
++	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
+ 	struct db_record *global_rec = NULL;
+ 	bool is_free = false;
+ 
+ 	*_global = NULL;
+ 
+-	if (table->global.db_ctx == NULL) {
++	if (get_smbXsrv_open_global_db_ctx() == NULL) {
+ 		return NT_STATUS_INTERNAL_ERROR;
+ 	}
+ 
+-	global_rec = smbXsrv_open_global_fetch_locked(table->global.db_ctx,
+-						      open_global_id,
+-						      mem_ctx);
++	key = smbXsrv_open_global_id_to_key(open_global_id, key_buf);
++
++	global_rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(), mem_ctx, key);
+ 	if (global_rec == NULL) {
++		DEBUG(0, ("smbXsrv_open_global_lookup(0x%08x): "
++			  "Failed to lock global key '%s'\n",
++			  open_global_id,
++			  hex_encode_talloc(talloc_tos(), key.dptr,
++					    key.dsize)));
+ 		return NT_STATUS_INTERNAL_DB_ERROR;
+ 	}
+ 
+@@ -963,7 +1000,7 @@ NTSTATUS smbXsrv_open_create(struct smbXsrv_connection *conn,
+ 	op->status = NT_STATUS_OK; /* TODO: start with INTERNAL_ERROR */
+ 	op->idle_time = now;
+ 
+-	status = smbXsrv_open_global_allocate(table->global.db_ctx,
++	status = smbXsrv_open_global_allocate(get_smbXsrv_open_global_db_ctx(),
+ 					      op, &global);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		TALLOC_FREE(op);
+@@ -1127,6 +1164,8 @@ NTSTATUS smbXsrv_open_update(struct smbXsrv_open *op)
+ {
+ 	struct smbXsrv_open_table *table = op->table;
+ 	NTSTATUS status;
++	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 
+ 	if (op->global->db_rec != NULL) {
+ 		DEBUG(0, ("smbXsrv_open_update(0x%08x): "
+@@ -1135,11 +1174,17 @@ NTSTATUS smbXsrv_open_update(struct smbXsrv_open *op)
+ 		return NT_STATUS_INTERNAL_ERROR;
+ 	}
+ 
+-	op->global->db_rec = smbXsrv_open_global_fetch_locked(
+-						table->global.db_ctx,
+-						op->global->open_global_id,
+-						op->global /* TALLOC_CTX */);
++	key = smbXsrv_open_global_id_to_key(op->global->open_global_id,
++					    key_buf);
++
++	op->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(),
++						 op->global, key);
+ 	if (op->global->db_rec == NULL) {
++		DEBUG(0, ("smbXsrv_open_update(0x%08x): "
++			  "Failed to lock global key '%s'\n",
++			  op->global->open_global_id,
++			  hex_encode_talloc(talloc_tos(), key.dptr,
++					    key.dsize)));
+ 		return NT_STATUS_INTERNAL_DB_ERROR;
+ 	}
+ 
+@@ -1276,11 +1321,21 @@ NTSTATUS smbXsrv_open_close(struct smbXsrv_open *op, NTTIME now)
+ 	global_rec = op->global->db_rec;
+ 	op->global->db_rec = NULL;
+ 	if (global_rec == NULL) {
+-		global_rec = smbXsrv_open_global_fetch_locked(
+-					table->global.db_ctx,
+-					op->global->open_global_id,
+-					op->global /* TALLOC_CTX */);
++		uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
++		TDB_DATA key;
++
++		key = smbXsrv_open_global_id_to_key(
++						op->global->open_global_id,
++						key_buf);
++
++		global_rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(),
++						 op->global, key);
+ 		if (global_rec == NULL) {
++			DEBUG(0, ("smbXsrv_open_close(0x%08x): "
++				  "Failed to lock global key '%s'\n",
++				  op->global->open_global_id,
++				  hex_encode_talloc(global_rec, key.dptr,
++						    key.dsize)));
+ 			error = NT_STATUS_INTERNAL_ERROR;
+ 		}
+ 	}
+@@ -1726,7 +1781,7 @@ NTSTATUS smbXsrv_open_global_traverse(
+ 		return status;
+ 	}
+ 
+-	status = dbwrap_traverse_read(smbXsrv_open_global_db_ctx,
++	status = dbwrap_traverse_read(get_smbXsrv_open_global_db_ctx(),
+ 				      smbXsrv_open_global_traverse_fn,
+ 				      &state,
+ 				      &count);
+@@ -1740,16 +1795,21 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 	NTSTATUS status = NT_STATUS_OK;
+ 	TALLOC_CTX *frame = talloc_stackframe();
+ 	struct smbXsrv_open_global0 *op = NULL;
++	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 	TDB_DATA val;
+ 	struct db_record *rec;
+ 	bool delete_open = false;
+ 	uint32_t global_id = persistent_id & UINT32_MAX;
+ 
+-	rec = smbXsrv_open_global_fetch_locked(smbXsrv_open_global_db_ctx,
+-					       global_id,
+-					       frame);
++	key = smbXsrv_open_global_id_to_key(global_id, key_buf);
++	rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(), frame, key);
+ 	if (rec == NULL) {
+ 		status = NT_STATUS_NOT_FOUND;
++		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
++			  "failed to fetch record from %s - %s\n",
++			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx()),
++			   nt_errstr(status)));
+ 		goto done;
+ 	}
+ 
+@@ -1757,7 +1817,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 	if (val.dsize == 0) {
+ 		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
+ 			  "empty record in %s, skipping...\n",
+-			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx)));
++			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx())));
+ 		goto done;
+ 	}
+ 
+@@ -1803,7 +1863,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
+ 			  "failed to delete record"
+ 			  "from %s: %s\n", global_id,
+-			  dbwrap_name(smbXsrv_open_global_db_ctx),
++			  dbwrap_name(get_smbXsrv_open_global_db_ctx()),
+ 			  nt_errstr(status)));
+ 		goto done;
+ 	}
+@@ -1811,7 +1871,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 	DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
+ 		   "delete record from %s\n",
+ 		   global_id,
+-		   dbwrap_name(smbXsrv_open_global_db_ctx)));
++		   dbwrap_name(get_smbXsrv_open_global_db_ctx())));
+ 
+ done:
+ 	talloc_free(frame);
+@@ -1831,12 +1891,12 @@ bool smbXsrv_open_is_resilient(uint64_t persistent_id)
+ 	uint32_t global_id = persistent_id & UINT32_MAX;
+ 
+ 	key = smbXsrv_open_global_id_to_key(global_id, key_buf);
+-	rec = dbwrap_fetch_locked(smbXsrv_open_global_db_ctx, frame, key);
++	rec = dbwrap_fetch_locked(get_smbXsrv_open_global_db_ctx(), frame, key);
+ 	if (rec == NULL) {
+ 		status = NT_STATUS_NOT_FOUND;
+ 		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x] "
+ 			  "failed to fetch record from %s - %s\n",
+-			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx),
++			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx()),
+ 			   nt_errstr(status)));
+ 		goto done;
+ 	}
+@@ -1845,7 +1905,7 @@ bool smbXsrv_open_is_resilient(uint64_t persistent_id)
+ 	if (val.dsize == 0) {
+ 		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x] "
+ 			  "empty record in %s, skipping...\n",
+-			   global_id, dbwrap_name(smbXsrv_open_global_db_ctx)));
++			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx())));
+ 		goto done;
+ 	}
+ 
+diff --git a/source3/smbd/smbXsrv_session.c b/source3/smbd/smbXsrv_session.c
+index 83f4e7e..8d8b9b7 100644
+--- a/source3/smbd/smbXsrv_session.c
++++ b/source3/smbd/smbXsrv_session.c
+@@ -51,45 +51,73 @@ struct smbXsrv_session_table {
+ 	} global;
+ };
+ 
+-static struct db_context *smbXsrv_session_global_db_ctx = NULL;
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
++#define MAX_SESSION_GLOBAL_DB_CONTEXTS 32
++#define get_smbXsrv_session_global_db_ctx() smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()]
++#define set_smbXsrv_session_global_db_ctx(value) smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()] = value
++
++static struct db_context *smbXsrv_session_global_db_ctx[MAX_SESSION_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ NTSTATUS smbXsrv_session_global_init(void)
+ {
+ 	char *global_path = NULL;
+ 	struct db_context *db_ctx = NULL;
++	int index,saved_index;
++	NTSTATUS status = NT_STATUS_OK;
+ 
+-	if (smbXsrv_session_global_db_ctx != NULL) {
+-		return NT_STATUS_OK;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	/*
+-	 * This contains secret information like session keys!
+-	 */
+-	global_path = lock_path("smbXsrv_session_global.tdb");
+-	if (global_path == NULL) {
+-		return NT_STATUS_NO_MEMORY;
+-	}
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("smbXsrv_session_global_init: setting lockdir_index of 0\n"));
+ 
+-	db_ctx = db_open(NULL, global_path,
+-			 0, /* hash_size */
+-			 TDB_DEFAULT |
+-			 TDB_CLEAR_IF_FIRST |
+-			 TDB_INCOMPATIBLE_HASH,
+-			 O_RDWR | O_CREAT, 0600,
+-			 DBWRAP_LOCK_ORDER_1,
+-			 DBWRAP_FLAG_NONE);
+-	TALLOC_FREE(global_path);
+-	if (db_ctx == NULL) {
+-		NTSTATUS status;
++	while (1) {
++		if (get_smbXsrv_session_global_db_ctx() != NULL) {
++			break;
++		}
+ 
+-		status = map_nt_error_from_unix_common(errno);
++		/*
++		 * This contains secret information like session keys!
++		 */
++		global_path = svtfs_lock_path("smbXsrv_session_global.tdb");
++		if (global_path == NULL) {
++			status = NT_STATUS_NO_MEMORY;
++			break;
++		}
+ 
+-		return status;
+-	}
++		db_ctx = db_open(NULL, global_path,
++				 0, /* hash_size */
++				 TDB_DEFAULT |
++				 TDB_CLEAR_IF_FIRST |
++				 TDB_INCOMPATIBLE_HASH,
++				 O_RDWR | O_CREAT, 0600,
++				 DBWRAP_LOCK_ORDER_1,
++				 DBWRAP_FLAG_NONE);
++		TALLOC_FREE(global_path);
++		if (db_ctx == NULL) {
++			status = map_nt_error_from_unix_common(errno);
++			break;
++		}
+ 
+-	smbXsrv_session_global_db_ctx = db_ctx;
++		set_smbXsrv_session_global_db_ctx(db_ctx);
+ 
+-	return NT_STATUS_OK;
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_SESSION_GLOBAL_DB_CONTEXTS ) ) {
++			DEBUG(5, ("smbXsrv_session_global_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("smbXsrv_session_global_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("smbXsrv_session_global_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	return status;
+ }
+ 
+ /*
+@@ -248,9 +276,9 @@ static NTSTATUS smbXsrv_session_table_init(struct smbXsrv_connection *conn,
+ 		return status;
+ 	}
+ 
+-	table->global.db_ctx = smbXsrv_session_global_db_ctx;
++	table->global.db_ctx = get_smbXsrv_session_global_db_ctx();
+ 
+-	dbwrap_watch_db(table->global.db_ctx, client->msg_ctx);
++	dbwrap_watch_db(get_smbXsrv_session_global_db_ctx(), client->msg_ctx);
+ 
+ 	subreq = messaging_read_send(table, client->ev_ctx, client->msg_ctx,
+ 				     MSG_SMBXSRV_SESSION_CLOSE);
+@@ -962,6 +990,8 @@ struct tevent_req *smb2srv_session_close_previous_send(TALLOC_CTX *mem_ctx,
+ 	uint64_t global_zeros = previous_session_id & 0xFFFFFFFF00000000LLU;
+ 	struct smbXsrv_session_table *table = conn->client->session_table;
+ 	struct security_token *current_token = NULL;
++	uint8_t key_buf[SMBXSRV_SESSION_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 
+ 	DEBUG(2,("smb2srv_session_close_previous_send: called with global_id 0x%08x"
+ 			" previous session id 0x%16lx current session id 0x%16lx\n",
+@@ -1002,10 +1032,10 @@ struct tevent_req *smb2srv_session_close_previous_send(TALLOC_CTX *mem_ctx,
+ 		return tevent_req_post(req, ev);
+ 	}
+ 
+-	state->db_rec = smbXsrv_session_global_fetch_locked(
+-							table->global.db_ctx,
+-							global_id,
+-							state /* TALLOC_CTX */);
++	key = smbXsrv_session_global_id_to_key(global_id, key_buf);
++
++	state->db_rec = dbwrap_fetch_locked(get_smbXsrv_session_global_db_ctx(),
++					    state, key);
+ 	if (state->db_rec == NULL) {
+ 		tevent_req_nterror(req, NT_STATUS_UNSUCCESSFUL);
+ 		return tevent_req_post(req, ev);
+@@ -1212,7 +1242,7 @@ NTSTATUS smbXsrv_session_create(struct smbXsrv_connection *conn,
+ 	session->status = NT_STATUS_MORE_PROCESSING_REQUIRED;
+ 	session->client = conn->client;
+ 
+-	status = smbXsrv_session_global_allocate(table->global.db_ctx,
++	status = smbXsrv_session_global_allocate(get_smbXsrv_session_global_db_ctx(),
+ 						 session,
+ 						 &global);
+ 	if (!NT_STATUS_IS_OK(status)) {
+@@ -1367,6 +1397,8 @@ NTSTATUS smbXsrv_session_update(struct smbXsrv_session *session)
+ {
+ 	struct smbXsrv_session_table *table = session->table;
+ 	NTSTATUS status;
++	uint8_t key_buf[SMBXSRV_SESSION_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 
+ 	if (session->global->db_rec != NULL) {
+ 		DEBUG(0, ("smbXsrv_session_update(0x%08x): "
+@@ -1375,11 +1407,18 @@ NTSTATUS smbXsrv_session_update(struct smbXsrv_session *session)
+ 		return NT_STATUS_INTERNAL_ERROR;
+ 	}
+ 
+-	session->global->db_rec = smbXsrv_session_global_fetch_locked(
+-					table->global.db_ctx,
++	key = smbXsrv_session_global_id_to_key(
+ 					session->global->session_global_id,
+-					session->global /* TALLOC_CTX */);
++					key_buf);
++
++	session->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_session_global_db_ctx(),
++						      session->global, key);
+ 	if (session->global->db_rec == NULL) {
++		DEBUG(0, ("smbXsrv_session_update(0x%08x): "
++			  "Failed to lock global key '%s'\n",
++			  session->global->session_global_id,
++			  hex_encode_talloc(talloc_tos(), key.dptr,
++					    key.dsize)));
+ 		return NT_STATUS_INTERNAL_DB_ERROR;
+ 	}
+ 
+@@ -1643,11 +1682,21 @@ NTSTATUS smbXsrv_session_logoff(struct smbXsrv_session *session)
+ 	global_rec = session->global->db_rec;
+ 	session->global->db_rec = NULL;
+ 	if (global_rec == NULL) {
+-		global_rec = smbXsrv_session_global_fetch_locked(
+-					table->global.db_ctx,
++		uint8_t key_buf[SMBXSRV_SESSION_GLOBAL_TDB_KEY_SIZE];
++		TDB_DATA key;
++
++		key = smbXsrv_session_global_id_to_key(
+ 					session->global->session_global_id,
+-					session->global /* TALLOC_CTX */);
++					key_buf);
++
++		global_rec = dbwrap_fetch_locked(get_smbXsrv_session_global_db_ctx(),
++						 session->global, key);
+ 		if (global_rec == NULL) {
++			DEBUG(0, ("smbXsrv_session_logoff(0x%08x): "
++				  "Failed to lock global key '%s'\n",
++				  session->global->session_global_id,
++				  hex_encode_talloc(global_rec, key.dptr,
++						    key.dsize)));
+ 			error = NT_STATUS_INTERNAL_ERROR;
+ 		}
+ 	}
+@@ -1933,7 +1982,7 @@ NTSTATUS smbXsrv_session_global_traverse(
+ 		return status;
+ 	}
+ 
+-	status = dbwrap_traverse_read(smbXsrv_session_global_db_ctx,
++	status = dbwrap_traverse_read(get_smbXsrv_session_global_db_ctx(),
+ 				      smbXsrv_session_global_traverse_fn,
+ 				      &state,
+ 				      &count);
+diff --git a/source3/smbd/smbXsrv_tcon.c b/source3/smbd/smbXsrv_tcon.c
+index ddd03f6..cfbc3d3 100644
+--- a/source3/smbd/smbXsrv_tcon.c
++++ b/source3/smbd/smbXsrv_tcon.c
+@@ -43,42 +43,72 @@ struct smbXsrv_tcon_table {
+ 	} global;
+ };
+ 
+-static struct db_context *smbXsrv_tcon_global_db_ctx = NULL;
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
++#define MAX_TCON_GLOBAL_DB_CONTEXTS 32
++#define get_smbXsrv_tcon_global_db_ctx() smbXsrv_tcon_global_db_ctx[svtfs_get_lockdir_index()]
++#define set_smbXsrv_tcon_global_db_ctx(value) smbXsrv_tcon_global_db_ctx[svtfs_get_lockdir_index()] = value
++
++static struct db_context *smbXsrv_tcon_global_db_ctx[MAX_TCON_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ NTSTATUS smbXsrv_tcon_global_init(void)
+ {
+ 	char *global_path = NULL;
+ 	struct db_context *db_ctx = NULL;
++	int index,saved_index;
++	NTSTATUS status = NT_STATUS_OK;
+ 
+-	if (smbXsrv_tcon_global_db_ctx != NULL) {
+-		return NT_STATUS_OK;
+-	}
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	global_path = lock_path("smbXsrv_tcon_global.tdb");
+-	if (global_path == NULL) {
+-		return NT_STATUS_NO_MEMORY;
+-	}
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("smbXsrv_tcon_global_init: setting lockdir_index of 0\n"));
+ 
+-	db_ctx = db_open(NULL, global_path,
+-			 0, /* hash_size */
+-			 TDB_DEFAULT |
+-			 TDB_CLEAR_IF_FIRST |
+-			 TDB_INCOMPATIBLE_HASH,
+-			 O_RDWR | O_CREAT, 0600,
+-			 DBWRAP_LOCK_ORDER_1,
+-			 DBWRAP_FLAG_NONE);
+-	TALLOC_FREE(global_path);
+-	if (db_ctx == NULL) {
+-		NTSTATUS status;
++	while (1) {
+ 
+-		status = map_nt_error_from_unix_common(errno);
++		if (get_smbXsrv_tcon_global_db_ctx() != NULL) {
++			break;
++		}
+ 
+-		return status;
+-	}
++		global_path = svtfs_lock_path("smbXsrv_tcon_global.tdb");
++		if (global_path == NULL) {
++			status = NT_STATUS_NO_MEMORY;
++			break;
++		}
+ 
+-	smbXsrv_tcon_global_db_ctx = db_ctx;
++		db_ctx = db_open(NULL, global_path,
++				 0, /* hash_size */
++				 TDB_DEFAULT |
++				 TDB_CLEAR_IF_FIRST |
++				 TDB_INCOMPATIBLE_HASH,
++				 O_RDWR | O_CREAT, 0600,
++				 DBWRAP_LOCK_ORDER_1,
++				 DBWRAP_FLAG_NONE);
++		TALLOC_FREE(global_path);
++		if (db_ctx == NULL) {
++
++			status = map_nt_error_from_unix_common(errno);
++			break;
++		}
+ 
+-	return NT_STATUS_OK;
++		set_smbXsrv_tcon_global_db_ctx(db_ctx);
++
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL)  || ( index >= MAX_TCON_GLOBAL_DB_CONTEXTS ) ) {
++                        DEBUG(5, ("smbXsrv_tcon_global_init: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("smbXsrv_tcon_global_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("smbXsrv_tcon_global_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	return status;
+ }
+ 
+ /*
+@@ -227,7 +257,7 @@ static NTSTATUS smbXsrv_tcon_table_init(TALLOC_CTX *mem_ctx,
+ 		return status;
+ 	}
+ 
+-	table->global.db_ctx = smbXsrv_tcon_global_db_ctx;
++	table->global.db_ctx = get_smbXsrv_tcon_global_db_ctx();
+ 
+ 	return NT_STATUS_OK;
+ }
+@@ -758,7 +788,7 @@ static NTSTATUS smbXsrv_tcon_create(struct smbXsrv_tcon_table *table,
+ 	tcon->status = NT_STATUS_INTERNAL_ERROR;
+ 	tcon->idle_time = now;
+ 
+-	status = smbXsrv_tcon_global_allocate(table->global.db_ctx,
++	status = smbXsrv_tcon_global_allocate(get_smbXsrv_tcon_global_db_ctx(),
+ 					      tcon, &global);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		TALLOC_FREE(tcon);
+@@ -848,6 +878,8 @@ NTSTATUS smbXsrv_tcon_update(struct smbXsrv_tcon *tcon)
+ {
+ 	struct smbXsrv_tcon_table *table = tcon->table;
+ 	NTSTATUS status;
++	uint8_t key_buf[SMBXSRV_TCON_GLOBAL_TDB_KEY_SIZE];
++	TDB_DATA key;
+ 
+ 	if (tcon->global->db_rec != NULL) {
+ 		DEBUG(0, ("smbXsrv_tcon_update(0x%08x): "
+@@ -856,11 +888,17 @@ NTSTATUS smbXsrv_tcon_update(struct smbXsrv_tcon *tcon)
+ 		return NT_STATUS_INTERNAL_ERROR;
+ 	}
+ 
+-	tcon->global->db_rec = smbXsrv_tcon_global_fetch_locked(
+-						table->global.db_ctx,
+-						tcon->global->tcon_global_id,
+-						tcon->global /* TALLOC_CTX */);
++	key = smbXsrv_tcon_global_id_to_key(tcon->global->tcon_global_id,
++					    key_buf);
++
++	tcon->global->db_rec = dbwrap_fetch_locked(get_smbXsrv_tcon_global_db_ctx(),
++						   tcon->global, key);
+ 	if (tcon->global->db_rec == NULL) {
++		DEBUG(0, ("smbXsrv_tcon_update(0x%08x): "
++			  "Failed to lock global key '%s'\n",
++			  tcon->global->tcon_global_id,
++			  hex_encode_talloc(talloc_tos(), key.dptr,
++					    key.dsize)));
+ 		return NT_STATUS_INTERNAL_DB_ERROR;
+ 	}
+ 
+@@ -908,11 +946,22 @@ NTSTATUS smbXsrv_tcon_disconnect(struct smbXsrv_tcon *tcon, uint64_t vuid)
+ 	global_rec = tcon->global->db_rec;
+ 	tcon->global->db_rec = NULL;
+ 	if (global_rec == NULL) {
+-		global_rec = smbXsrv_tcon_global_fetch_locked(
+-						table->global.db_ctx,
++		uint8_t key_buf[SMBXSRV_TCON_GLOBAL_TDB_KEY_SIZE];
++		TDB_DATA key;
++
++		key = smbXsrv_tcon_global_id_to_key(
+ 						tcon->global->tcon_global_id,
+-						tcon->global /* TALLOC_CTX */);
++						key_buf);
++
++		global_rec = dbwrap_fetch_locked(get_smbXsrv_tcon_global_db_ctx(),
++						 tcon->global, key);
+ 		if (global_rec == NULL) {
++			DEBUG(0, ("smbXsrv_tcon_disconnect(0x%08x, '%s'): "
++				  "Failed to lock global key '%s'\n",
++				  tcon->global->tcon_global_id,
++				  tcon->global->share_name,
++				  hex_encode_talloc(global_rec, key.dptr,
++						    key.dsize)));
+ 			error = NT_STATUS_INTERNAL_ERROR;
+ 		}
+ 	}
+@@ -1243,7 +1292,7 @@ NTSTATUS smbXsrv_tcon_global_traverse(
+ 		return status;
+ 	}
+ 
+-	status = dbwrap_traverse_read(smbXsrv_tcon_global_db_ctx,
++	status = dbwrap_traverse_read(get_smbXsrv_tcon_global_db_ctx(),
+ 				      smbXsrv_tcon_global_traverse_fn,
+ 				      &state,
+ 				      &count);
+diff --git a/source3/smbd/smbXsrv_version.c b/source3/smbd/smbXsrv_version.c
+index e318e7d..9fe80cd 100644
+--- a/source3/smbd/smbXsrv_version.c
++++ b/source3/smbd/smbXsrv_version.c
+@@ -43,8 +43,20 @@
+  * in a cluster, but for now it is simple.
+  */
+ 
+-static struct db_context *smbXsrv_version_global_db_ctx = NULL;
+-static uint32_t smbXsrv_version_global_current_version = UINT32_MAX;
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
++#define MAX_VERSION_GLOBAL_DB_CONTEXTS 32
++#define get_smbXsrv_version_global_db_ctx() smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()]
++#define set_smbXsrv_version_global_db_ctx(value) smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()] = value
++
++static struct db_context *smbXsrv_version_global_db_ctx[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {NULL};
++
++#define get_smbXsrv_version_global_current_version() smbXsrv_version_global_current_version[svtfs_get_lockdir_index()]
++#define set_smbXsrv_version_global_current_version(value) smbXsrv_version_global_current_version[svtfs_get_lockdir_index()] = value
++
++static uint32_t smbXsrv_version_global_current_version[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {UINT32_MAX};
+ 
+ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
+ {
+@@ -62,204 +74,222 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
+ 	struct smbXsrv_version_node0 *valid = NULL;
+ 	struct smbXsrv_version_node0 *local_node = NULL;
+ 	bool exists;
+-	NTSTATUS status;
++	NTSTATUS status = NT_STATUS_OK;
+ 	const char *key_string = "smbXsrv_version_global";
+ 	TALLOC_CTX *frame;
++	int index,saved_index;
++
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
+ 
+-	if (smbXsrv_version_global_db_ctx != NULL) {
+-		return NT_STATUS_OK;
+-	}
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("smbXsrv_version_global_init: setting lockdir_index of 0\n"));
+ 
+ 	frame = talloc_stackframe();
+ 
+-	global_path = lock_path("smbXsrv_version_global.tdb");
+-	if (global_path == NULL) {
+-		TALLOC_FREE(frame);
+-		return NT_STATUS_NO_MEMORY;
+-	}
+-
+-	db_ctx = db_open(NULL, global_path,
+-			 0, /* hash_size */
+-			 TDB_DEFAULT |
+-			 TDB_CLEAR_IF_FIRST |
+-			 TDB_INCOMPATIBLE_HASH,
+-			 O_RDWR | O_CREAT, 0600,
+-			 DBWRAP_LOCK_ORDER_1,
+-			 DBWRAP_FLAG_NONE);
+-	if (db_ctx == NULL) {
+-		status = map_nt_error_from_unix_common(errno);
+-		DEBUG(0,("smbXsrv_version_global_init: "
+-			 "failed to open[%s] - %s\n",
+-			 global_path, nt_errstr(status)));
+-		TALLOC_FREE(frame);
+-		return status;
+-	}
+-
+-	key = string_term_tdb_data(key_string);
+-
+-	db_rec = dbwrap_fetch_locked(db_ctx, db_ctx, key);
+-	if (db_rec == NULL) {
+-		status = NT_STATUS_INTERNAL_DB_ERROR;
+-		DEBUG(0,("smbXsrv_version_global_init: "
+-			 "dbwrap_fetch_locked(%s) - %s\n",
+-			 key_string, nt_errstr(status)));
+-		TALLOC_FREE(frame);
+-		return status;
+-	}
+-
+-	val = dbwrap_record_get_value(db_rec);
+-	if (val.dsize == 0) {
+-		global = talloc_zero(frame, struct smbXsrv_version_global0);
+-		if (global == NULL) {
++	while (1) {
++
++		if (get_smbXsrv_version_global_db_ctx() != NULL) {
++			break;
++		}
++
++		global_path = svtfs_lock_path("smbXsrv_version_global.tdb");
++		if (global_path == NULL) {
++			status = NT_STATUS_NO_MEMORY;
++			break;
++		}
++
++		db_ctx = db_open(NULL, global_path,
++				 0, /* hash_size */
++				 TDB_DEFAULT |
++				 TDB_CLEAR_IF_FIRST |
++				 TDB_INCOMPATIBLE_HASH,
++				 O_RDWR | O_CREAT, 0600,
++				 DBWRAP_LOCK_ORDER_1,
++				 DBWRAP_FLAG_NONE);
++		if (db_ctx == NULL) {
++			status = map_nt_error_from_unix_common(errno);
+ 			DEBUG(0,("smbXsrv_version_global_init: "
+-				 "talloc_zero failed - %s\n", __location__));
+-			TALLOC_FREE(frame);
+-			return NT_STATUS_NO_MEMORY;
++				 "failed to open[%s] - %s\n",
++				 global_path, nt_errstr(status)));
++			break;
+ 		}
+-		ZERO_STRUCT(global_blob);
+-		global_blob.version = SMBXSRV_VERSION_CURRENT;
+-		global_blob.info.info0 = global;
+-	} else {
+-		blob = data_blob_const(val.dptr, val.dsize);
+ 
+-		ndr_err = ndr_pull_struct_blob(&blob, frame, &global_blob,
+-			(ndr_pull_flags_fn_t)ndr_pull_smbXsrv_version_globalB);
+-		if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+-			status = ndr_map_error2ntstatus(ndr_err);
++		key = string_term_tdb_data(key_string);
++
++		db_rec = dbwrap_fetch_locked(db_ctx, db_ctx, key);
++		if (db_rec == NULL) {
++			status = NT_STATUS_INTERNAL_DB_ERROR;
+ 			DEBUG(0,("smbXsrv_version_global_init: "
+-				 "ndr_pull_smbXsrv_version_globalB - %s\n",
+-				 nt_errstr(status)));
+-			TALLOC_FREE(frame);
+-			return status;
++				 "dbwrap_fetch_locked(%s) - %s\n",
++				 key_string, nt_errstr(status)));
++			break;
+ 		}
+ 
+-		switch (global_blob.version) {
+-		case SMBXSRV_VERSION_0:
+-			global = global_blob.info.info0;
++		val = dbwrap_record_get_value(db_rec);
++		if (val.dsize == 0) {
++			global = talloc_zero(frame, struct smbXsrv_version_global0);
+ 			if (global == NULL) {
+-				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
++				DEBUG(0,("smbXsrv_version_global_init: "
++					 "talloc_zero failed - %s\n", __location__));
++				status = NT_STATUS_NO_MEMORY;
+ 				break;
+ 			}
+-			status = NT_STATUS_OK;
+-			break;
+-		default:
+-			status = NT_STATUS_REVISION_MISMATCH;
++			ZERO_STRUCT(global_blob);
++			global_blob.version = SMBXSRV_VERSION_CURRENT;
++			global_blob.info.info0 = global;
++		} else {
++			blob = data_blob_const(val.dptr, val.dsize);
++
++			ndr_err = ndr_pull_struct_blob(&blob, frame, &global_blob,
++				(ndr_pull_flags_fn_t)ndr_pull_smbXsrv_version_globalB);
++			if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
++				status = ndr_map_error2ntstatus(ndr_err);
++				DEBUG(0,("smbXsrv_version_global_init: "
++					 "ndr_pull_smbXsrv_version_globalB - %s\n",
++					 nt_errstr(status)));
++				break;
++			}
++
++			switch (global_blob.version) {
++			case SMBXSRV_VERSION_0:
++				global = global_blob.info.info0;
++				if (global == NULL) {
++					status = NT_STATUS_INTERNAL_DB_CORRUPTION;
++					break;
++				}
++				status = NT_STATUS_OK;
++				break;
++			default:
++				status = NT_STATUS_REVISION_MISMATCH;
++				break;
++			}
++
++			if (!NT_STATUS_IS_OK(status)) {
++				DEBUG(0,("smbXsrv_version_global_init - %s\n",
++					 nt_errstr(status)));
++				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
++				break;
++			}
++		}
++
++		valid = talloc_zero_array(global,
++					  struct smbXsrv_version_node0,
++					  global->num_nodes + 1);
++		if (valid == NULL) {
++			DEBUG(0,("smbXsrv_version_global_init: "
++				 "talloc_zero_array failed - %s\n", __location__));
++			status = NT_STATUS_NO_MEMORY;
+ 			break;
+ 		}
+ 
++		num_valid = 0;
++		for (i=0; i < global->num_nodes; i++) {
++			struct smbXsrv_version_node0 *n = &global->nodes[i];
++
++			exists = serverid_exists(&n->server_id);
++			if (!exists) {
++				continue;
++			}
++
++			if (n->min_version > n->max_version) {
++				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
++				DEBUG(0,("smbXsrv_version_global_init - %s\n",
++					 nt_errstr(status)));
++				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
++				break;
++			}
++
++			if (n->min_version > global_blob.version) {
++				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
++				DEBUG(0,("smbXsrv_version_global_init - %s\n",
++					 nt_errstr(status)));
++				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
++				break;
++			}
++
++			if (n->max_version < global_blob.version) {
++				status = NT_STATUS_INTERNAL_DB_CORRUPTION;
++				DEBUG(0,("smbXsrv_version_global_init - %s\n",
++					 nt_errstr(status)));
++				NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
++				break;
++			}
++
++			valid[num_valid] = *n;
++			if (server_id->vnn == n->server_id.vnn) {
++				local_node = &valid[num_valid];
++			}
++			num_valid++;
++		}
++
+ 		if (!NT_STATUS_IS_OK(status)) {
+-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
+-				 nt_errstr(status)));
+-			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+-			TALLOC_FREE(frame);
+-			return status;
++			break;
+ 		}
+-	}
+-
+-	valid = talloc_zero_array(global,
+-				  struct smbXsrv_version_node0,
+-				  global->num_nodes + 1);
+-	if (valid == NULL) {
+-		DEBUG(0,("smbXsrv_version_global_init: "
+-			 "talloc_zero_array failed - %s\n", __location__));
+-		TALLOC_FREE(frame);
+-		return NT_STATUS_NO_MEMORY;
+-	}
+-
+-	num_valid = 0;
+-	for (i=0; i < global->num_nodes; i++) {
+-		struct smbXsrv_version_node0 *n = &global->nodes[i];
+-
+-		exists = serverid_exists(&n->server_id);
+-		if (!exists) {
+-			continue;
++
++		if (local_node == NULL) {
++			local_node = &valid[num_valid];
++			num_valid++;
+ 		}
+ 
+-		if (n->min_version > n->max_version) {
+-			status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
++		local_node->server_id = *server_id;
++		local_node->min_version = SMBXSRV_VERSION_0;
++		local_node->max_version = SMBXSRV_VERSION_CURRENT;
++		local_node->current_version = global_blob.version;
++
++		global->num_nodes = num_valid;
++		global->nodes = valid;
++
++		global_blob.seqnum += 1;
++		global_blob.info.info0 = global;
++
++		ndr_err = ndr_push_struct_blob(&blob, db_rec, &global_blob,
++				(ndr_push_flags_fn_t)ndr_push_smbXsrv_version_globalB);
++		if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
++			status = ndr_map_error2ntstatus(ndr_err);
++			DEBUG(0,("smbXsrv_version_global_init: "
++				 "ndr_push_smbXsrv_version_globalB - %s\n",
+ 				 nt_errstr(status)));
+-			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+-			TALLOC_FREE(frame);
+-			return status;
++			break;
+ 		}
+ 
+-		if (n->min_version > global_blob.version) {
+-			status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
++		val = make_tdb_data(blob.data, blob.length);
++		status = dbwrap_record_store(db_rec, val, TDB_REPLACE);
++		TALLOC_FREE(db_rec);
++		if (!NT_STATUS_IS_OK(status)) {
++			DEBUG(0,("smbXsrv_version_global_init: "
++				 "dbwrap_record_store - %s\n",
+ 				 nt_errstr(status)));
+-			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+-			TALLOC_FREE(frame);
+-			return status;
++			break;
+ 		}
+ 
+-		if (n->max_version < global_blob.version) {
+-			status = NT_STATUS_INTERNAL_DB_CORRUPTION;
+-			DEBUG(0,("smbXsrv_version_global_init - %s\n",
+-				 nt_errstr(status)));
++		DEBUG(10,("smbXsrv_version_global_init\n"));
++		if (DEBUGLVL(10)) {
+ 			NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+-			TALLOC_FREE(frame);
+-			return status;
+ 		}
+ 
+-		valid[num_valid] = *n;
+-		if (server_id->vnn == n->server_id.vnn) {
+-			local_node = &valid[num_valid];
++		set_smbXsrv_version_global_db_ctx(db_ctx);
++		set_smbXsrv_version_global_current_version(global_blob.version);
++
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_VERSION_GLOBAL_DB_CONTEXTS ) ) {
++			DEBUG(5, ("smbXsrv_version_global_init: breaking with lockdir_index of %i\n", index));
++			break;
+ 		}
+-		num_valid++;
+-	}
+-
+-	if (local_node == NULL) {
+-		local_node = &valid[num_valid];
+-		num_valid++;
+-	}
+-
+-	local_node->server_id = *server_id;
+-	local_node->min_version = SMBXSRV_VERSION_0;
+-	local_node->max_version = SMBXSRV_VERSION_CURRENT;
+-	local_node->current_version = global_blob.version;
+-
+-	global->num_nodes = num_valid;
+-	global->nodes = valid;
+-
+-	global_blob.seqnum += 1;
+-	global_blob.info.info0 = global;
+-
+-	ndr_err = ndr_push_struct_blob(&blob, db_rec, &global_blob,
+-			(ndr_push_flags_fn_t)ndr_push_smbXsrv_version_globalB);
+-	if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+-		status = ndr_map_error2ntstatus(ndr_err);
+-		DEBUG(0,("smbXsrv_version_global_init: "
+-			 "ndr_push_smbXsrv_version_globalB - %s\n",
+-			 nt_errstr(status)));
+-		TALLOC_FREE(frame);
+-		return status;
+-	}
+-
+-	val = make_tdb_data(blob.data, blob.length);
+-	status = dbwrap_record_store(db_rec, val, TDB_REPLACE);
+-	TALLOC_FREE(db_rec);
+-	if (!NT_STATUS_IS_OK(status)) {
+-		DEBUG(0,("smbXsrv_version_global_init: "
+-			 "dbwrap_record_store - %s\n",
+-			 nt_errstr(status)));
+-		TALLOC_FREE(frame);
+-		return status;
+-	}
+-
+-	DEBUG(10,("smbXsrv_version_global_init\n"));
+-	if (DEBUGLVL(10)) {
+-		NDR_PRINT_DEBUG(smbXsrv_version_globalB, &global_blob);
+-	}
+-
+-	smbXsrv_version_global_db_ctx = db_ctx;
+-	smbXsrv_version_global_current_version = global_blob.version;
++
++		DEBUG(5, ("smbXsrv_version_global_init: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
+ 
+ 	TALLOC_FREE(frame);
+-	return NT_STATUS_OK;
++
++	DEBUG(5, ("smbXsrv_version_global_init: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++
++	return status;
+ }
+ 
+ uint32_t smbXsrv_version_global_current(void)
+ {
+-	return smbXsrv_version_global_current_version;
++	return get_smbXsrv_version_global_current_version();
+ }
+diff --git a/source3/utils/status.c b/source3/utils/status.c
+index 9aefd5e..d8b9f16 100644
+--- a/source3/utils/status.c
++++ b/source3/utils/status.c
+@@ -48,6 +48,12 @@
+ #include "status_profile.h"
+ #include "smbd/notifyd/notifyd.h"
+ 
++extern char * svtfs_storage_ip[];
++extern int svtfs_get_lockdir_index(void);
++extern void svtfs_set_lockdir_index(int);
++
++#define MAX_LOCK_DBS 32
++
+ #define SMB_MAXPIDS		2048
+ static uid_t 		Ucrit_uid = 0;               /* added by OH */
+ static struct server_id	Ucrit_pid[SMB_MAXPIDS];  /* Ugly !!! */   /* added by OH */
+@@ -627,11 +633,30 @@ int main(int argc, const char *argv[])
+ 	}
+ 
+ 	if ( show_processes ) {
++		int index,saved_index;
++
+ 		d_printf("\nSamba version %s\n",samba_version_string());
+ 		d_printf("%-7s %-12s %-12s %-41s %-17s %-20s %-21s\n", "PID", "Username", "Group", "Machine", "Protocol Version", "Encryption", "Signing");
+ 		d_printf("----------------------------------------------------------------------------------------------------------------------------------------\n");
+ 
+-		sessionid_traverse_read(traverse_sessionid, frame);
++		index = 0;
++		saved_index = svtfs_get_lockdir_index();
++
++		svtfs_set_lockdir_index(index);
++
++		while (1) {
++
++			sessionid_traverse_read(traverse_sessionid, frame);
++
++			index++;
++			if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
++				break;
++			}
++
++			svtfs_set_lockdir_index(index);
++		} /* end while(1) */
++
++		svtfs_set_lockdir_index(saved_index);
+ 
+ 		if (processes_only) {
+ 			goto done;
+@@ -639,6 +664,8 @@ int main(int argc, const char *argv[])
+ 	}
+ 
+ 	if ( show_shares ) {
++		int index,saved_index;
++
+ 		if (brief) {
+ 			goto done;
+ 		}
+@@ -646,7 +673,24 @@ int main(int argc, const char *argv[])
+ 		d_printf("\n%-12s %-7s %-13s %-32s %-12s %-12s\n", "Service", "pid", "Machine", "Connected at", "Encryption", "Signing");
+ 		d_printf("---------------------------------------------------------------------------------------------\n");
+ 
+-		connections_forall_read(traverse_connections, frame);
++		index = 0;
++		saved_index = svtfs_get_lockdir_index();
++
++		svtfs_set_lockdir_index(index);
++
++		while (1) {
++
++			connections_forall_read(traverse_connections, frame);
++
++			index++;
++			if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
++				break;
++			}
++
++			svtfs_set_lockdir_index(index);
++		} /* end while(1) */
++
++		svtfs_set_lockdir_index(saved_index);
+ 
+ 		d_printf("\n");
+ 
+@@ -658,50 +702,69 @@ int main(int argc, const char *argv[])
+ 	if ( show_locks ) {
+ 		int result;
+ 		struct db_context *db;
++		int index,saved_index;
+ 
+-		db_path = lock_path("locking.tdb");
+-		if (db_path == NULL) {
+-			d_printf("Out of memory - exiting\n");
+-			ret = -1;
+-			goto done;
+-		}
++		index = 0;
++		saved_index = svtfs_get_lockdir_index();
+ 
+-		db = db_open(NULL, db_path, 0,
+-			     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH, O_RDONLY, 0,
+-			     DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
++		svtfs_set_lockdir_index(index);
+ 
+-		if (!db) {
+-			d_printf("%s not initialised\n", db_path);
+-			d_printf("This is normal if an SMB client has never "
+-				 "connected to your server.\n");
+-			TALLOC_FREE(db_path);
+-			exit(0);
+-		} else {
+-			TALLOC_FREE(db);
+-			TALLOC_FREE(db_path);
+-		}
++		while (1) {
+ 
+-		if (!locking_init_readonly()) {
+-			d_printf("Can't initialise locking module - exiting\n");
+-			ret = 1;
+-			goto done;
+-		}
++			db_path = svtfs_lock_path("locking.tdb");
++			if (db_path == NULL) {
++				d_printf("Out of memory - exiting\n");
++				ret = -1;
++				goto done;
++			}
+ 
+-		result = share_entry_forall(print_share_mode, NULL);
++			db = db_open(NULL, db_path, 0,
++				     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH, O_RDONLY, 0,
++				     DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
++
++			if (!db) {
++				d_printf("%s not initialised\n", db_path);
++				d_printf("This is normal if an SMB client has never "
++					 "connected to your server.\n");
++				TALLOC_FREE(db_path);
++				exit(0);
++			} else {
++				TALLOC_FREE(db);
++				TALLOC_FREE(db_path);
++			}
+ 
+-		if (result == 0) {
+-			d_printf("No locked files\n");
+-		} else if (result < 0) {
+-			d_printf("locked file list truncated\n");
+-		}
++			if (!locking_init_readonly()) {
++				d_printf("Can't initialise locking module - exiting\n");
++				ret = 1;
++				goto done;
++			}
+ 
+-		d_printf("\n");
++			result = share_entry_forall(print_share_mode, NULL);
+ 
+-		if (show_brl) {
+-			brl_forall(print_brl, NULL);
+-		}
++			if (result == 0) {
++				d_printf("No locked files\n");
++			} else if (result < 0) {
++				d_printf("locked file list truncated\n");
++			}
++
++			d_printf("\n");
++
++			if (show_brl) {
++				brl_forall(print_brl, NULL);
++			}
++
++			locking_end();
++
++			index++;
++			if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
++				break;
++			}
++
++			svtfs_set_lockdir_index(index);
++		} /* end while(1) */
++
++		svtfs_set_lockdir_index(saved_index);
+ 
+-		locking_end();
+ 	}
+ 
+ 	if (show_notify) {
+diff --git a/source4/torture/smb2/durable_v2_open.c b/source4/torture/smb2/durable_v2_open.c
+index 9c9705a..6b122b0 100644
+--- a/source4/torture/smb2/durable_v2_open.c
++++ b/source4/torture/smb2/durable_v2_open.c
+@@ -63,6 +63,13 @@ static struct {
+ 	struct smb2_close cl;
+ } break_info;
+ 
++volatile int sigcont_rcvd = 0;
++
++static void sigcont_handler(int signo)
++{
++  if (signo == SIGCONT)
++	sigcont_rcvd = 1;
++}
+ 
+ static void torture_oplock_close_callback(struct smb2_request *req)
+ {
+@@ -2512,6 +2519,13 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
+        struct smb2_lock lck;
+        struct smb2_lock_element lock[1];
+ 
++       /* setup signal handler for sigcont */
++       if (signal(SIGCONT, sigcont_handler) == SIG_ERR) {
++		torture_warning(tctx, "Can't catch SIGCONT. bailing...\n");
++		ret = false;
++		goto done;
++       }
++
+        /* Choose a random name in case the state is left a little funky. */
+        snprintf(fname, 256, "persist_samba_kill_%s.dat",
+                 generate_random_str(tctx, 8));
+@@ -2549,50 +2563,15 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
+        status = smb2_lock(tree, &lck);
+        torture_assert_ntstatus_ok(tctx, status, "Incorrect status");
+ 
+-#ifdef WHATEVER
+-       if (!(dir = opendir("/proc"))) {
+-           return false;
+-       }
+-
+-       while((ent = readdir(dir)) != NULL) {
+-           /* if endptr is not a null character, the directory is not
+-            * entirely numeric, so ignore it */
+-	   FILE * fp = NULL;
+-           long lpid = strtol(ent->d_name, &endptr, 10);
+-           if (*endptr != '\0') {
+-               continue;
+-           }   
+-
+-           /* try to open the cmdline file */
+-           snprintf(buf, sizeof(buf), "/proc/%ld/cmdline", lpid);
+-           fp = fopen(buf, "r");
+-        
+-           if (fp) {
+-               if (fgets(buf, sizeof(buf), fp) != NULL) {
+-                   /* check the first token in the file, the program name */
+-                   char* first = strtok(buf, " ");
+-                   if (!strcmp(first, "smbd")) {
+-                       fclose(fp);
+-                       kill(lpid, SIGKILL);
+-                       found_process = true;
+-                       break;
+-                   }
+-               }
+-               fclose(fp);
+-           }   
+-        
+-       }
+-    
+-       closedir(dir);
+-       if (!found_process) return false;
+-#endif
+-       system("/etc/init.d/samba restart");
++       /* Pause until a SIGCONT is received. */
++       sigcont_rcvd = 0;
++       torture_comment(tctx, "pausing persistent handle test until signalled...\n");
++       while (sigcont_rcvd == 0) sleep(1);
++       torture_comment(tctx, "signal to resume received.\n");
+ 
+        /* disconnect, reconnect and then do persistent reopen */
+        TALLOC_FREE(tree);
+ 
+-       sleep(50);
+-
+        if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
+                 torture_warning(tctx, "couldn't reconnect, bailing\n");
+                 ret = false;

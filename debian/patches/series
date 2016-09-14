@@ -31,3 +31,9 @@
 0031-HYP-1683-Persist-lease-information-to-survive-samba-.patch
 0032-HYP-2636-Support-SVA-hard-reset-use-case.patch
 0033-HYP-2636-Code-cleanup-for-surviving-SVA-hard-restart.patch
+0034-HYP-2212-Ignore-the-fact-that-there-is-no-share-mode.patch
+0035-HYP-none-Changes-to-enable-building-samba-on-SVA-deb.patch
+0036-HYP-2861-Fix-smbd-core-dump-on-accessing-NULL-pointe.patch
+0037-HYP-none-Disable-mmap-by-default-in-tdbtool.patch
+0038-HYP-2824-Fix-smbtorture-persistent-tests.patch
+0039-HYP-1934-Clustering-support-for-Samba-on-svtfs.patch

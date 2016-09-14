@@ -1,0 +1,91 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Tue, 16 Aug 2016 13:33:25 +0000
+Subject: HYP-none : Changes to enable building samba on SVA, debug build.
+
+---
+ source3/lib/netapi/netapi.c | 8 ++++++++
+ source3/lib/util.c          | 8 ++++++++
+ source3/locking/leases_db.c | 4 +++-
+ source3/smbd/smb2_create.c  | 2 +-
+ 4 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/source3/lib/netapi/netapi.c b/source3/lib/netapi/netapi.c
+index fd06279..b73a371 100644
+--- a/source3/lib/netapi/netapi.c
++++ b/source3/lib/netapi/netapi.c
+@@ -26,6 +26,14 @@
+ struct libnetapi_ctx *stat_ctx = NULL;
+ static bool libnetapi_initialized = false;
+ 
++/**
++* Destroy global objects allocated by init_iconv()
++ **/
++void gfree_charcnv(void)
++{
++	TALLOC_FREE(global_iconv_handle);
++}
++
+ /****************************************************************
+ ****************************************************************/
+ 
+diff --git a/source3/lib/util.c b/source3/lib/util.c
+index 2895c14..0e6e503 100644
+--- a/source3/lib/util.c
++++ b/source3/lib/util.c
+@@ -91,6 +91,14 @@ void gfree_all( void )
+ 	gfree_debugsyms();
+ }
+ 
++/**
++ * Destroy global objects allocated by init_iconv()
++ **/
++void gfree_charcnv(void)
++{
++	TALLOC_FREE(global_iconv_handle);
++}
++
+ /*******************************************************************
+  Check if a file exists - call vfs_file_exist for samba files.
+ ********************************************************************/
+diff --git a/source3/locking/leases_db.c b/source3/locking/leases_db.c
+index 04020ee..6d40874 100644
+--- a/source3/locking/leases_db.c
++++ b/source3/locking/leases_db.c
+@@ -32,6 +32,7 @@
+ 
+ /* the leases database handle */
+ static struct db_context *leases_db;
++extern bool smbXsrv_lookup_persistent_id(uint64_t);
+ 
+ void remove_stale_lease_entries(struct leases_db_value *d)
+ {
+@@ -59,6 +60,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
+ 	struct leases_db_value *d;
+ 	bool found_persistent_open = False;
+ 	NTSTATUS status;
++	struct leases_db_file *entry;
+ 
+ 	key = dbwrap_record_get_key(rec);
+ 	value = dbwrap_record_get_value(rec);
+@@ -91,7 +93,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
+ 
+ 	for (i=0; i<d->num_files; i++) {
+ 		DEBUG(1, ("leases_db_traverse_persist_fn: Loop iteration %i\n", i));
+-		struct leases_db_file *entry = &d->files[i];
++		entry = &d->files[i];
+ 		if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
+ 			entry->stale = false; /* [skip] in idl */
+ 			found_persistent_open = True;
+diff --git a/source3/smbd/smb2_create.c b/source3/smbd/smb2_create.c
+index bfdccc9..9612b86 100644
+--- a/source3/smbd/smb2_create.c
++++ b/source3/smbd/smb2_create.c
+@@ -388,7 +388,7 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(
+ 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+ 	}
+ 
+-	unix_syntax_filename = strdup(requested_filename);
++	unix_syntax_filename = SMB_STRDUP(requested_filename);
+ 
+ 	if (unix_syntax_filename == NULL) {
+ 		DEBUG(1, ("smbd_smb2_create_durable_lease_check: can't dup filename; out of memory\n"));
