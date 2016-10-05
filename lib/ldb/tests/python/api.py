@@ -167,6 +167,106 @@ class SimpleLdb(TestCase):
         finally:
             l.delete(ldb.Dn(l, "dc=foo4"))
 
+    def test_search_iterator(self):
+        l = ldb.Ldb(filename())
+        s = l.search_iterator()
+        s.abandon()
+        try:
+            for me in s:
+                self.fail()
+            self.fail()
+        except RuntimeError as re:
+            pass
+        try:
+            s.abandon()
+            self.fail()
+        except RuntimeError as re:
+            pass
+        try:
+            s.result()
+            self.fail()
+        except RuntimeError as re:
+            pass
+
+        s = l.search_iterator()
+        count = 0
+        for me in s:
+            self.assertTrue(isinstance(me, ldb.Message))
+            count += 1
+        r = s.result()
+        self.assertEqual(len(r), 0)
+        self.assertEqual(count, 0)
+
+        m1 = ldb.Message()
+        m1.dn = ldb.Dn(l, "dc=foo4")
+        m1["bla"] = b"bla"
+        l.add(m1)
+        try:
+            s = l.search_iterator()
+            msgs = []
+            for me in s:
+                self.assertTrue(isinstance(me, ldb.Message))
+                count += 1
+                msgs.append(me)
+            r = s.result()
+            self.assertEqual(len(r), 0)
+            self.assertEqual(len(msgs), 1)
+            self.assertEqual(msgs[0].dn, m1.dn)
+
+            m2 = ldb.Message()
+            m2.dn = ldb.Dn(l, "dc=foo5")
+            m2["bla"] = b"bla"
+            l.add(m2)
+
+            s = l.search_iterator()
+            msgs = []
+            for me in s:
+                self.assertTrue(isinstance(me, ldb.Message))
+                count += 1
+                msgs.append(me)
+            r = s.result()
+            self.assertEqual(len(r), 0)
+            self.assertEqual(len(msgs), 2)
+            if msgs[0].dn == m1.dn:
+                self.assertEqual(msgs[0].dn, m1.dn)
+                self.assertEqual(msgs[1].dn, m2.dn)
+            else:
+                self.assertEqual(msgs[0].dn, m2.dn)
+                self.assertEqual(msgs[1].dn, m1.dn)
+
+            s = l.search_iterator()
+            msgs = []
+            for me in s:
+                self.assertTrue(isinstance(me, ldb.Message))
+                count += 1
+                msgs.append(me)
+                break
+            try:
+                s.result()
+                self.fail()
+            except RuntimeError as re:
+                pass
+            for me in s:
+                self.assertTrue(isinstance(me, ldb.Message))
+                count += 1
+                msgs.append(me)
+                break
+            for me in s:
+                self.fail()
+
+            r = s.result()
+            self.assertEqual(len(r), 0)
+            self.assertEqual(len(msgs), 2)
+            if msgs[0].dn == m1.dn:
+                self.assertEqual(msgs[0].dn, m1.dn)
+                self.assertEqual(msgs[1].dn, m2.dn)
+            else:
+                self.assertEqual(msgs[0].dn, m2.dn)
+                self.assertEqual(msgs[1].dn, m1.dn)
+        finally:
+            l.delete(ldb.Dn(l, "dc=foo4"))
+            l.delete(ldb.Dn(l, "dc=foo5"))
+
     def test_add_text(self):
         l = ldb.Ldb(filename())
         m = ldb.Message()
@@ -570,13 +670,13 @@ class DnTests(TestCase):
     def test_add_child_str(self):
         x = ldb.Dn(self.ldb, "dc=foo22,bar=bloe")
         self.assertTrue(x.add_child("bla=bloe"))
-        self.assertEquals("bla=bloe,dc=foo22,bar=bloe", x.__str__())
+        self.assertEqual("bla=bloe,dc=foo22,bar=bloe", x.__str__())
 
     def test_add_base_str(self):
         x = ldb.Dn(self.ldb, "dc=foo23,bar=bloe")
         base = "bla=bloe"
         self.assertTrue(x.add_base(base))
-        self.assertEquals("dc=foo23,bar=bloe,bla=bloe", x.__str__())
+        self.assertEqual("dc=foo23,bar=bloe,bla=bloe", x.__str__())
 
     def test_add(self):
         x = ldb.Dn(self.ldb, "dc=foo24")
@@ -751,10 +851,10 @@ class LdbMsgTests(TestCase):
                 "Message({'dc': MessageElement([b'foo']), 'dn': Dn('dc=foo29')}).text",
             ])
         else:
-            self.assertEquals(
+            self.assertEqual(
                 repr(self.msg),
                 "Message({'dn': Dn('dc=foo29'), 'dc': MessageElement(['foo'])})")
-            self.assertEquals(
+            self.assertEqual(
                 repr(self.msg.text),
                 "Message({'dn': Dn('dc=foo29'), 'dc': MessageElement(['foo'])}).text")
 

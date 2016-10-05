@@ -42,6 +42,7 @@
 #include "lib/param/loadparm.h"
 #include "libcli/auth/netlogon_creds_cli.h"
 #include "auth/credentials/credentials.h"
+#include "krb5_env.h"
 
 /****************************************************************
 ****************************************************************/
@@ -118,6 +119,7 @@ static ADS_STATUS libnet_connect_ads(const char *dns_domain_name,
 				     const char *dc_name,
 				     const char *user_name,
 				     const char *password,
+				     const char *ccname,
 				     ADS_STRUCT **ads)
 {
 	ADS_STATUS status;
@@ -150,6 +152,12 @@ static ADS_STATUS libnet_connect_ads(const char *dns_domain_name,
 		my_ads->auth.password = SMB_STRDUP(password);
 	}
 
+	if (ccname != NULL) {
+		SAFE_FREE(my_ads->auth.ccache_name);
+		my_ads->auth.ccache_name = SMB_STRDUP(ccname);
+		setenv(KRB5_ENV_CCNAME, my_ads->auth.ccache_name, 1);
+	}
+
 	status = ads_connect_user_creds(my_ads);
 	if (!ADS_ERR_OK(status)) {
 		ads_destroy(&my_ads);
@@ -164,15 +172,51 @@ static ADS_STATUS libnet_connect_ads(const char *dns_domain_name,
 ****************************************************************/
 
 static ADS_STATUS libnet_join_connect_ads(TALLOC_CTX *mem_ctx,
-					  struct libnet_JoinCtx *r)
+					  struct libnet_JoinCtx *r,
+					  bool use_machine_creds)
 {
 	ADS_STATUS status;
+	const char *username;
+	const char *password;
+	const char *ccname = NULL;
+
+	if (use_machine_creds) {
+		if (r->in.machine_name == NULL ||
+		    r->in.machine_password == NULL) {
+			return ADS_ERROR_NT(NT_STATUS_INVALID_PARAMETER);
+		}
+		username = talloc_strdup(mem_ctx, r->in.machine_name);
+		if (username == NULL) {
+			return ADS_ERROR(LDAP_NO_MEMORY);
+		}
+		if (username[strlen(username)] != '$') {
+			username = talloc_asprintf(username, "%s$", username);
+			if (username == NULL) {
+				return ADS_ERROR(LDAP_NO_MEMORY);
+			}
+		}
+		password = r->in.machine_password;
+		ccname = "MEMORY:libnet_join_machine_creds";
+	} else {
+		username = r->in.admin_account;
+		password = r->in.admin_password;
+
+		/*
+		 * when r->in.use_kerberos is set to allow "net ads join -k" we
+		 * may not override the provided credential cache - gd
+		 */
+
+		if (!r->in.use_kerberos) {
+			ccname = "MEMORY:libnet_join_user_creds";
+		}
+	}
 
 	status = libnet_connect_ads(r->out.dns_domain_name,
 				    r->out.netbios_domain_name,
 				    r->in.dc_name,
-				    r->in.admin_account,
-				    r->in.admin_password,
+				    username,
+				    password,
+				    ccname,
 				    &r->in.ads);
 	if (!ADS_ERR_OK(status)) {
 		libnet_join_set_error_string(mem_ctx, r,
@@ -201,6 +245,24 @@ static ADS_STATUS libnet_join_connect_ads(TALLOC_CTX *mem_ctx,
 /****************************************************************
 ****************************************************************/
 
+static ADS_STATUS libnet_join_connect_ads_user(TALLOC_CTX *mem_ctx,
+					       struct libnet_JoinCtx *r)
+{
+	return libnet_join_connect_ads(mem_ctx, r, false);
+}
+
+/****************************************************************
+****************************************************************/
+
+static ADS_STATUS libnet_join_connect_ads_machine(TALLOC_CTX *mem_ctx,
+						  struct libnet_JoinCtx *r)
+{
+	return libnet_join_connect_ads(mem_ctx, r, true);
+}
+
+/****************************************************************
+****************************************************************/
+
 static ADS_STATUS libnet_unjoin_connect_ads(TALLOC_CTX *mem_ctx,
 					    struct libnet_UnjoinCtx *r)
 {
@@ -211,6 +273,7 @@ static ADS_STATUS libnet_unjoin_connect_ads(TALLOC_CTX *mem_ctx,
 				    r->in.dc_name,
 				    r->in.admin_account,
 				    r->in.admin_password,
+				    NULL,
 				    &r->in.ads);
 	if (!ADS_ERR_OK(status)) {
 		libnet_unjoin_set_error_string(mem_ctx, r,
@@ -255,7 +318,8 @@ static ADS_STATUS libnet_join_precreate_machine_acct(TALLOC_CTX *mem_ctx,
 
 	status = ads_create_machine_acct(r->in.ads,
 					 r->in.machine_name,
-					 r->in.account_ou);
+					 r->in.account_ou,
+					 r->in.desired_encryption_types);
 
 	if (ADS_ERR_OK(status)) {
 		DEBUG(1,("machine account creation created\n"));
@@ -353,6 +417,11 @@ static ADS_STATUS libnet_join_find_machine_acct(TALLOC_CTX *mem_ctx,
 		goto done;
 	}
 
+	if (!ads_pull_uint32(r->in.ads, res, "msDS-SupportedEncryptionTypes",
+			     &r->out.set_encryption_types)) {
+		r->out.set_encryption_types = 0;
+	}
+
  done:
 	ads_msgfree(r->in.ads, res);
 	TALLOC_FREE(dn);
@@ -394,6 +463,7 @@ static ADS_STATUS libnet_join_set_machine_spn(TALLOC_CTX *mem_ctx,
 	size_t num_spns = 0;
 	char *spn = NULL;
 	bool ok;
+	const char **netbios_aliases = NULL;
 
 	/* Find our DN */
 
@@ -452,6 +522,65 @@ static ADS_STATUS libnet_join_set_machine_spn(TALLOC_CTX *mem_ctx,
 			if (!ok) {
 				return ADS_ERROR_LDAP(LDAP_NO_MEMORY);
 			}
+		}
+	}
+
+	netbios_aliases = lp_netbios_aliases();
+	if (netbios_aliases != NULL) {
+		for (; *netbios_aliases != NULL; netbios_aliases++) {
+			/*
+			 * Add HOST/NETBIOSNAME
+			 */
+			spn = talloc_asprintf(mem_ctx, "HOST/%s", *netbios_aliases);
+			if (spn == NULL) {
+				TALLOC_FREE(spn);
+				return ADS_ERROR_LDAP(LDAP_NO_MEMORY);
+			}
+			if (!strupper_m(spn)) {
+				TALLOC_FREE(spn);
+				return ADS_ERROR_LDAP(LDAP_NO_MEMORY);
+			}
+
+			ok = ads_element_in_array(spn_array, num_spns, spn);
+			if (ok) {
+				TALLOC_FREE(spn);
+				continue;
+			}
+			ok = add_string_to_array(spn_array, spn,
+						 &spn_array, &num_spns);
+			if (!ok) {
+				TALLOC_FREE(spn);
+				return ADS_ERROR_LDAP(LDAP_NO_MEMORY);
+			}
+			TALLOC_FREE(spn);
+
+			/*
+			 * Add HOST/netbiosname.domainname
+			 */
+			if (r->out.dns_domain_name == NULL) {
+				continue;
+			}
+			fstr_sprintf(my_fqdn, "%s.%s",
+				     *netbios_aliases,
+				     r->out.dns_domain_name);
+
+			spn = talloc_asprintf(mem_ctx, "HOST/%s", my_fqdn);
+			if (spn == NULL) {
+				return ADS_ERROR_LDAP(LDAP_NO_MEMORY);
+			}
+
+			ok = ads_element_in_array(spn_array, num_spns, spn);
+			if (ok) {
+				TALLOC_FREE(spn);
+				continue;
+			}
+			ok = add_string_to_array(spn_array, spn,
+						 &spn_array, &num_spns);
+			if (!ok) {
+				TALLOC_FREE(spn);
+				return ADS_ERROR_LDAP(LDAP_NO_MEMORY);
+			}
+			TALLOC_FREE(spn);
 		}
 	}
 
@@ -616,6 +745,56 @@ static ADS_STATUS libnet_join_set_os_attributes(TALLOC_CTX *mem_ctx,
 /****************************************************************
 ****************************************************************/
 
+static ADS_STATUS libnet_join_set_etypes(TALLOC_CTX *mem_ctx,
+					 struct libnet_JoinCtx *r)
+{
+	ADS_STATUS status;
+	ADS_MODLIST mods;
+	const char *etype_list_str;
+
+	etype_list_str = talloc_asprintf(mem_ctx, "%d",
+					 r->in.desired_encryption_types);
+	if (!etype_list_str) {
+		return ADS_ERROR(LDAP_NO_MEMORY);
+	}
+
+	/* Find our DN */
+
+	status = libnet_join_find_machine_acct(mem_ctx, r);
+	if (!ADS_ERR_OK(status)) {
+		return status;
+	}
+
+	if (r->in.desired_encryption_types == r->out.set_encryption_types) {
+		return ADS_SUCCESS;
+	}
+
+	/* now do the mods */
+
+	mods = ads_init_mods(mem_ctx);
+	if (!mods) {
+		return ADS_ERROR(LDAP_NO_MEMORY);
+	}
+
+	status = ads_mod_str(mem_ctx, &mods, "msDS-SupportedEncryptionTypes",
+			     etype_list_str);
+	if (!ADS_ERR_OK(status)) {
+		return status;
+	}
+
+	status = ads_gen_mod(r->in.ads, r->out.dn, mods);
+	if (!ADS_ERR_OK(status)) {
+		return status;
+	}
+
+	r->out.set_encryption_types = r->in.desired_encryption_types;
+
+	return ADS_SUCCESS;
+}
+
+/****************************************************************
+****************************************************************/
+
 static bool libnet_join_create_keytab(TALLOC_CTX *mem_ctx,
 				      struct libnet_JoinCtx *r)
 {
@@ -690,9 +869,10 @@ static ADS_STATUS libnet_join_post_processing_ads(TALLOC_CTX *mem_ctx,
 						  struct libnet_JoinCtx *r)
 {
 	ADS_STATUS status;
+	bool need_etype_update = false;
 
 	if (!r->in.ads) {
-		status = libnet_join_connect_ads(mem_ctx, r);
+		status = libnet_join_connect_ads_user(mem_ctx, r);
 		if (!ADS_ERR_OK(status)) {
 			return status;
 		}
@@ -722,6 +902,56 @@ static ADS_STATUS libnet_join_post_processing_ads(TALLOC_CTX *mem_ctx,
 			"failed to set machine upn: %s",
 			ads_errstr(status));
 		return status;
+	}
+
+	status = libnet_join_find_machine_acct(mem_ctx, r);
+	if (!ADS_ERR_OK(status)) {
+		return status;
+	}
+
+	if (r->in.desired_encryption_types != r->out.set_encryption_types) {
+		uint32_t func_level = 0;
+
+		status = ads_domain_func_level(r->in.ads, &func_level);
+		if (!ADS_ERR_OK(status)) {
+			libnet_join_set_error_string(mem_ctx, r,
+				"failed to query domain controller functional level: %s",
+				ads_errstr(status));
+			return status;
+		}
+
+		if (func_level >= DS_DOMAIN_FUNCTION_2008) {
+			need_etype_update = true;
+		}
+	}
+
+	if (need_etype_update) {
+		/*
+		 * We need to reconnect as machine account in order
+		 * to update msDS-SupportedEncryptionTypes reliable
+		 */
+
+		if (r->in.ads->auth.ccache_name != NULL) {
+			ads_kdestroy(r->in.ads->auth.ccache_name);
+		}
+
+		ads_destroy(&r->in.ads);
+
+		status = libnet_join_connect_ads_machine(mem_ctx, r);
+		if (!ADS_ERR_OK(status)) {
+			libnet_join_set_error_string(mem_ctx, r,
+				"Failed to connect as machine account: %s",
+				ads_errstr(status));
+			return status;
+		}
+
+		status = libnet_join_set_etypes(mem_ctx, r);
+		if (!ADS_ERR_OK(status)) {
+			libnet_join_set_error_string(mem_ctx, r,
+				"failed to set machine kerberos encryption types: %s",
+				ads_errstr(status));
+			return status;
+		}
 	}
 
 	if (!libnet_join_derive_salting_principal(mem_ctx, r)) {
@@ -792,7 +1022,7 @@ static NTSTATUS libnet_join_connect_dc_ipc(const char *dc,
 				   domain,
 				   pass,
 				   flags,
-				   SMB_SIGNING_DEFAULT);
+				   SMB_SIGNING_IPC_DEFAULT);
 }
 
 /****************************************************************
@@ -1347,7 +1577,7 @@ NTSTATUS libnet_join_ok(struct messaging_context *msg_ctx,
 				     machine_domain,
 				     machine_password,
 				     flags,
-				     SMB_SIGNING_DEFAULT);
+				     SMB_SIGNING_IPC_DEFAULT);
 
 	if (!NT_STATUS_IS_OK(status)) {
 		status = cli_full_connection(&cli, NULL,
@@ -1358,7 +1588,7 @@ NTSTATUS libnet_join_ok(struct messaging_context *msg_ctx,
 					     NULL,
 					     "",
 					     0,
-					     SMB_SIGNING_DEFAULT);
+					     SMB_SIGNING_IPC_DEFAULT);
 	}
 
 	if (!NT_STATUS_IS_OK(status)) {
@@ -2026,6 +2256,16 @@ WERROR libnet_init_JoinCtx(TALLOC_CTX *mem_ctx,
 
 	ctx->in.secure_channel_type = SEC_CHAN_WKSTA;
 
+	ctx->in.desired_encryption_types = ENC_CRC32 |
+					   ENC_RSA_MD5 |
+					   ENC_RC4_HMAC_MD5;
+#ifdef HAVE_ENCTYPE_AES128_CTS_HMAC_SHA1_96
+	ctx->in.desired_encryption_types |= ENC_HMAC_SHA1_96_AES128;
+#endif
+#ifdef HAVE_ENCTYPE_AES256_CTS_HMAC_SHA1_96
+	ctx->in.desired_encryption_types |= ENC_HMAC_SHA1_96_AES256;
+#endif
+
 	*r = ctx;
 
 	return WERR_OK;
@@ -2157,6 +2397,17 @@ static WERROR libnet_DomainJoin(TALLOC_CTX *mem_ctx,
 #ifdef HAVE_ADS
 	ADS_STATUS ads_status;
 #endif /* HAVE_ADS */
+	const char *pre_connect_realm = NULL;
+	const char *numeric_dcip = NULL;
+	const char *sitename = NULL;
+
+	/* Before contacting a DC, we can securely know
+	 * the realm only if the user specifies it.
+	 */
+	if (r->in.use_kerberos &&
+	    r->in.domain_name_type == JoinDomNameTypeDNS) {
+		pre_connect_realm = r->in.domain_name;
+	}
 
 	if (!r->in.dc_name) {
 		struct netr_DsRGetDCNameInfo *info;
@@ -2189,6 +2440,47 @@ static WERROR libnet_DomainJoin(TALLOC_CTX *mem_ctx,
 		dc = strip_hostname(info->dc_unc);
 		r->in.dc_name = talloc_strdup(mem_ctx, dc);
 		W_ERROR_HAVE_NO_MEMORY(r->in.dc_name);
+
+		if (info->dc_address == NULL || info->dc_address[0] != '\\' ||
+		    info->dc_address[1] != '\\') {
+			DBG_ERR("ill-formed DC address '%s'\n",
+				info->dc_address);
+			return WERR_DCNOTFOUND;
+		}
+
+		numeric_dcip = info->dc_address + 2;
+		sitename = info->dc_site_name;
+		/* info goes out of scope but the memory stays
+		   allocated on the talloc context */
+	}
+
+	if (pre_connect_realm != NULL) {
+		struct sockaddr_storage ss = {0};
+
+		if (numeric_dcip != NULL) {
+			if (!interpret_string_addr(&ss, numeric_dcip,
+						   AI_NUMERICHOST)) {
+				DBG_ERR(
+				    "cannot parse IP address '%s' of DC '%s'\n",
+				    numeric_dcip, r->in.dc_name);
+				return WERR_DCNOTFOUND;
+			}
+		} else {
+			if (!interpret_string_addr(&ss, r->in.dc_name, 0)) {
+				DBG_WARNING(
+				    "cannot resolve IP address of DC '%s'\n",
+				    r->in.dc_name);
+				return WERR_DCNOTFOUND;
+			}
+		}
+
+		/* The domain parameter is only used as modifier
+		 * to krb5.conf file name. .JOIN is is not a valid
+		 * NetBIOS name so it cannot clash with another domain
+		 * -- Uri.
+		 */
+		create_local_private_krb5_conf_for_domain(
+		    pre_connect_realm, ".JOIN", sitename, &ss);
 	}
 
 	status = libnet_join_lookup_dc_rpc(mem_ctx, r, &cli);
@@ -2210,16 +2502,36 @@ static WERROR libnet_DomainJoin(TALLOC_CTX *mem_ctx,
 		r->out.dns_domain_name, r->out.netbios_domain_name,
 		NULL, smbXcli_conn_remote_sockaddr(cli->conn));
 
-	if (r->out.domain_is_ad && r->in.account_ou &&
+	if (r->out.domain_is_ad &&
 	    !(r->in.join_flags & WKSSVC_JOIN_FLAGS_JOIN_UNSECURE)) {
 
-		ads_status = libnet_join_connect_ads(mem_ctx, r);
+		const char *initial_account_ou = r->in.account_ou;
+
+		/*
+		 * we want to create the msDS-SupportedEncryptionTypes attribute
+		 * as early as possible so always try an LDAP create as the user
+		 * first. We copy r->in.account_ou because it may be changed
+		 * during the machine pre-creation.
+		 */
+
+		ads_status = libnet_join_connect_ads_user(mem_ctx, r);
 		if (!ADS_ERR_OK(ads_status)) {
 			return WERR_DEFAULT_JOIN_REQUIRED;
 		}
 
 		ads_status = libnet_join_precreate_machine_acct(mem_ctx, r);
-		if (!ADS_ERR_OK(ads_status)) {
+		if (ADS_ERR_OK(ads_status)) {
+
+			/*
+			 * LDAP object create succeeded, now go to the rpc
+			 * password set routines
+			 */
+
+			r->in.join_flags &= ~WKSSVC_JOIN_FLAGS_ACCOUNT_CREATE;
+			goto rpc_join;
+		}
+
+		if (initial_account_ou != NULL) {
 			libnet_join_set_error_string(mem_ctx, r,
 				"failed to precreate account in ou %s: %s",
 				r->in.account_ou,
@@ -2227,10 +2539,12 @@ static WERROR libnet_DomainJoin(TALLOC_CTX *mem_ctx,
 			return WERR_DEFAULT_JOIN_REQUIRED;
 		}
 
-		r->in.join_flags &= ~WKSSVC_JOIN_FLAGS_ACCOUNT_CREATE;
+		DEBUG(5, ("failed to precreate account in ou %s: %s",
+			r->in.account_ou, ads_errstr(ads_status)));
 	}
 #endif /* HAVE_ADS */
 
+ rpc_join:
 	if ((r->in.join_flags & WKSSVC_JOIN_FLAGS_JOIN_UNSECURE) &&
 	    (r->in.join_flags & WKSSVC_JOIN_FLAGS_MACHINE_PWD_PASSED)) {
 		status = libnet_join_joindomain_rpc_unsecure(mem_ctx, r, cli);

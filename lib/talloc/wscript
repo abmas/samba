@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 APPNAME = 'talloc'
-VERSION = '2.1.5'
+VERSION = '2.1.6'
 
 
 blddir = 'bin'
@@ -133,7 +133,7 @@ def build(bld):
                 vnum=VERSION,
                 hide_symbols=True,
                 abi_directory='ABI',
-                abi_match='pytalloc_*',
+                abi_match='pytalloc_* _pytalloc_*',
                 private_library=private_library,
                 public_headers=('' if private_library else 'pytalloc.h'),
                 pc_files='pytalloc-util.pc'
@@ -158,10 +158,11 @@ def test(ctx):
     cmd = os.path.join(Utils.g_module.blddir, 'talloc_testsuite')
     ret = samba_utils.RUN_COMMAND(cmd)
     print("testsuite returned %d" % ret)
+    magic_helper_cmd = os.path.join(Utils.g_module.blddir, 'talloc_test_magic_differs_helper')
     magic_cmd = os.path.join(srcdir, 'lib', 'talloc',
                              'test_magic_differs.sh')
 
-    magic_ret = samba_utils.RUN_COMMAND(magic_cmd)
+    magic_ret = samba_utils.RUN_COMMAND(magic_cmd + " " +  magic_helper_cmd)
     print("magic differs test returned %d" % magic_ret)
     pyret = samba_utils.RUN_PYTHON_TESTS(['test_pytalloc.py'])
     print("python testsuite returned %d" % pyret)

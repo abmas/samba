@@ -1,5 +1,5 @@
 From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
-Date: Mon, 29 Feb 2016 12:04:32 -0500
+Date: Tue, 23 Aug 2016 10:25:38 -0400
 Subject: 05_share_ldb_module
 
 === modified file 'source4/param/wscript_build'
@@ -8,7 +8,7 @@ Subject: 05_share_ldb_module
  1 file changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/source4/param/wscript_build b/source4/param/wscript_build
-index 4585a83..3b845b7 100644
+index 2ad753b..6fa1c4c 100644
 --- a/source4/param/wscript_build
 +++ b/source4/param/wscript_build
 @@ -18,7 +18,7 @@ bld.SAMBA_MODULE('share_classic',

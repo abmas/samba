@@ -256,6 +256,10 @@ struct tevent_req *notifyd_send(TALLOC_CTX *mem_ctx, struct tevent_context *ev,
 		return tevent_req_post(req, ev);
 	}
 
+	/* Block those signals that we are not handling */
+	BlockSignals(True, SIGHUP);
+	BlockSignals(True, SIGUSR1);
+
 	if (ctdbd_conn == NULL) {
 		/*
 		 * No cluster around, skip the database replication
@@ -1242,7 +1246,10 @@ static int notifyd_peer_destructor(struct notifyd_peer *p)
 	struct notifyd_state *state = p->state;
 	size_t i;
 
-	dbwrap_traverse_read(p->db, notifyd_db_del_syswatches, NULL, NULL);
+	if (p->db != NULL) {
+		dbwrap_traverse_read(p->db, notifyd_db_del_syswatches,
+				     NULL, NULL);
+	}
 
 	for (i = 0; i<state->num_peers; i++) {
 		if (p == state->peers[i]) {

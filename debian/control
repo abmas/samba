@@ -4,11 +4,12 @@ Priority: optional
 Maintainer: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
 Uploaders: Steve Langasek <vorlon@debian.org>,
            Christian Perrier <bubulle@debian.org>,
-           Jelmer Vernooij <jelmer@debian.org>,
+           Jelmer Vernooĳ <jelmer@debian.org>,
            Ivo De Decker <ivodd@debian.org>,
-           Mathieu Parent <sathieu@debian.org>
+           Mathieu Parent <sathieu@debian.org>,
+           Andrew Bartlett <abartlet+debian@catalyst.net.nz>
 Homepage: http://www.samba.org
-Standards-Version: 3.9.7
+Standards-Version: 3.9.8
 Build-Depends: bison,
                debhelper (>> 9),
                dh-systemd (>= 1.5),
@@ -16,7 +17,6 @@ Build-Depends: bison,
                docbook-xsl,
                faketime,
                flex,
-               gnutls-dev,
                libacl1-dev,
                libaio-dev [linux-any],
                libarchive-dev,
@@ -25,35 +25,37 @@ Build-Depends: bison,
                libbsd-dev,
                libcap-dev [linux-any],
                libcups2-dev,
-               libheimntlm0-heimdal (>= 1.6~),
+               gnutls-dev,
                libldap2-dev,
-               libldb-dev (>= 2:1.1.25~),
+               libldb-dev (>= 2:1.1.26~),
                libncurses5-dev,
                libpam0g-dev,
                libparse-yapp-perl,
                libpcap-dev [hurd-i386 kfreebsd-any],
                libpopt-dev,
                libreadline-dev,
-               libtalloc-dev (>= 2.1.3~),
-               libtdb-dev (>= 1.3.7~),
-               libtevent-dev (>= 0.9.27~),
+               libsystemd-daemon-dev,
+               libsystemd-id128-dev,
+               libsystemd-journal-dev,
+               libsystemd-login-dev,
+               libtalloc-dev (>= 2.1.6~),
+               libtdb-dev (>= 1.3.8~),
+               libtevent-dev (>= 0.9.25~),
                perl,
-               perl-modules,
                pkg-config,
                po-debconf,
-               python3,
                python-all-dev (>= 2.6.6-3),
                python-dnspython,
-               python-ldb (>= 2:1.1.25~),
-               python-ldb-dev (>= 2:1.1.25~),
-               python-talloc-dev (>= 2.1.3~),
-               python-tdb (>= 1.3.7~),
+               python-ldb (>= 2:1.1.26~),
+               python-ldb-dev (>= 2:1.1.26~),
+               python-talloc-dev (>= 2.1.6~),
+               python-tdb (>= 1.3.8~),
                python-testtools,
+               python3,
                xsltproc,
                zlib1g-dev (>= 1:1.2.3)
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-samba/samba.git
-Vcs-Git: git://anonscm.debian.org/pkg-samba/samba.git -b master
-XS-Testsuite: autopkgtest
+Vcs-Browser: https://anonscm.debian.org/cgit/pkg-samba/samba.git
+Vcs-Git: https://anonscm.debian.org/git/pkg-samba/samba.git
 
 Package: samba
 Architecture: any
@@ -80,7 +82,8 @@ Suggests: bind9 (>= 1:9.5.1),
           ldb-tools,
           ntp,
           smbldap-tools,
-          winbind
+          winbind,
+          ufw
 Enhances: bind9, ntp
 Breaks: qtsmbstatus-server (<< 2.2.1-3~)
 Replaces: libsamdb0 (<< 4.0.0~alpha17~),
@@ -116,7 +119,7 @@ Pre-Depends: ${misc:Pre-Depends}
 Multi-Arch: same
 Architecture: any
 Section: libs
-Depends: ${ldb:Depends}, ${misc:Depends}, ${shlibs:Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}
 Breaks: libdcerpc-server0 (<< 2:4.0.9),
         libdcerpc0 (<< 2:4.0.9),
         libgensec0 (<< 2:4.0.9),
@@ -354,7 +357,7 @@ Architecture: any
 Replaces: libgensec0 (<< 4.0.0~alpha17~git20110724.dfsg1-1),
           samba-libs (<< 2:4.1.9+dfsg-2)
 Section: libs
-Depends: ${misc:Depends}, ${shlibs:Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}, ${ldb:Depends}
 Enhances: libldb1
 Description: Samba Directory Services Database
  Samba is an implementation of the SMB/CIFS protocol for Unix systems,
@@ -367,7 +370,7 @@ Description: Samba Directory Services Database
 
 Package: samba-vfs-modules
 Architecture: any
-Replaces: samba-libs (<< 2:4.1.1+dfsg-1)
+Replaces: samba-libs (<< 4.3.2+dfsg-1)
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Enhances: samba
 Description: Samba Virtual FileSystem plugins
@@ -380,7 +383,6 @@ Description: Samba Virtual FileSystem plugins
 
 Package: libsmbclient
 Section: libs
-Priority: optional
 Architecture: any
 Multi-Arch: same
 Pre-Depends: dpkg (>= 1.15.6~), ${misc:Pre-Depends}
@@ -408,7 +410,7 @@ Description: development files for libsmbclient
 Package: winbind
 Pre-Depends: ${misc:Pre-Depends}
 Architecture: any
-Depends: samba (=${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
+Depends: samba-common (= ${source:Version}), samba-common-bin (=${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
 Enhances: libkrb5-26-heimdal
 Replaces: samba-doc (<< 2:4.0.5~), winbind4
 Conflicts: samba-doc (<< 2:4.0.5~)
@@ -428,8 +430,6 @@ Description: service to resolve user and group information from Windows NT serve
  be enabled via the libpam-winbind package.
 
 Package: libpam-winbind
-Section: net
-Priority: optional
 Architecture: any
 Multi-Arch: same
 Pre-Depends: dpkg (>= 1.15.6~), ${misc:Pre-Depends}
@@ -457,8 +457,6 @@ Description: Windows domain authentication integration plugin
  winbindd server to provide Windows domain authentication to the system.
 
 Package: libnss-winbind
-Section: net
-Priority: optional
 Architecture: any
 Multi-Arch: same
 Pre-Depends: dpkg (>= 1.15.6~)
@@ -501,7 +499,6 @@ Description: Samba debugging symbols
 
 Package: libwbclient0
 Section: libs
-Priority: optional
 Architecture: any
 Multi-Arch: same
 Pre-Depends: dpkg (>= 1.15.6~), ${misc:Pre-Depends}
@@ -525,7 +522,6 @@ Description: Samba winbind client library
 
 Package: libwbclient-dev
 Section: libdevel
-Priority: optional
 Architecture: any
 Multi-Arch: same
 Depends: libwbclient0 (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}

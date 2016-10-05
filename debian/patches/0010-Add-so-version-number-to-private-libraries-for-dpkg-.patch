@@ -1,5 +1,5 @@
 From: Jeroen Dekkers <jeroen@dekkers.ch>
-Date: Mon, 29 Feb 2016 12:04:33 -0500
+Date: Tue, 23 Aug 2016 10:25:39 -0400
 Subject: Add so version number to private libraries for dpkg-shlibdeps
 
 We also want dpkg-shlibdeps to generate correct dependency information

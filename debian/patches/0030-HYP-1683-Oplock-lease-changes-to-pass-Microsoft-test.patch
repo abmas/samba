@@ -1,0 +1,81 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Fri, 1 Jul 2016 11:44:24 -0400
+Subject: HYP-1683: Oplock/lease changes to pass Microsoft test suite
+
+WPTS : reset lease and durable contexts to NULL/not requested only in the durable case.
+---
+ source3/smbd/close.c       |  6 ++++++
+ source3/smbd/smb2_break.c  | 15 +++++++++------
+ source3/smbd/smb2_create.c | 11 +++++++----
+ 3 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/source3/smbd/close.c b/source3/smbd/close.c
+index c9e38e5..634b046 100644
+--- a/source3/smbd/close.c
++++ b/source3/smbd/close.c
+@@ -668,6 +668,12 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
+ 		is_durable = false;
+ 	}
+ 
++#ifdef STRICT_RESILIENT_CHECKING
++        if ( fsp->op->global->resilient && !lp_smb2_leases() ) {
++               is_durable = false;
++        }
++#endif
++
+ 	if (is_durable) {
+ 		DATA_BLOB new_cookie = data_blob_null;
+ 
+diff --git a/source3/smbd/smb2_break.c b/source3/smbd/smb2_break.c
+index 62c59c6..607217e 100644
+--- a/source3/smbd/smb2_break.c
++++ b/source3/smbd/smb2_break.c
+@@ -77,17 +77,20 @@ NTSTATUS smbd_smb2_request_process_break(struct smbd_smb2_request *req)
+                if (in_oplock_level == SMB2_OPLOCK_LEVEL_LEASE) {
+                        return smbd_smb2_request_error(
+                                req, NT_STATUS_INVALID_PARAMETER);
+-               } else {
++               } else if ( (in_fsp->oplock_type == EXCLUSIVE_OPLOCK || in_fsp->oplock_type == BATCH_OPLOCK) &&
++                          (in_oplock_level != SMB2_OPLOCK_LEVEL_II && in_oplock_level != SMB2_OPLOCK_LEVEL_NONE ) ) {
++                       return smbd_smb2_request_error(
++                               req, NT_STATUS_INVALID_OPLOCK_PROTOCOL);
++               } else if ( (in_fsp->oplock_type == LEVEL_II_OPLOCK ) &&
++                          (in_oplock_level != NO_OPLOCK) ) {
++                       return smbd_smb2_request_error(
++                               req, NT_STATUS_INVALID_OPLOCK_PROTOCOL);
++               } else if ( in_oplock_level == LEVEL_II_OPLOCK || in_oplock_level == NO_OPLOCK ) {
+                        return smbd_smb2_request_error(
+                                req, NT_STATUS_INVALID_DEVICE_STATE);
+                }
+ 	}
+ 
+-	if (in_oplock_level != SMB2_OPLOCK_LEVEL_NONE &&
+-	    in_oplock_level != SMB2_OPLOCK_LEVEL_II) {
+-		return smbd_smb2_request_error(req, NT_STATUS_INVALID_OPLOCK_PROTOCOL);
+-	}
+-
+ 	subreq = smbd_smb2_oplock_break_send(req, req->sconn->ev_ctx,
+ 					     req, in_fsp, in_oplock_level);
+ 	if (subreq == NULL) {
+diff --git a/source3/smbd/smb2_create.c b/source3/smbd/smb2_create.c
+index 1ff51f4..0e5c399 100644
+--- a/source3/smbd/smb2_create.c
++++ b/source3/smbd/smb2_create.c
+@@ -965,10 +965,13 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
+ 					   (int)lease_len));
+ 				NDR_PRINT_DEBUG(smb2_lease, lease_ptr);
+ 			}
+-
+-			if ( ! (lease.lease_state & SMB2_LEASE_HANDLE) ) {
+-				/* According to MS_SMB2 spec, if lease handle is not requested, do not send
+-				 * durable context response.
++                        if ( ( durable_requested || do_durable_reconnect ) &&
++                             (! (lease.lease_state & SMB2_LEASE_HANDLE) ) ) {
++				/* According to MS_SMB2 spec, 
++				 * 1) if durable is requested and
++				 * 2) lease context is provided/requested and
++				 * 3) there is no handle caching lease requested.
++				 * 4) then, durable and lease context requests should be ignored.
+ 				 */
+ 				durable_requested = false;
+ 				requested_oplock_level = SMB2_OPLOCK_LEVEL_NONE;

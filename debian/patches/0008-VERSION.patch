@@ -1,5 +1,5 @@
 From: Debian Samba Maintainers <pkg-samba-maint@lists.alioth.debian.org>
-Date: Mon, 29 Feb 2016 12:04:33 -0500
+Date: Tue, 23 Aug 2016 10:25:38 -0400
 Subject: VERSION
 
 ---
@@ -7,7 +7,7 @@ Subject: VERSION
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/VERSION b/VERSION
-index 9773087..4929266 100644
+index bc1234c..76c8fe1 100644
 --- a/VERSION
 +++ b/VERSION
 @@ -123,5 +123,5 @@ SAMBA_VERSION_RELEASE_NICKNAME=
