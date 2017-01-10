@@ -69,6 +69,7 @@
 #include "tdb.h"
 #include "librpc/gen_ndr/nbt.h"
 #include "libds/common/roles.h"
+#include "libgen.h"
 
 #ifdef HAVE_HTTPCONNECTENCRYPT
 #include <cups/http.h>
@@ -1256,16 +1257,22 @@ bool handle_svtfs_lockdir(struct loadparm_context *lp_ctx, struct loadparm_servi
 		    const char *pszParmValue, char **ptr)
 {
 	int index;
-	DEBUG(0,("handle_svtfs_lockdir: PJC: entering with input %s\n", pszParmValue));
+        char * dirnamestr = strdup(pszParmValue);
+	DEBUG(3,("handle_svtfs_lockdir: entering with input %s\n", pszParmValue));
 	for (index = 0; index <= lp_svtfs_index/2; index ++)
 	{
 		if (svtfs_lockdir_path[index] && 0 == strcmp(svtfs_lockdir_path[index],pszParmValue)) {
 			/*Nothing to do */
-			DEBUG(0,("handle_svtfs_lockdir: PJC: %s already has entry, noop\n",pszParmValue));
+			DEBUG(3,("handle_svtfs_lockdir: %s already has entry, noop\n",pszParmValue));
 			return true;
 		}
 	}
-	svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
+        /* If the parent directory exists, create/use path, else, default to /etc/samba */
+        if (directory_exist(dirname(dirnamestr)) && directory_create_or_exist(pszParmValue, 0755)) {
+            svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
+        } else {
+            svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, lpcfg_lock_directory(lp_ctx));
+        }
 	lp_svtfs_index++;
 	return true;
 }
@@ -1274,12 +1281,12 @@ bool handle_svtfs_storageip(struct loadparm_context *lp_ctx, struct loadparm_ser
 		    const char *pszParmValue, char **ptr)
 {
 	int index;
-	DEBUG(0,("handle_svtfs_storageip: PJC: entering with input %s\n", pszParmValue));
+	DEBUG(3,("handle_svtfs_storageip: entering with input %s\n", pszParmValue));
 	for (index = 0; index <= lp_svtfs_index/2; index ++)
 	{
 		if (svtfs_storage_ip[index] && 0 == strcmp(svtfs_storage_ip[index],pszParmValue)) {
 			/*Nothing to do */
-			DEBUG(0,("handle_svtfs_storage_ip: PJC: %s already has entry, noop\n",pszParmValue));
+			DEBUG(3,("handle_svtfs_storage_ip: %s already has entry, noop\n",pszParmValue));
 			return true;
 		}
 	}
