@@ -1,3 +1,10 @@
+samba (2:4.4.5+dfsg-2+svt3) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-3726: Samba changes to support svtfs IP failover.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Tue, 10 Jan 2017 09:03:15 -0500
+
 samba (2:4.4.5+dfsg-2+svt2) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
