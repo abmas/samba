@@ -31,10 +31,6 @@
 #include "messages.h"
 #include "serverid.h"
 
-extern char * svtfs_storage_ip[];
-extern int svtfs_get_lockdir_index(void);
-extern void svtfs_set_lockdir_index(int);
-
 struct g_lock_ctx {
 	struct db_context *db;
 	struct messaging_context *msg;
@@ -54,77 +50,34 @@ struct g_lock_rec {
 struct g_lock_ctx *g_lock_ctx_init(TALLOC_CTX *mem_ctx,
 				   struct messaging_context *msg)
 {
-#define MAX_G_LOCK_CONTEXTS 32
-#define get_result() result[svtfs_get_lockdir_index()]
-#define set_result(value) result[svtfs_get_lockdir_index()] = value
-
-	struct g_lock_ctx *result[MAX_G_LOCK_CONTEXTS] = {NULL};
-
+	struct g_lock_ctx *result;
 	char *db_path;
-	int index,saved_index;
-	bool return_null = false;
 
-	index = 0;
-	saved_index = svtfs_get_lockdir_index();
-
-	set_result(talloc(mem_ctx, struct g_lock_ctx));
-	if (get_result() == NULL) {
+	result = talloc(mem_ctx, struct g_lock_ctx);
+	if (result == NULL) {
 		return NULL;
 	}
-	get_result()->msg = msg;
+	result->msg = msg;
 
-	svtfs_set_lockdir_index(index);
-	DEBUG(5, ("g_lock_ctx_init: setting lockdir_index of 0\n"));
-
-	while (1) {
-
-		db_path = svtfs_lock_path("g_lock.tdb");
-		if (db_path == NULL) {
-			TALLOC_FREE(get_result());
-			return_null = true;
-			break;
-		}
-
-		if (get_result() == NULL) {
-			set_result(talloc(mem_ctx, struct g_lock_ctx));
-			if (get_result() == NULL) {
-				return_null = true;
-				break;
-			}
-		}
-			
-		get_result()->db = db_open(get_result(), db_path, 0,
-				     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
-				     O_RDWR|O_CREAT, 0600,
-				     DBWRAP_LOCK_ORDER_2,
-				     DBWRAP_FLAG_NONE);
-		TALLOC_FREE(db_path);
-		if (get_result()->db == NULL) {
-			DEBUG(1, ("g_lock_ctx_init: Could not open g_lock.tdb\n"));
-			TALLOC_FREE(get_result());
-			return_null = true;
-			break;
-		}
-		dbwrap_watch_db(get_result()->db, msg);
-
-		index++;
-		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_G_LOCK_CONTEXTS ) ) {
-                        DEBUG(5, ("g_lock_ctx_init: breaking with lockdir_index of %i\n", index));
-			break;
-		}
-
-		DEBUG(5, ("g_lock_ctx_init: setting lockdir_index of %i\n", index));
-		svtfs_set_lockdir_index(index);
-	} /* end while(1) */
-
-	DEBUG(5, ("g_lock_ctx_init: setting lockdir_index back to %d\n", saved_index));
-	svtfs_set_lockdir_index(saved_index);
-
-	if ( return_null == true ) {
+	db_path = lock_path("g_lock.tdb");
+	if (db_path == NULL) {
+		TALLOC_FREE(result);
 		return NULL;
-	} else {
-		return get_result();
 	}
+
+	result->db = db_open(result, db_path, 0,
+			     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+			     O_RDWR|O_CREAT, 0600,
+			     DBWRAP_LOCK_ORDER_2,
+			     DBWRAP_FLAG_NONE);
+	TALLOC_FREE(db_path);
+	if (result->db == NULL) {
+		DEBUG(1, ("g_lock_init: Could not open g_lock.tdb\n"));
+		TALLOC_FREE(result);
+		return NULL;
+	}
+	dbwrap_watch_db(result->db, msg);
+	return result;
 }
 
 static bool g_lock_conflicts(enum g_lock_type l1, enum g_lock_type l2)

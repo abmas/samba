@@ -156,3 +156,29 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
 	}
 	return result;
 }
+
+/* SVT function to close DB for index during failback */
+
+void closedb_for_index (struct db_context * db_ctx[], int index)
+{
+	struct db_tdb_ctx * tdb_context;
+	DEBUG(3, ("closedb_for_index called with db_context %p and index %d\n", db_ctx[index], index));
+
+        if (db_ctx[index] != NULL ) {
+            /*close db
+            db_context->private_data is struct db_tdb_ctx *.
+            db_context->private_data->wtdb is struct tdb_wrap *;
+            db_context->private_data->wtdb->tdb is finally, but to close the tdb,
+            all we need to do is TALLOC_FREE the tdb_wrap *.
+            */
+            if (db_ctx[index]->private_data) {
+		tdb_context = (struct db_tdb_ctx *) db_ctx[index]->private_data;
+                /* freeing wtdb causes the tdb file to be closed */
+		DEBUG(2, ("closedb_for_index closing tdb at 0x%p \n",tdb_context->wtdb));
+                TALLOC_FREE(tdb_context->wtdb);
+                TALLOC_FREE(tdb_context);
+            }
+            TALLOC_FREE(db_ctx[index]);
+	    db_ctx[index] = NULL;
+        }
+}

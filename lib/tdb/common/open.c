@@ -779,6 +779,7 @@ _PUBLIC_ int tdb_close(struct tdb_context *tdb)
 {
 	struct tdb_context **i;
 	int ret = 0;
+	TDB_LOG((tdb, TDB_DEBUG_TRACE,"tdb_close called on %s\n",tdb->name));
 
 	if (tdb->transaction) {
 		tdb_transaction_cancel(tdb);
@@ -796,6 +797,7 @@ _PUBLIC_ int tdb_close(struct tdb_context *tdb)
 
 	SAFE_FREE(tdb->name);
 	if (tdb->fd != -1) {
+		TDB_LOG((tdb, TDB_DEBUG_TRACE,"tdb_close: closing file descriptor %d\n",tdb->fd));
 		ret = close(tdb->fd);
 		tdb->fd = -1;
 	}
@@ -812,6 +814,7 @@ _PUBLIC_ int tdb_close(struct tdb_context *tdb)
 #ifdef TDB_TRACE
 	close(tdb->tracefd);
 #endif
+	TDB_LOG((tdb, TDB_DEBUG_TRACE,"tdb_close returning\n"));
 	memset(tdb, 0, sizeof(*tdb));
 	SAFE_FREE(tdb);
 

@@ -39,7 +39,7 @@ extern void svtfs_set_lockdir_index(int);
 #define get_leases_db() leases_db[svtfs_get_lockdir_index()]
 #define set_leases_db(value) leases_db[svtfs_get_lockdir_index()] = value
 
-static struct db_context *leases_db[MAX_LEASES_DBS] = {NULL};
+struct db_context *leases_db[MAX_LEASES_DBS] = {NULL};
 
 extern bool smbXsrv_lookup_persistent_id(uint64_t);
 
@@ -164,7 +164,7 @@ bool leases_db_init(bool read_only)
 
 		if (get_leases_db()) {
 			return_bool = true;
-			break;
+			goto nextIndex;
 		}
 
 		db_path = svtfs_lock_path("leases.tdb");
@@ -208,6 +208,7 @@ bool leases_db_init(bool read_only)
 			}
 		}
 
+nextIndex:
 		index++;
 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LEASES_DBS ) ) {
 			DEBUG(5, ("leases_db_init: breaking with lockdir_index of %i\n", index));

@@ -32,4 +32,13 @@ struct db_context *db_open_tdb(TALLOC_CTX *mem_ctx,
 			       uint64_t dbwrap_flags);
 
 
+struct db_tdb_ctx {
+	struct tdb_wrap *wtdb;
+
+	struct {
+		dev_t dev;
+		ino_t ino;
+	} id;
+};
+
 #endif /* __DBWRAP_TDB_H__ */

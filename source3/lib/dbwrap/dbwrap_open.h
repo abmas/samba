@@ -42,4 +42,5 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
 			   enum dbwrap_lock_order lock_order,
 			   uint64_t dbwrap_flags);
 
+void closedb_for_index (struct db_context * db_ctx[], int index);
 #endif /* __DBWRAP_OPEN_H__ */

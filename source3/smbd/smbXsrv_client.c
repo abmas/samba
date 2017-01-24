@@ -56,7 +56,7 @@ struct smbXsrv_client_table {
 #define get_smbXsrv_client_global_db_ctx() smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()]
 #define set_smbXsrv_client_global_db_ctx(value) smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()] = value
 
-static struct db_context *smbXsrv_client_global_db_ctx[MAX_CLIENT_GLOBAL_DB_CONTEXTS] = {NULL};
+struct db_context *smbXsrv_client_global_db_ctx[MAX_CLIENT_GLOBAL_DB_CONTEXTS] = {NULL};
 
 NTSTATUS smbXsrv_client_global_init(void)
 {
@@ -74,7 +74,7 @@ NTSTATUS smbXsrv_client_global_init(void)
 	while (1) {
 
 		if (get_smbXsrv_client_global_db_ctx() != NULL) {
-			break;
+			goto nextIndex;
 		}
 
 		/*
@@ -102,6 +102,7 @@ NTSTATUS smbXsrv_client_global_init(void)
 
 		set_smbXsrv_client_global_db_ctx(db_ctx);
 
+nextIndex:
 		index++;
 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_CLIENT_GLOBAL_DB_CONTEXTS ) ) {
 			DEBUG(5, ("smbXsrv_client_global_init: breaking with lockdir_index of %i\n", index));

@@ -26,15 +26,6 @@
 #include "system/filesys.h"
 #include "lib/param/param.h"
 
-struct db_tdb_ctx {
-	struct tdb_wrap *wtdb;
-
-	struct {
-		dev_t dev;
-		ino_t ino;
-	} id;
-};
-
 static NTSTATUS db_tdb_store(struct db_record *rec, TDB_DATA data, int flag);
 static NTSTATUS db_tdb_delete(struct db_record *rec);
 

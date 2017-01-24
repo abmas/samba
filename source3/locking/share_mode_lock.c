@@ -64,7 +64,7 @@ extern void svtfs_set_lockdir_index(int);
 #define get_lock_db() lock_db[svtfs_get_lockdir_index()]
 #define set_lock_db(value) lock_db[svtfs_get_lockdir_index()] = value
 
-static struct db_context *lock_db[MAX_LOCK_DBS] = {NULL};
+struct db_context *lock_db[MAX_LOCK_DBS] = {NULL};
 
 /* forward decl */
 static TDB_DATA unparse_share_modes(struct share_mode_data *d);
@@ -169,7 +169,7 @@ static bool locking_init_internal(bool read_only)
 		brl_init(read_only);
 
 		if (get_lock_db())
-			break;
+			goto nextIndex;
 
 		db_path = svtfs_lock_path("locking.tdb");
 		if (db_path == NULL) {
@@ -222,6 +222,7 @@ static bool locking_init_internal(bool read_only)
 
 		dbwrap_watch_db(get_lock_db(), server_messaging_context());
 
+nextIndex:
 		index++;
 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
 			DEBUG(5, ("locking_init_internal: breaking with lockdir_index of %i\n", index));

@@ -65,7 +65,7 @@ static struct db_context *serverid_db(void)
 	while (1) {
 
 		if (get_db() != NULL) {
-			break;
+			goto nextIndex;
 		}
 
 		db_path = svtfs_lock_path("serverid.tdb");
@@ -79,7 +79,7 @@ static struct db_context *serverid_db(void)
 			     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_2,
 			     DBWRAP_FLAG_NONE));
 		TALLOC_FREE(db_path);
-
+nextIndex:
 		index++;
 		if  ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_DBS ) ) {
 			DEBUG(5, ("serverid_db: breaking with lockdir_index of %i\n", index));

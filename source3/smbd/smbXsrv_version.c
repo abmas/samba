@@ -51,7 +51,7 @@ extern void svtfs_set_lockdir_index(int);
 #define get_smbXsrv_version_global_db_ctx() smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()]
 #define set_smbXsrv_version_global_db_ctx(value) smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()] = value
 
-static struct db_context *smbXsrv_version_global_db_ctx[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {NULL};
+struct db_context *smbXsrv_version_global_db_ctx[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {NULL};
 
 #define get_smbXsrv_version_global_current_version() smbXsrv_version_global_current_version[svtfs_get_lockdir_index()]
 #define set_smbXsrv_version_global_current_version(value) smbXsrv_version_global_current_version[svtfs_get_lockdir_index()] = value
@@ -90,7 +90,7 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
 	while (1) {
 
 		if (get_smbXsrv_version_global_db_ctx() != NULL) {
-			break;
+			goto nextIndex;
 		}
 
 		global_path = svtfs_lock_path("smbXsrv_version_global.tdb");
@@ -271,6 +271,7 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
 		set_smbXsrv_version_global_db_ctx(db_ctx);
 		set_smbXsrv_version_global_current_version(global_blob.version);
 
+nextIndex:
 		index++;
 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_VERSION_GLOBAL_DB_CONTEXTS ) ) {
 			DEBUG(5, ("smbXsrv_version_global_init: breaking with lockdir_index of %i\n", index));

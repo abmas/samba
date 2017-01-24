@@ -30,6 +30,7 @@
 #include "auth.h"
 #include "messages.h"
 #include "lib/param/loadparm.h"
+#include "../lib/tsocket/tsocket.h"
 
 /*
  * The persistent pcap cache is populated by the background print process. Per
@@ -118,6 +119,7 @@ void delete_and_reload_printers(struct tevent_context *ev,
 /****************************************************************************
  Reload the services file.
 **************************************************************************/
+extern void reset_tmp_svtfs_lockdir_storageip(void);
 
 bool reload_services(struct smbd_server_connection *sconn,
 		     bool (*snumused) (struct smbd_server_connection *, int),
@@ -142,6 +144,8 @@ bool reload_services(struct smbd_server_connection *sconn,
 		return(True);
 
 	lp_killunused(sconn, snumused);
+
+	reset_tmp_svtfs_lockdir_storageip();
 
 	ret = lp_load_with_shares(get_dyn_CONFIGFILE());
 
@@ -169,4 +173,49 @@ bool reload_services(struct smbd_server_connection *sconn,
 	set_current_service(NULL,0,True);
 
 	return(ret);
+}
+
+extern void closedb_for_index( struct db_context **, int);
+extern void get_removed_svtfs_lockdir_storageip_indices (int * indexArray);
+extern struct db_context * brlock_db[], * leases_db[], * lock_db[], * smbXsrv_client_global_db_ctx[], * smbXsrv_open_global_db_ctx[], * smbXsrv_tcon_global_db_ctx[], * smbXsrv_session_global_db_ctx[], * smbXsrv_version_global_db_ctx[];
+#define MAX_LOCKDIRS 32
+extern char * svtfs_storage_ip[];
+extern char * svtfs_lockdir_path[];
+
+void closedbs_not_owned(struct smbd_server_connection * sconn)
+{
+        int indexArray[MAX_LOCKDIRS], i, j;
+        char * storip = NULL;
+        if (sconn) {
+                if (tsocket_address_is_inet(sconn->local_address, "ip")) {
+                        storip = tsocket_address_inet_addr_string( sconn->local_address, talloc_tos());
+                        DEBUG(1, ("closedbs_not_owned: storage_ip for this connection = %s\n", storip));
+                }
+        }
+
+        for (i=0; i < MAX_LOCKDIRS; i++) indexArray[i]=-1;
+        get_removed_svtfs_lockdir_storageip_indices(&indexArray[0]);
+        for (i=0; i < MAX_LOCKDIRS; i++)
+        {
+                j = indexArray[i];
+                if (j == -1) continue;
+                if (storip) {
+                        DEBUG(1, ("closedbs_not_owned: storage_ip for this connection = %s, storeip for index = %s\n", storip,svtfs_storage_ip[j]));
+                        /*exit_server_cleanly("svtfs: Exiting because the storage IP is gone!");*/
+                        if (strcmp(svtfs_storage_ip[j],storip) == 0) exit(0);
+                }
+                closedb_for_index (brlock_db, j);
+                closedb_for_index (leases_db, j);
+                closedb_for_index (lock_db, j);
+                closedb_for_index (smbXsrv_client_global_db_ctx, j);
+                closedb_for_index (smbXsrv_open_global_db_ctx, j);
+                closedb_for_index (smbXsrv_tcon_global_db_ctx, j);
+                closedb_for_index (smbXsrv_session_global_db_ctx, j);
+                closedb_for_index (smbXsrv_version_global_db_ctx, j);
+                if (svtfs_lockdir_path[j] != NULL) {
+                        talloc_free(svtfs_lockdir_path[j]);
+                        svtfs_lockdir_path[j]=NULL;
+                }
+                if (svtfs_storage_ip[j] != NULL) {talloc_free(svtfs_storage_ip[j]); svtfs_storage_ip[j]=NULL;}
+        }
 }

@@ -79,11 +79,11 @@
 
 #include "lib/param/param_global.h"
 
-static int lp_svtfs_index = 0; /* Ashok: remember to reset on smb.conf reload.*/
-
 #define MAX_SVTFS_LOCKDIR_PATHS 32
 char  * svtfs_storage_ip[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
 char  * svtfs_lockdir_path[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
+char  * tmp_svtfs_storage_ip[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
+char  * tmp_svtfs_lockdir_path[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
 volatile int svtfs_lockdir_index = 0;
 
 struct loadparm_service *lpcfg_default_service(struct loadparm_context *lp_ctx)
@@ -1253,46 +1253,81 @@ bool handle_logfile(struct loadparm_context *lp_ctx, struct loadparm_service *se
 	return true;
 }
 
+void reset_tmp_svtfs_lockdir_storageip (void)
+{
+	int i;
+	DEBUG(3,("reset_tmp_svtfs_lockdir_storageip: called\n"));
+	for (i = 0; i < MAX_SVTFS_LOCKDIR_PATHS; i++)
+	{
+		tmp_svtfs_lockdir_path[i]=NULL;
+		tmp_svtfs_storage_ip[i]=NULL;
+	}
+}
+
+void get_removed_svtfs_lockdir_storageip_indices (int * indexArray)
+{
+	int i, j=0;
+	DEBUG(3,("get_removed_svtfs_lockdir_storageip_indices: called\n"));
+	for (i = 0; i < MAX_SVTFS_LOCKDIR_PATHS; i++)
+	{
+		if (svtfs_lockdir_path[i] != NULL  && tmp_svtfs_lockdir_path[i] == NULL ) {
+			indexArray[j] = i;
+			j++;
+			DEBUG(3,("get_removed_svtfs_lockdir_storageip_indices: Adding %d to list to be removed.\n", i));
+		}
+	}
+	DEBUG(3,("get_removed_svtfs_lockdir_storageip_indices: returning\n"));
+}
+
 bool handle_svtfs_lockdir(struct loadparm_context *lp_ctx, struct loadparm_service *service,
 		    const char *pszParmValue, char **ptr)
 {
-	int index;
+        int index;
         char * dirnamestr = strdup(pszParmValue);
-	DEBUG(3,("handle_svtfs_lockdir: entering with input %s\n", pszParmValue));
-	for (index = 0; index <= lp_svtfs_index/2; index ++)
-	{
-		if (svtfs_lockdir_path[index] && 0 == strcmp(svtfs_lockdir_path[index],pszParmValue)) {
-			/*Nothing to do */
-			DEBUG(3,("handle_svtfs_lockdir: %s already has entry, noop\n",pszParmValue));
-			return true;
-		}
-	}
+        DEBUG(3,("handle_svtfs_lockdir: entering with input %s\n", pszParmValue));
+        for (index = 0; index < MAX_SVTFS_LOCKDIR_PATHS; index ++)
+        {
+                if ( svtfs_lockdir_path[index] == NULL ) break;
+                if ( 0 == strcmp(svtfs_lockdir_path[index],pszParmValue)) {
+                        /*keep running count of entries this time around. used to remove stale entries*/
+                        tmp_svtfs_lockdir_path[index] = svtfs_lockdir_path[index];
+                        DEBUG(3,("handle_svtfs_lockdir: %s already has entry, noop\n",pszParmValue));
+                        return true;
+                }
+        }
         /* If the parent directory exists, create/use path, else, default to /etc/samba */
         if (directory_exist(dirname(dirnamestr)) && directory_create_or_exist(pszParmValue, 0755)) {
-            svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
+                svtfs_lockdir_path[index] = talloc_strdup(NULL, pszParmValue);
         } else {
-            svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, lpcfg_lock_directory(lp_ctx));
+                svtfs_lockdir_path[index] = talloc_strdup(NULL, lpcfg_lock_directory(lp_ctx));
         }
-	lp_svtfs_index++;
-	return true;
+        /*keep running count of entries this time around. used to remove stale entries*/
+        tmp_svtfs_lockdir_path[index] = svtfs_lockdir_path[index];
+        DEBUG(3,("handle_svtfs_lockdir: setting svtfs_lockdir_path[%d] and tmp_svtfs_lockdir_path[%d] to %s\n",\
+                index,index,svtfs_lockdir_path[index]));
+        return true;
 }
 
 bool handle_svtfs_storageip(struct loadparm_context *lp_ctx, struct loadparm_service *service,
 		    const char *pszParmValue, char **ptr)
 {
-	int index;
-	DEBUG(3,("handle_svtfs_storageip: entering with input %s\n", pszParmValue));
-	for (index = 0; index <= lp_svtfs_index/2; index ++)
-	{
-		if (svtfs_storage_ip[index] && 0 == strcmp(svtfs_storage_ip[index],pszParmValue)) {
-			/*Nothing to do */
-			DEBUG(3,("handle_svtfs_storage_ip: %s already has entry, noop\n",pszParmValue));
-			return true;
-		}
-	}
-	svtfs_storage_ip[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
-        lp_svtfs_index++;
-	return true;
+        int index;
+        DEBUG(3,("handle_svtfs_storageip: entering with input %s\n", pszParmValue));
+        for (index = 0; index <= index; index ++)
+        {
+                if (svtfs_storage_ip[index] == NULL ) break;
+                if ( 0 == strcmp(svtfs_storage_ip[index],pszParmValue)) {
+                        /*keep running count of entries this time around. used to remove stale entries*/
+                        tmp_svtfs_storage_ip[index] = svtfs_storage_ip[index];
+                        DEBUG(3,("handle_svtfs_storage_ip: %s already has entry, noop\n",pszParmValue));
+                        return true;
+                }
+        }
+        svtfs_storage_ip[index] = talloc_strdup(NULL, pszParmValue);
+        tmp_svtfs_storage_ip[index] = svtfs_storage_ip[index];
+        DEBUG(3,("handle_svtfs_lockdir: setting svtfs_storage_ip[%d] and tmp_svtfs_storage_ip[%d] to %s\n",\
+                index,index,svtfs_storage_ip[index]));
+        return true;
 }
 
 /*

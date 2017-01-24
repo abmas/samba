@@ -66,7 +66,7 @@ extern void svtfs_set_lockdir_index(int);
 #define get_smbXsrv_open_global_db_ctx() smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()]
 #define set_smbXsrv_open_global_db_ctx(value) smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()] = value
 
-static struct db_context *smbXsrv_open_global_db_ctx[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {NULL};
+struct db_context *smbXsrv_open_global_db_ctx[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {NULL};
 
 struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
 
@@ -185,7 +185,7 @@ NTSTATUS smbXsrv_open_global_init(void)
 	while (1) {
 
 		if (get_smbXsrv_open_global_db_ctx() != NULL) {
-			break;
+			goto nextIndex;
 		}
 
 		global_path = svtfs_lock_path("smbXsrv_open_global.tdb");
@@ -213,6 +213,7 @@ NTSTATUS smbXsrv_open_global_init(void)
 					 smbXsrv_open_global_traverse_persist_fn,
 					 NULL, NULL);
 
+nextIndex:
 		index++;
 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
 			DEBUG(5, ("smbXsrv_session_open_init: breaking with lockdir_index of %i\n", index));

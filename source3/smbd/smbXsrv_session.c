@@ -59,7 +59,7 @@ extern void svtfs_set_lockdir_index(int);
 #define get_smbXsrv_session_global_db_ctx() smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()]
 #define set_smbXsrv_session_global_db_ctx(value) smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()] = value
 
-static struct db_context *smbXsrv_session_global_db_ctx[MAX_SESSION_GLOBAL_DB_CONTEXTS] = {NULL};
+struct db_context *smbXsrv_session_global_db_ctx[MAX_SESSION_GLOBAL_DB_CONTEXTS] = {NULL};
 
 NTSTATUS smbXsrv_session_global_init(void)
 {
@@ -76,7 +76,7 @@ NTSTATUS smbXsrv_session_global_init(void)
 
 	while (1) {
 		if (get_smbXsrv_session_global_db_ctx() != NULL) {
-			break;
+			goto nextIndex;
 		}
 
 		/*
@@ -104,6 +104,7 @@ NTSTATUS smbXsrv_session_global_init(void)
 
 		set_smbXsrv_session_global_db_ctx(db_ctx);
 
+nextIndex:
 		index++;
 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_SESSION_GLOBAL_DB_CONTEXTS ) ) {
 			DEBUG(5, ("smbXsrv_session_global_init: breaking with lockdir_index of %i\n", index));

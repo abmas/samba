@@ -48,7 +48,7 @@ extern void svtfs_set_lockdir_index(int);
 #define get_brlock_db() brlock_db[svtfs_get_lockdir_index()]
 #define set_brlock_db(value) brlock_db[svtfs_get_lockdir_index()] = value
 
-static struct db_context *brlock_db[MAX_BRLOCK_DBS] = {NULL};
+struct db_context *brlock_db[MAX_BRLOCK_DBS] = {NULL};
 
 struct byte_range_lock {
 	struct files_struct *fsp;
@@ -367,7 +367,7 @@ void brl_init(bool read_only)
 	while (1) {
 
 		if (get_brlock_db()) {
-			break;
+			goto nextIndex;
 		}
 
 		tdb_flags = TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH;
@@ -416,7 +416,7 @@ void brl_init(bool read_only)
 			}
 		}
 		TALLOC_FREE(db_path);
-
+nextIndex:
 		index++;
 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_BRLOCK_DBS ) ) {
 			DEBUG(5, ("brl_init: breaking with lockdir_index of %i\n", index));

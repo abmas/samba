@@ -52,13 +52,18 @@
 #include "smbd/smbd_cleanupd.h"
 #include "lib/util/sys_rw.h"
 
-#define MAX_LOCKDIRS 32
-
 #ifdef CLUSTER_SUPPORT
 #include "ctdb_protocol.h"
 #endif
 
+#ifndef SIMPLIVITY
+#define SIMPLIVITY true
+#endif
+
+#define MAX_SVTFS_PATHS 32
+
 extern char * svtfs_storage_ip[];
+extern char * svtfs_lockdir_path[];
 extern int svtfs_get_lockdir_index(void);
 extern void svtfs_set_lockdir_index(int);
 
@@ -107,6 +112,44 @@ extern void start_fssd(struct tevent_context *ev_ctx,
 extern void start_mdssd(struct tevent_context *ev_ctx,
 			struct messaging_context *msg_ctx);
 
+/* svt specific. init of specific tdbs on reload (performed during failover/failback*/
+static void reinit_svtfs_tdbs_on_reload(struct messaging_context *msg_ctx, struct tevent_context *ev_ctx)
+{
+	NTSTATUS status;
+	struct server_id server_id;
+
+       if (!serverid_parent_init(ev_ctx)) {
+                exit_daemon("Samba cannot reinit server id", EACCES);
+        }
+
+        server_id = messaging_server_id(msg_ctx);
+        status = smbXsrv_version_global_init(&server_id);
+        if (!NT_STATUS_IS_OK(status)) {
+                exit_daemon("Samba cannot reinit server context", EACCES);
+        }
+
+        status = smbXsrv_session_global_init();
+        if (!NT_STATUS_IS_OK(status)) {
+                exit_daemon("Samba cannot reinit session context", EACCES);
+        }
+
+        status = smbXsrv_tcon_global_init();
+        if (!NT_STATUS_IS_OK(status)) {
+                exit_daemon("Samba cannot reinit tcon context", EACCES);
+        }
+        status = smbXsrv_open_global_init();
+        if (!NT_STATUS_IS_OK(status)) {
+                exit_daemon("Samba cannot reinit global open", map_errno_from_nt_status(status));
+        }
+
+        if (!leases_db_init(false)) {
+                exit_daemon("Samba cannot reinit leases", EACCES);
+        }
+
+        if (!locking_init())
+                exit_daemon("Samba cannot reinit locking", EACCES);
+}
+
 /*******************************************************************
  What to do when smb.conf is updated.
  ********************************************************************/
@@ -117,14 +160,15 @@ static void smbd_parent_conf_updated(struct messaging_context *msg,
 				     struct server_id server_id,
 				     DATA_BLOB *data)
 {
-	struct tevent_context *ev_ctx =
-		talloc_get_type_abort(private_data, struct tevent_context);
-
-	DEBUG(10,("smbd_parent_conf_updated: Got message saying smb.conf was "
-		  "updated. Reloading.\n"));
-	change_to_root_user();
-	reload_services(NULL, NULL, false);
-	printing_subsystem_update(ev_ctx, msg, false);
+#ifndef SIMPLIVITY
+        struct tevent_context *ev_ctx =
+                talloc_get_type_abort(private_data, struct tevent_context);
+#endif
+        change_to_root_user();
+        reload_services(NULL, NULL, false);
+#ifndef SIMPLIVITY
+        printing_subsystem_update(ev_ctx, msg, false);
+#endif
 }
 
 /*******************************************************************
@@ -947,6 +991,28 @@ static bool open_sockets_smbd(struct smbd_parent_context *parent,
 				}
 			}
 		}
+		/* Now do the storage IP addresses */
+                for (i = 0; i < MAX_SVTFS_PATHS; i++) {
+                        struct sockaddr_storage ifs;
+                        if (svtfs_storage_ip[i] != NULL) {
+                                interpret_string_addr_prefer_ipv4(&ifs, svtfs_storage_ip[i], 0);
+                                for (j = 0; ports && ports[j]; j++) {
+                                        unsigned port = atoi(ports[j]);
+                                        /* Keep the first port for mDNS service
+                                        * registration.
+                                        */
+                                        if (dns_port == 0) {
+                                                dns_port = port;
+                                        }
+                                        if (!smbd_open_one_socket(parent,
+                                                                ev_ctx,
+                                                                &ifs,
+                                                                port)) {
+                                                return false;
+                                        }
+                                }
+                        }
+                }
 	} else {
 		/* Just bind to 0.0.0.0 - accept connections
 		   from anywhere. */
@@ -1182,12 +1248,39 @@ static void smbd_parent_sig_hup_handler(struct tevent_context *ev,
 	struct smbd_parent_context *parent =
 		talloc_get_type_abort(private_data,
 		struct smbd_parent_context);
+        int no_svtfs = 0, yes_svtfs = 0;
 
+	DEBUG(3,("smbd_parent_sighup_handler: Got message saying smb.conf was "
+		  "updated. Reloading.\n"));
 	change_to_root_user();
+        if (svtfs_lockdir_path[svtfs_get_lockdir_index()] == NULL || strstr(svtfs_lockdir_path[svtfs_get_lockdir_index()],"svtfs") == NULL)
+        {
+               /* Starting state is no svtfs*/
+               no_svtfs = 1;
+        }
+
 	DEBUG(1,("parent: Reloading services after SIGHUP\n"));
 	reload_services(NULL, NULL, false);
-
+        if (svtfs_lockdir_path[svtfs_get_lockdir_index()] != NULL && strstr(svtfs_lockdir_path[svtfs_get_lockdir_index()],"svtfs"))
+        {
+               /* new lockdir path within svtfs specified */
+               yes_svtfs = 1;
+        }
+        /* If we started out with svtfs and it got added, just a reload is not going to cut it*/
+        /* or if we had svtfs, but it went away, restart as well */
+        /* issue a samba restart, but background it. */
+        if ((no_svtfs && yes_svtfs) || (!no_svtfs && !yes_svtfs))
+        {
+               system("/etc/init.d/samba restart &");
+               return;
+        }
+        closedbs_not_owned(NULL);
+        reinit_svtfs_tdbs_on_reload(parent->msg_ctx, parent->ev_ctx);
+        if (!open_sockets_smbd(parent, parent->ev_ctx, parent->msg_ctx, NULL))
+                exit_server("open_sockets_smbd() failed");
+#ifndef SIMPLIVITY
 	printing_subsystem_update(parent->ev_ctx, parent->msg_ctx, true);
+#endif
 }
 
 /****************************************************************************
@@ -1213,7 +1306,6 @@ extern void build_options(bool screen);
 	int opt;
 	poptContext pc;
 	bool print_build_options = False;
-	int index,saved_index;
         enum {
 		OPT_DAEMON = 1000,
 		OPT_INTERACTIVE,
@@ -1578,6 +1670,14 @@ extern void build_options(bool screen);
 		exit_daemon("Samba cannot create a SAM SID", EACCES);
 	}
 
+	if (!smbd_notifyd_init(msg_ctx, interactive)) {
+		exit_daemon("Samba cannot init notification", EACCES);
+	}
+
+	if (!cleanupd_init(msg_ctx, interactive, &parent->cleanupd)) {
+		exit_daemon("Samba cannot init the cleanupd", EACCES);
+	}
+
 	server_id = messaging_server_id(msg_ctx);
 	status = smbXsrv_version_global_init(&server_id);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -1592,14 +1692,6 @@ extern void build_options(bool screen);
 	status = smbXsrv_tcon_global_init();
 	if (!NT_STATUS_IS_OK(status)) {
 		exit_daemon("Samba cannot init tcon context", EACCES);
-	}
-
-	if (!smbd_notifyd_init(msg_ctx, interactive)) {
-		exit_daemon("Samba cannot init notification", EACCES);
-	}
-
-	if (!cleanupd_init(msg_ctx, interactive, &parent->cleanupd)) {
-		exit_daemon("Samba cannot init the cleanupd", EACCES);
 	}
 
 	if (!messaging_parent_dgm_cleanup_init(msg_ctx)) {
@@ -1702,6 +1794,7 @@ extern void build_options(bool screen);
 			start_fssd(ev_ctx, msg_ctx);
 		}
 
+#ifndef SIMPLIVITY
 		if (!lp__disable_spoolss() &&
 		    (rpc_spoolss_daemon() != RPC_DAEMON_DISABLED)) {
 			bool bgq = lp_parm_bool(-1, "smbd", "backgroundqueue", true);
@@ -1710,6 +1803,7 @@ extern void build_options(bool screen);
 				exit_daemon("Samba failed to init printing subsystem", EACCES);
 			}
 		}
+#endif
 
 #ifdef WITH_SPOTLIGHT
 		if ((rpc_mdssvc_mode() == RPC_SERVICE_MODE_EXTERNAL) &&
@@ -1717,11 +1811,13 @@ extern void build_options(bool screen);
 			start_mdssd(ev_ctx, msg_ctx);
 		}
 #endif
+#ifndef SIMPLIVITY
 	} else if (!lp__disable_spoolss() &&
 		   (rpc_spoolss_daemon() != RPC_DAEMON_DISABLED)) {
 		if (!printing_subsystem_init(ev_ctx, msg_ctx, false, false)) {
 			exit(1);
 		}
+#endif
 	}
 
 	if (!is_daemon) {
@@ -1754,12 +1850,14 @@ extern void build_options(bool screen);
 	if (!open_sockets_smbd(parent, ev_ctx, msg_ctx, ports))
 		exit_server("open_sockets_smbd() failed");
 
+#ifndef SIMPLIVITY
 	/* do a printer update now that all messaging has been set up,
 	 * before we allow clients to start connecting */
 	if (!lp__disable_spoolss() &&
 	    (rpc_spoolss_daemon() != RPC_DAEMON_DISABLED)) {
 		printing_subsystem_update(ev_ctx, msg_ctx, false);
 	}
+#endif
 
 	TALLOC_FREE(frame);
 	/* make sure we always have a valid stackframe */
