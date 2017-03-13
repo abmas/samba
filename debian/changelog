@@ -1,3 +1,11 @@
+samba (2:4.4.5+dfsg-2+svt4) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-3234: reload on failover/failback, misc changes
+  * HYP-3234: Changes to support reload on failover/failback
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Mon, 13 Mar 2017 19:33:00 -0400
+
 samba (2:4.4.5+dfsg-2+svt3) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
