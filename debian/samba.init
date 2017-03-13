@@ -38,7 +38,7 @@ case $1 in
 		initctl status winbind
 		;;
 	failover|failback)
-		/etc/init.d/samba restart
+		killall -HUP smbd; initctl restart nmbd; initctl restart winbind
 		;;
 	*)
 		echo "Usage: /etc/init.d/samba {start|stop|reload|restart|force-reload|status}"
