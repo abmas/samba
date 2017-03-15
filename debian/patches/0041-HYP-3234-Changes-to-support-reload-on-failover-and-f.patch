@@ -1,0 +1,1549 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Tue, 24 Jan 2017 01:48:09 +0000
+Subject: HYP-3234: Changes to support reload on failover and failback.
+
+Signed-off-by: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+---
+ lib/dbwrap/dbwrap_tdb.c           |   9 --
+ lib/dbwrap/dbwrap_tdb.h           |   9 ++
+ lib/param/loadparm.c              |  93 ++++++++++++++-------
+ lib/tdb/common/open.c             |   3 +
+ source3/lib/dbwrap/dbwrap_open.c  |  26 ++++++
+ source3/lib/dbwrap/dbwrap_open.h  |   1 +
+ source3/lib/dbwrap/dbwrap_watch.c |  57 +++----------
+ source3/lib/g_lock.c              |  87 +++++---------------
+ source3/lib/gencache.c            | 167 +++++++++++++++-----------------------
+ source3/lib/serverid.c            |   4 +-
+ source3/locking/brlock.c          |   6 +-
+ source3/locking/leases_db.c       |   5 +-
+ source3/locking/share_mode_lock.c |   5 +-
+ source3/param/loadparm.c          |   6 +-
+ source3/printing/printer_list.c   |  64 +++------------
+ source3/smbd/process.c            |   4 +
+ source3/smbd/proto.h              |   1 +
+ source3/smbd/server.c             | 138 ++++++++++++++++++++++++++-----
+ source3/smbd/server_reload.c      |  49 +++++++++++
+ source3/smbd/smbXsrv_client.c     |   5 +-
+ source3/smbd/smbXsrv_open.c       |   5 +-
+ source3/smbd/smbXsrv_session.c    |   5 +-
+ source3/smbd/smbXsrv_tcon.c       |   5 +-
+ source3/smbd/smbXsrv_version.c    |   5 +-
+ 24 files changed, 414 insertions(+), 345 deletions(-)
+
+diff --git a/lib/dbwrap/dbwrap_tdb.c b/lib/dbwrap/dbwrap_tdb.c
+index e12ec44..516aec6 100644
+--- a/lib/dbwrap/dbwrap_tdb.c
++++ b/lib/dbwrap/dbwrap_tdb.c
+@@ -26,15 +26,6 @@
+ #include "system/filesys.h"
+ #include "lib/param/param.h"
+ 
+-struct db_tdb_ctx {
+-	struct tdb_wrap *wtdb;
+-
+-	struct {
+-		dev_t dev;
+-		ino_t ino;
+-	} id;
+-};
+-
+ static NTSTATUS db_tdb_store(struct db_record *rec, TDB_DATA data, int flag);
+ static NTSTATUS db_tdb_delete(struct db_record *rec);
+ 
+diff --git a/lib/dbwrap/dbwrap_tdb.h b/lib/dbwrap/dbwrap_tdb.h
+index d5f49c7..ed860be 100644
+--- a/lib/dbwrap/dbwrap_tdb.h
++++ b/lib/dbwrap/dbwrap_tdb.h
+@@ -32,4 +32,13 @@ struct db_context *db_open_tdb(TALLOC_CTX *mem_ctx,
+ 			       uint64_t dbwrap_flags);
+ 
+ 
++struct db_tdb_ctx {
++	struct tdb_wrap *wtdb;
++
++	struct {
++		dev_t dev;
++		ino_t ino;
++	} id;
++};
++
+ #endif /* __DBWRAP_TDB_H__ */
+diff --git a/lib/param/loadparm.c b/lib/param/loadparm.c
+index 3f07526..40380b6 100644
+--- a/lib/param/loadparm.c
++++ b/lib/param/loadparm.c
+@@ -79,11 +79,11 @@
+ 
+ #include "lib/param/param_global.h"
+ 
+-static int lp_svtfs_index = 0; /* Ashok: remember to reset on smb.conf reload.*/
+-
+ #define MAX_SVTFS_LOCKDIR_PATHS 32
+ char  * svtfs_storage_ip[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
+ char  * svtfs_lockdir_path[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
++char  * tmp_svtfs_storage_ip[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
++char  * tmp_svtfs_lockdir_path[MAX_SVTFS_LOCKDIR_PATHS] = {NULL};
+ volatile int svtfs_lockdir_index = 0;
+ 
+ struct loadparm_service *lpcfg_default_service(struct loadparm_context *lp_ctx)
+@@ -1253,46 +1253,81 @@ bool handle_logfile(struct loadparm_context *lp_ctx, struct loadparm_service *se
+ 	return true;
+ }
+ 
+-bool handle_svtfs_lockdir(struct loadparm_context *lp_ctx, struct loadparm_service *service,
+-		    const char *pszParmValue, char **ptr)
++void reset_tmp_svtfs_lockdir_storageip (void)
+ {
+-	int index;
+-        char * dirnamestr = strdup(pszParmValue);
+-	DEBUG(3,("handle_svtfs_lockdir: entering with input %s\n", pszParmValue));
+-	for (index = 0; index <= lp_svtfs_index/2; index ++)
++	int i;
++	DEBUG(3,("reset_tmp_svtfs_lockdir_storageip: called\n"));
++	for (i = 0; i < MAX_SVTFS_LOCKDIR_PATHS; i++)
+ 	{
+-		if (svtfs_lockdir_path[index] && 0 == strcmp(svtfs_lockdir_path[index],pszParmValue)) {
+-			/*Nothing to do */
+-			DEBUG(3,("handle_svtfs_lockdir: %s already has entry, noop\n",pszParmValue));
+-			return true;
++		tmp_svtfs_lockdir_path[i]=NULL;
++		tmp_svtfs_storage_ip[i]=NULL;
++	}
++}
++
++void get_removed_svtfs_lockdir_storageip_indices (int * indexArray)
++{
++	int i, j=0;
++	DEBUG(3,("get_removed_svtfs_lockdir_storageip_indices: called\n"));
++	for (i = 0; i < MAX_SVTFS_LOCKDIR_PATHS; i++)
++	{
++		if (svtfs_lockdir_path[i] != NULL  && tmp_svtfs_lockdir_path[i] == NULL ) {
++			indexArray[j] = i;
++			j++;
++			DEBUG(3,("get_removed_svtfs_lockdir_storageip_indices: Adding %d to list to be removed.\n", i));
+ 		}
+ 	}
++	DEBUG(3,("get_removed_svtfs_lockdir_storageip_indices: returning\n"));
++}
++
++bool handle_svtfs_lockdir(struct loadparm_context *lp_ctx, struct loadparm_service *service,
++		    const char *pszParmValue, char **ptr)
++{
++        int index;
++        char * dirnamestr = strdup(pszParmValue);
++        DEBUG(3,("handle_svtfs_lockdir: entering with input %s\n", pszParmValue));
++        for (index = 0; index < MAX_SVTFS_LOCKDIR_PATHS; index ++)
++        {
++                if ( svtfs_lockdir_path[index] == NULL ) break;
++                if ( 0 == strcmp(svtfs_lockdir_path[index],pszParmValue)) {
++                        /*keep running count of entries this time around. used to remove stale entries*/
++                        tmp_svtfs_lockdir_path[index] = svtfs_lockdir_path[index];
++                        DEBUG(3,("handle_svtfs_lockdir: %s already has entry, noop\n",pszParmValue));
++                        return true;
++                }
++        }
+         /* If the parent directory exists, create/use path, else, default to /etc/samba */
+         if (directory_exist(dirname(dirnamestr)) && directory_create_or_exist(pszParmValue, 0755)) {
+-            svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
++                svtfs_lockdir_path[index] = talloc_strdup(NULL, pszParmValue);
+         } else {
+-            svtfs_lockdir_path[lp_svtfs_index/2] = talloc_strdup(NULL, lpcfg_lock_directory(lp_ctx));
++                svtfs_lockdir_path[index] = talloc_strdup(NULL, lpcfg_lock_directory(lp_ctx));
+         }
+-	lp_svtfs_index++;
+-	return true;
++        /*keep running count of entries this time around. used to remove stale entries*/
++        tmp_svtfs_lockdir_path[index] = svtfs_lockdir_path[index];
++        DEBUG(3,("handle_svtfs_lockdir: setting svtfs_lockdir_path[%d] and tmp_svtfs_lockdir_path[%d] to %s\n",\
++                index,index,svtfs_lockdir_path[index]));
++        return true;
+ }
+ 
+ bool handle_svtfs_storageip(struct loadparm_context *lp_ctx, struct loadparm_service *service,
+ 		    const char *pszParmValue, char **ptr)
+ {
+-	int index;
+-	DEBUG(3,("handle_svtfs_storageip: entering with input %s\n", pszParmValue));
+-	for (index = 0; index <= lp_svtfs_index/2; index ++)
+-	{
+-		if (svtfs_storage_ip[index] && 0 == strcmp(svtfs_storage_ip[index],pszParmValue)) {
+-			/*Nothing to do */
+-			DEBUG(3,("handle_svtfs_storage_ip: %s already has entry, noop\n",pszParmValue));
+-			return true;
+-		}
+-	}
+-	svtfs_storage_ip[lp_svtfs_index/2] = talloc_strdup(NULL, pszParmValue);
+-        lp_svtfs_index++;
+-	return true;
++        int index;
++        DEBUG(3,("handle_svtfs_storageip: entering with input %s\n", pszParmValue));
++        for (index = 0; index <= index; index ++)
++        {
++                if (svtfs_storage_ip[index] == NULL ) break;
++                if ( 0 == strcmp(svtfs_storage_ip[index],pszParmValue)) {
++                        /*keep running count of entries this time around. used to remove stale entries*/
++                        tmp_svtfs_storage_ip[index] = svtfs_storage_ip[index];
++                        DEBUG(3,("handle_svtfs_storage_ip: %s already has entry, noop\n",pszParmValue));
++                        return true;
++                }
++        }
++        svtfs_storage_ip[index] = talloc_strdup(NULL, pszParmValue);
++        tmp_svtfs_storage_ip[index] = svtfs_storage_ip[index];
++        DEBUG(3,("handle_svtfs_lockdir: setting svtfs_storage_ip[%d] and tmp_svtfs_storage_ip[%d] to %s\n",\
++                index,index,svtfs_storage_ip[index]));
++        return true;
+ }
+ 
+ /*
+diff --git a/lib/tdb/common/open.c b/lib/tdb/common/open.c
+index f3ef856..fb96856 100644
+--- a/lib/tdb/common/open.c
++++ b/lib/tdb/common/open.c
+@@ -779,6 +779,7 @@ _PUBLIC_ int tdb_close(struct tdb_context *tdb)
+ {
+ 	struct tdb_context **i;
+ 	int ret = 0;
++	TDB_LOG((tdb, TDB_DEBUG_TRACE,"tdb_close called on %s\n",tdb->name));
+ 
+ 	if (tdb->transaction) {
+ 		tdb_transaction_cancel(tdb);
+@@ -796,6 +797,7 @@ _PUBLIC_ int tdb_close(struct tdb_context *tdb)
+ 
+ 	SAFE_FREE(tdb->name);
+ 	if (tdb->fd != -1) {
++		TDB_LOG((tdb, TDB_DEBUG_TRACE,"tdb_close: closing file descriptor %d\n",tdb->fd));
+ 		ret = close(tdb->fd);
+ 		tdb->fd = -1;
+ 	}
+@@ -812,6 +814,7 @@ _PUBLIC_ int tdb_close(struct tdb_context *tdb)
+ #ifdef TDB_TRACE
+ 	close(tdb->tracefd);
+ #endif
++	TDB_LOG((tdb, TDB_DEBUG_TRACE,"tdb_close returning\n"));
+ 	memset(tdb, 0, sizeof(*tdb));
+ 	SAFE_FREE(tdb);
+ 
+diff --git a/source3/lib/dbwrap/dbwrap_open.c b/source3/lib/dbwrap/dbwrap_open.c
+index 59fb3e4..321df99 100644
+--- a/source3/lib/dbwrap/dbwrap_open.c
++++ b/source3/lib/dbwrap/dbwrap_open.c
+@@ -156,3 +156,29 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
+ 	}
+ 	return result;
+ }
++
++/* SVT function to close DB for index during failback */
++
++void closedb_for_index (struct db_context * db_ctx[], int index)
++{
++	struct db_tdb_ctx * tdb_context;
++	DEBUG(3, ("closedb_for_index called with db_context %p and index %d\n", db_ctx[index], index));
++
++        if (db_ctx[index] != NULL ) {
++            /*close db
++            db_context->private_data is struct db_tdb_ctx *.
++            db_context->private_data->wtdb is struct tdb_wrap *;
++            db_context->private_data->wtdb->tdb is finally, but to close the tdb,
++            all we need to do is TALLOC_FREE the tdb_wrap *.
++            */
++            if (db_ctx[index]->private_data) {
++		tdb_context = (struct db_tdb_ctx *) db_ctx[index]->private_data;
++                /* freeing wtdb causes the tdb file to be closed */
++		DEBUG(2, ("closedb_for_index closing tdb at 0x%p \n",tdb_context->wtdb));
++                TALLOC_FREE(tdb_context->wtdb);
++                TALLOC_FREE(tdb_context);
++            }
++            TALLOC_FREE(db_ctx[index]);
++	    db_ctx[index] = NULL;
++        }
++}
+diff --git a/source3/lib/dbwrap/dbwrap_open.h b/source3/lib/dbwrap/dbwrap_open.h
+index d14794e..95523b3 100644
+--- a/source3/lib/dbwrap/dbwrap_open.h
++++ b/source3/lib/dbwrap/dbwrap_open.h
+@@ -42,4 +42,5 @@ struct db_context *db_open(TALLOC_CTX *mem_ctx,
+ 			   enum dbwrap_lock_order lock_order,
+ 			   uint64_t dbwrap_flags);
+ 
++void closedb_for_index (struct db_context * db_ctx[], int index);
+ #endif /* __DBWRAP_OPEN_H__ */
+diff --git a/source3/lib/dbwrap/dbwrap_watch.c b/source3/lib/dbwrap/dbwrap_watch.c
+index e56a0b2..09e67fb 100644
+--- a/source3/lib/dbwrap/dbwrap_watch.c
++++ b/source3/lib/dbwrap/dbwrap_watch.c
+@@ -25,57 +25,24 @@
+ #include "lib/util/util_tdb.h"
+ #include "lib/util/tevent_ntstatus.h"
+ 
+-extern char * svtfs_storage_ip[];
+-extern int svtfs_get_lockdir_index(void);
+-extern void svtfs_set_lockdir_index(int);
+-
+ static struct db_context *dbwrap_record_watchers_db(void)
+ {
+-#define MAX_WATCHERS_DBS 32
+-#define get_watchers_db() watchers_db[svtfs_get_lockdir_index()]
+-#define set_watchers_db(value) watchers_db[svtfs_get_lockdir_index()] = value
+-
+-	static struct db_context *watchers_db[MAX_WATCHERS_DBS] = {NULL};
+-
+-	int index,saved_index;
+-
+-	index = 0;
+-	saved_index = svtfs_get_lockdir_index();
+-
+-	svtfs_set_lockdir_index(index);
+-	DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index of 0\n"));
+-
+-	while (1) {
+-
+-		if (get_watchers_db() == NULL) {
+-			char *db_path = svtfs_lock_path("dbwrap_watchers.tdb");
+-			if (db_path == NULL) {
+-        			svtfs_set_lockdir_index(saved_index);
+-				return NULL;
+-			}
++	static struct db_context *watchers_db;
+ 
+-			set_watchers_db(db_open(
+-				NULL, db_path,	0,
+-				TDB_CLEAR_IF_FIRST | TDB_INCOMPATIBLE_HASH,
+-				O_RDWR|O_CREAT, 0600, DBWRAP_LOCK_ORDER_3,
+-				DBWRAP_FLAG_NONE));
+-			TALLOC_FREE(db_path);
+-		}
+-
+-		index++;
+-		if ( (svtfs_storage_ip[index] == NULL) || (index == MAX_WATCHERS_DBS) ) {
+-			DEBUG(5, ("dbwrap_record_watchers_db: breaking with lockdir_index of %i\n", index));
+-			break;
++	if (watchers_db == NULL) {
++		char *db_path = lock_path("dbwrap_watchers.tdb");
++		if (db_path == NULL) {
++			return NULL;
+ 		}
+ 
+-		DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index of %i\n", index));
+-		svtfs_set_lockdir_index(index);
++		watchers_db = db_open(
++			NULL, db_path,	0,
++			TDB_CLEAR_IF_FIRST | TDB_INCOMPATIBLE_HASH,
++			O_RDWR|O_CREAT, 0600, DBWRAP_LOCK_ORDER_3,
++			DBWRAP_FLAG_NONE);
++		TALLOC_FREE(db_path);
+ 	}
+-
+-	DEBUG(5, ("dbwrap_record_watchers_db: setting lockdir_index back to %d\n", saved_index));
+-	svtfs_set_lockdir_index(saved_index);
+-
+-	return get_watchers_db();
++	return watchers_db;
+ }
+ 
+ static size_t dbwrap_record_watchers_key(struct db_context *db,
+diff --git a/source3/lib/g_lock.c b/source3/lib/g_lock.c
+index 95a1c14..30c5f52 100644
+--- a/source3/lib/g_lock.c
++++ b/source3/lib/g_lock.c
+@@ -31,10 +31,6 @@
+ #include "messages.h"
+ #include "serverid.h"
+ 
+-extern char * svtfs_storage_ip[];
+-extern int svtfs_get_lockdir_index(void);
+-extern void svtfs_set_lockdir_index(int);
+-
+ struct g_lock_ctx {
+ 	struct db_context *db;
+ 	struct messaging_context *msg;
+@@ -54,77 +50,34 @@ struct g_lock_rec {
+ struct g_lock_ctx *g_lock_ctx_init(TALLOC_CTX *mem_ctx,
+ 				   struct messaging_context *msg)
+ {
+-#define MAX_G_LOCK_CONTEXTS 32
+-#define get_result() result[svtfs_get_lockdir_index()]
+-#define set_result(value) result[svtfs_get_lockdir_index()] = value
+-
+-	struct g_lock_ctx *result[MAX_G_LOCK_CONTEXTS] = {NULL};
+-
++	struct g_lock_ctx *result;
+ 	char *db_path;
+-	int index,saved_index;
+-	bool return_null = false;
+ 
+-	index = 0;
+-	saved_index = svtfs_get_lockdir_index();
+-
+-	set_result(talloc(mem_ctx, struct g_lock_ctx));
+-	if (get_result() == NULL) {
++	result = talloc(mem_ctx, struct g_lock_ctx);
++	if (result == NULL) {
+ 		return NULL;
+ 	}
+-	get_result()->msg = msg;
+-
+-	svtfs_set_lockdir_index(index);
+-	DEBUG(5, ("g_lock_ctx_init: setting lockdir_index of 0\n"));
+-
+-	while (1) {
++	result->msg = msg;
+ 
+-		db_path = svtfs_lock_path("g_lock.tdb");
+-		if (db_path == NULL) {
+-			TALLOC_FREE(get_result());
+-			return_null = true;
+-			break;
+-		}
+-
+-		if (get_result() == NULL) {
+-			set_result(talloc(mem_ctx, struct g_lock_ctx));
+-			if (get_result() == NULL) {
+-				return_null = true;
+-				break;
+-			}
+-		}
+-			
+-		get_result()->db = db_open(get_result(), db_path, 0,
+-				     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+-				     O_RDWR|O_CREAT, 0600,
+-				     DBWRAP_LOCK_ORDER_2,
+-				     DBWRAP_FLAG_NONE);
+-		TALLOC_FREE(db_path);
+-		if (get_result()->db == NULL) {
+-			DEBUG(1, ("g_lock_ctx_init: Could not open g_lock.tdb\n"));
+-			TALLOC_FREE(get_result());
+-			return_null = true;
+-			break;
+-		}
+-		dbwrap_watch_db(get_result()->db, msg);
+-
+-		index++;
+-		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_G_LOCK_CONTEXTS ) ) {
+-                        DEBUG(5, ("g_lock_ctx_init: breaking with lockdir_index of %i\n", index));
+-			break;
+-		}
+-
+-		DEBUG(5, ("g_lock_ctx_init: setting lockdir_index of %i\n", index));
+-		svtfs_set_lockdir_index(index);
+-	} /* end while(1) */
+-
+-	DEBUG(5, ("g_lock_ctx_init: setting lockdir_index back to %d\n", saved_index));
+-	svtfs_set_lockdir_index(saved_index);
++	db_path = lock_path("g_lock.tdb");
++	if (db_path == NULL) {
++		TALLOC_FREE(result);
++		return NULL;
++	}
+ 
+-	if ( return_null == true ) {
++	result->db = db_open(result, db_path, 0,
++			     TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
++			     O_RDWR|O_CREAT, 0600,
++			     DBWRAP_LOCK_ORDER_2,
++			     DBWRAP_FLAG_NONE);
++	TALLOC_FREE(db_path);
++	if (result->db == NULL) {
++		DEBUG(1, ("g_lock_init: Could not open g_lock.tdb\n"));
++		TALLOC_FREE(result);
+ 		return NULL;
+-	} else {
+-		return get_result();
+ 	}
++	dbwrap_watch_db(result->db, msg);
++	return result;
+ }
+ 
+ static bool g_lock_conflicts(enum g_lock_type l1, enum g_lock_type l2)
+diff --git a/source3/lib/gencache.c b/source3/lib/gencache.c
+index 3ebd066..ed16d79 100644
+--- a/source3/lib/gencache.c
++++ b/source3/lib/gencache.c
+@@ -37,22 +37,9 @@
+ #define BLOB_TYPE "DATA_BLOB"
+ #define BLOB_TYPE_LEN 9
+ 
+-#define MAX_CACHES 32
+-#define get_cache() cache[svtfs_get_lockdir_index()]
+-#define set_cache(value) cache[svtfs_get_lockdir_index()] = value
+-#define get_cache_notrans() cache_notrans[svtfs_get_lockdir_index()]
+-#define set_cache_notrans(value) cache_notrans[svtfs_get_lockdir_index()] = value
+-#define get_cache_notrans_seqnum() cache_notrans_seqnum[svtfs_get_lockdir_index()]
+-#define set_cache_notrans_seqnum(value) cache_notrans_seqnum[svtfs_get_lockdir_index()] = value
+-
+-extern char * svtfs_storage_ip[];
+-extern int svtfs_get_lockdir_index(void);
+-extern void svtfs_set_lockdir_index(int);
+-
+-static struct tdb_wrap *cache[MAX_CACHES] = {NULL};
+-static struct tdb_wrap *cache_notrans[MAX_CACHES] = {NULL};
+-static int cache_notrans_seqnum[MAX_CACHES] = {0};
+-
++static struct tdb_wrap *cache;
++static struct tdb_wrap *cache_notrans;
++static int cache_notrans_seqnum;
+ 
+ /**
+  * @file gencache.c
+@@ -74,10 +61,9 @@ static bool gencache_init(void)
+ {
+ 	char* cache_fname = NULL;
+ 	int open_flags = O_RDWR|O_CREAT;
+-	int index,saved_index;
+ 
+ 	/* skip file open if it's already opened */
+-	if (get_cache()) {
++	if (cache) {
+ 		return true;
+ 	}
+ 
+@@ -88,14 +74,14 @@ static bool gencache_init(void)
+ 
+ 	DEBUG(5, ("Opening cache file at %s\n", cache_fname));
+ 
+-	set_cache(tdb_wrap_open(NULL, cache_fname, 0,
++	cache = tdb_wrap_open(NULL, cache_fname, 0,
+ 			      TDB_DEFAULT|TDB_INCOMPATIBLE_HASH,
+-			      open_flags, 0644));
+-	if (get_cache()) {
++			      open_flags, 0644);
++	if (cache) {
+ 		int ret;
+-		ret = tdb_check(get_cache()->tdb, NULL, NULL);
++		ret = tdb_check(cache->tdb, NULL, NULL);
+ 		if (ret != 0) {
+-			TALLOC_FREE(get_cache());
++			TALLOC_FREE(cache);
+ 
+ 			/*
+ 			 * Retry with CLEAR_IF_FIRST.
+@@ -107,76 +93,53 @@ static bool gencache_init(void)
+ 			 * CLEAR_IF_FIRST databases, so lets use it here to
+ 			 * clean up a broken database.
+ 			 */
+-			set_cache(tdb_wrap_open(NULL, cache_fname, 0,
++			cache = tdb_wrap_open(NULL, cache_fname, 0,
+ 					      TDB_DEFAULT|
+ 					      TDB_INCOMPATIBLE_HASH|
+ 					      TDB_CLEAR_IF_FIRST,
+-					      open_flags, 0644));
++					      open_flags, 0644);
+ 		}
+ 	}
+ 
+-	if (!get_cache() && (errno == EACCES)) {
++	if (!cache && (errno == EACCES)) {
+ 		open_flags = O_RDONLY;
+-		set_cache(tdb_wrap_open(NULL, cache_fname, 0,
++		cache = tdb_wrap_open(NULL, cache_fname, 0,
+ 				      TDB_DEFAULT|TDB_INCOMPATIBLE_HASH,
+-				      open_flags, 0644));
+-		if (get_cache()) {
++				      open_flags, 0644);
++		if (cache) {
+ 			DEBUG(5, ("gencache_init: Opening cache file %s read-only.\n", cache_fname));
+ 		}
+ 	}
+ 	TALLOC_FREE(cache_fname);
+ 
+-	if (!get_cache()) {
++	if (!cache) {
+ 		DEBUG(5, ("Attempt to open gencache.tdb has failed.\n"));
+ 		return false;
+ 	}
+ 
+-	index = 0;
+-	saved_index = svtfs_get_lockdir_index();
+-
+-	svtfs_set_lockdir_index(index);
+-	DEBUG(5, ("gencache_init: setting lockdir_index of 0\n"));
+-
+-	while (1) {
+-
+-		cache_fname = svtfs_lock_path("gencache_notrans.tdb");
+-		if (cache_fname == NULL) {
+-			TALLOC_FREE(get_cache());
+-        		svtfs_set_lockdir_index(saved_index);
+-			return false;
+-		}
++	cache_fname = lock_path("gencache_notrans.tdb");
++	if (cache_fname == NULL) {
++		TALLOC_FREE(cache);
++		return false;
++	}
+ 
+-		DEBUG(5, ("Opening cache file at %s\n", cache_fname));
++	DEBUG(5, ("Opening cache file at %s\n", cache_fname));
+ 
+-		set_cache_notrans(tdb_wrap_open(NULL, cache_fname, 0,
++	cache_notrans = tdb_wrap_open(NULL, cache_fname, 0,
+ 				      TDB_CLEAR_IF_FIRST|
+ 				      TDB_INCOMPATIBLE_HASH|
+ 				      TDB_SEQNUM|
+ 				      TDB_NOSYNC|
+ 				      TDB_MUTEX_LOCKING,
+-				      open_flags, 0644));
+-		if (get_cache_notrans() == NULL) {
+-			DEBUG(5, ("Opening %s failed: %s\n", cache_fname,
+-				  strerror(errno)));
+-        		svtfs_set_lockdir_index(saved_index);
+-			TALLOC_FREE(cache_fname);
+-			TALLOC_FREE(get_cache());
+-			return false;
+-		}
++				      open_flags, 0644);
++	if (cache_notrans == NULL) {
++		DEBUG(5, ("Opening %s failed: %s\n", cache_fname,
++			  strerror(errno)));
+ 		TALLOC_FREE(cache_fname);
+-
+-		index++;
+-		if ( (svtfs_storage_ip[index] == NULL) || (index == MAX_CACHES) ) {
+-			DEBUG(5, ("gencache_init: breaking with lockdir_index of %i\n", index));
+-			break;
+-		}
+-
+-		DEBUG(5, ("gencache_init: setting lockdir_index of %i\n", index));
+-		svtfs_set_lockdir_index(index);
++		TALLOC_FREE(cache);
++		return false;
+ 	}
+-
+-	DEBUG(5, ("gencache_init: setting lockdir_index back to %d\n", saved_index));
+-	svtfs_set_lockdir_index(saved_index);
++	TALLOC_FREE(cache_fname);
+ 
+ 	return true;
+ }
+@@ -370,7 +333,7 @@ bool gencache_set_data_blob(const char *keystr, const DATA_BLOB *blob,
+ 		   timeout > time(NULL) ? "ahead" : "in the past"));
+ 
+ 	ret = tdb_store_bystring(
+-		get_cache_notrans()->tdb, keystr,
++		cache_notrans->tdb, keystr,
+ 		make_tdb_data((uint8_t *)val, talloc_array_length(val)),
+ 		0);
+ 	TALLOC_FREE(val);
+@@ -398,7 +361,7 @@ bool gencache_set_data_blob(const char *keystr, const DATA_BLOB *blob,
+ 
+ 	last_stabilize = 0;
+ 
+-	tdb_parse_record(get_cache_notrans()->tdb, last_stabilize_key(),
++	tdb_parse_record(cache_notrans->tdb, last_stabilize_key(),
+ 			 last_stabilize_parser, &last_stabilize);
+ 
+ 	if ((last_stabilize
+@@ -549,8 +512,8 @@ bool gencache_parse(const char *keystr,
+ 		 * Make sure that nobody has changed the gencache behind our
+ 		 * back.
+ 		 */
+-		int current_seqnum = tdb_get_seqnum(get_cache_notrans()->tdb);
+-		if (current_seqnum == get_cache_notrans_seqnum()) {
++		int current_seqnum = tdb_get_seqnum(cache_notrans->tdb);
++		if (current_seqnum == cache_notrans_seqnum) {
+ 			/*
+ 			 * Ok, our memcache is still current, use it without
+ 			 * going to the tdb files.
+@@ -562,17 +525,17 @@ bool gencache_parse(const char *keystr,
+ 			return true;
+ 		}
+ 		memcache_flush(NULL, GENCACHE_RAM);
+-		set_cache_notrans_seqnum(current_seqnum);
++		cache_notrans_seqnum = current_seqnum;
+ 	}
+ 
+ 	state.is_memcache = false;
+ 
+-	ret = tdb_parse_record(get_cache_notrans()->tdb, key,
++	ret = tdb_parse_record(cache_notrans->tdb, key,
+ 			       gencache_parse_fn, &state);
+ 	if (ret == 0) {
+ 		return true;
+ 	}
+-	ret = tdb_parse_record(get_cache()->tdb, key, gencache_parse_fn, &state);
++	ret = tdb_parse_record(cache->tdb, key, gencache_parse_fn, &state);
+ 	return (ret == 0);
+ }
+ 
+@@ -691,9 +654,9 @@ bool gencache_stabilize(void)
+ 		return false;
+ 	}
+ 
+-	res = tdb_transaction_start_nonblock(get_cache()->tdb);
++	res = tdb_transaction_start_nonblock(cache->tdb);
+ 	if (res != 0) {
+-		if (tdb_error(get_cache()->tdb) == TDB_ERR_NOLOCK)
++		if (tdb_error(cache->tdb) == TDB_ERR_NOLOCK)
+ 		{
+ 			/*
+ 			 * Someone else already does the stabilize,
+@@ -703,61 +666,61 @@ bool gencache_stabilize(void)
+ 		}
+ 
+ 		DEBUG(10, ("Could not start transaction on gencache.tdb: "
+-			   "%s\n", tdb_errorstr(get_cache()->tdb)));
++			   "%s\n", tdb_errorstr(cache->tdb)));
+ 		return false;
+ 	}
+ 
+-	res = tdb_lockall(get_cache_notrans()->tdb);
++	res = tdb_lockall(cache_notrans->tdb);
+ 	if (res != 0) {
+-		tdb_transaction_cancel(get_cache()->tdb);
++		tdb_transaction_cancel(cache->tdb);
+ 		DEBUG(10, ("Could not get allrecord lock on "
+ 			   "gencache_notrans.tdb: %s\n",
+-			   tdb_errorstr(get_cache_notrans()->tdb)));
++			   tdb_errorstr(cache_notrans->tdb)));
+ 		return false;
+ 	}
+ 
+ 	state.written = false;
+ 
+-	res = tdb_traverse(get_cache_notrans()->tdb, stabilize_fn, &state);
++	res = tdb_traverse(cache_notrans->tdb, stabilize_fn, &state);
+ 	if (res < 0) {
+-		tdb_unlockall(get_cache_notrans()->tdb);
+-		tdb_transaction_cancel(get_cache()->tdb);
++		tdb_unlockall(cache_notrans->tdb);
++		tdb_transaction_cancel(cache->tdb);
+ 		return false;
+ 	}
+ 
+ 	if (!state.written) {
+-		tdb_unlockall(get_cache_notrans()->tdb);
+-		tdb_transaction_cancel(get_cache()->tdb);
++		tdb_unlockall(cache_notrans->tdb);
++		tdb_transaction_cancel(cache->tdb);
+ 		return true;
+ 	}
+ 
+-	res = tdb_transaction_commit(get_cache()->tdb);
++	res = tdb_transaction_commit(cache->tdb);
+ 	if (res != 0) {
+ 		DEBUG(10, ("tdb_transaction_commit on gencache.tdb failed: "
+-			   "%s\n", tdb_errorstr(get_cache()->tdb)));
+-		tdb_unlockall(get_cache_notrans()->tdb);
++			   "%s\n", tdb_errorstr(cache->tdb)));
++		tdb_unlockall(cache_notrans->tdb);
+ 		return false;
+ 	}
+ 
+-	res = tdb_traverse(get_cache_notrans()->tdb, wipe_fn, NULL);
++	res = tdb_traverse(cache_notrans->tdb, wipe_fn, NULL);
+ 	if (res < 0) {
+ 		DEBUG(10, ("tdb_traverse with wipe_fn on gencache_notrans.tdb "
+ 			  "failed: %s\n",
+-			   tdb_errorstr(get_cache_notrans()->tdb)));
+-		tdb_unlockall(get_cache_notrans()->tdb);
++			   tdb_errorstr(cache_notrans->tdb)));
++		tdb_unlockall(cache_notrans->tdb);
+ 		return false;
+ 	}
+ 
+-	res = tdb_unlockall(get_cache_notrans()->tdb);
++	res = tdb_unlockall(cache_notrans->tdb);
+ 	if (res != 0) {
+ 		DEBUG(10, ("tdb_unlockall on gencache.tdb failed: "
+-			   "%s\n", tdb_errorstr(get_cache()->tdb)));
++			   "%s\n", tdb_errorstr(cache->tdb)));
+ 		return false;
+ 	}
+ 
+ 	now = talloc_asprintf(talloc_tos(), "%d", (int)time(NULL));
+ 	if (now != NULL) {
+-		tdb_store(get_cache_notrans()->tdb, last_stabilize_key(),
++		tdb_store(cache_notrans->tdb, last_stabilize_key(),
+ 			  string_term_tdb_data(now), 0);
+ 		TALLOC_FREE(now);
+ 	}
+@@ -781,14 +744,14 @@ static int stabilize_fn(struct tdb_context *tdb, TDB_DATA key, TDB_DATA val,
+ 		return 0;
+ 	}
+ 	if ((timeout < time(NULL)) || (val.dsize == 0)) {
+-		res = tdb_delete(get_cache()->tdb, key);
++		res = tdb_delete(cache->tdb, key);
+ 		if (res == 0) {
+ 			state->written = true;
+-		} else if (tdb_error(get_cache()->tdb) == TDB_ERR_NOEXIST) {
++		} else if (tdb_error(cache->tdb) == TDB_ERR_NOEXIST) {
+ 			res = 0;
+ 		}
+ 	} else {
+-		res = tdb_store(get_cache()->tdb, key, val, 0);
++		res = tdb_store(cache->tdb, key, val, 0);
+ 		if (res == 0) {
+ 			state->written = true;
+ 		}
+@@ -796,7 +759,7 @@ static int stabilize_fn(struct tdb_context *tdb, TDB_DATA key, TDB_DATA val,
+ 
+ 	if (res != 0) {
+ 		DEBUG(10, ("Transfer to gencache.tdb failed: %s\n",
+-			   tdb_errorstr(get_cache()->tdb)));
++			   tdb_errorstr(cache->tdb)));
+ 		return -1;
+ 	}
+ 
+@@ -824,7 +787,7 @@ static int wipe_fn(struct tdb_context *tdb, TDB_DATA key, TDB_DATA val,
+ 	res = tdb_delete(tdb, key);
+ 	if (res != 0) {
+ 		DEBUG(10, ("tdb_delete from gencache_notrans.tdb failed: "
+-			   "%s\n", tdb_errorstr(get_cache_notrans()->tdb)));
++			   "%s\n", tdb_errorstr(cache_notrans->tdb)));
+ 		return -1;
+ 	}
+ 
+@@ -915,7 +878,7 @@ static int gencache_iterate_blobs_fn(struct tdb_context *tdb, TDB_DATA key,
+ 	if (tdb_data_cmp(key, last_stabilize_key()) == 0) {
+ 		return 0;
+ 	}
+-	if (state->in_persistent && tdb_exists(get_cache_notrans()->tdb, key)) {
++	if (state->in_persistent && tdb_exists(cache_notrans->tdb, key)) {
+ 		return 0;
+ 	}
+ 
+@@ -970,10 +933,10 @@ void gencache_iterate_blobs(void (*fn)(const char *key, DATA_BLOB value,
+ 	state.private_data = private_data;
+ 
+ 	state.in_persistent = false;
+-	tdb_traverse(get_cache_notrans()->tdb, gencache_iterate_blobs_fn, &state);
++	tdb_traverse(cache_notrans->tdb, gencache_iterate_blobs_fn, &state);
+ 
+ 	state.in_persistent = true;
+-	tdb_traverse(get_cache()->tdb, gencache_iterate_blobs_fn, &state);
++	tdb_traverse(cache->tdb, gencache_iterate_blobs_fn, &state);
+ }
+ 
+ /**
+diff --git a/source3/lib/serverid.c b/source3/lib/serverid.c
+index 5c554af..1ac2c08 100644
+--- a/source3/lib/serverid.c
++++ b/source3/lib/serverid.c
+@@ -65,7 +65,7 @@ static struct db_context *serverid_db(void)
+ 	while (1) {
+ 
+ 		if (get_db() != NULL) {
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		db_path = svtfs_lock_path("serverid.tdb");
+@@ -79,7 +79,7 @@ static struct db_context *serverid_db(void)
+ 			     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_2,
+ 			     DBWRAP_FLAG_NONE));
+ 		TALLOC_FREE(db_path);
+-
++nextIndex:
+ 		index++;
+ 		if  ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_DBS ) ) {
+ 			DEBUG(5, ("serverid_db: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/locking/brlock.c b/source3/locking/brlock.c
+index 1329720..aef3ced 100644
+--- a/source3/locking/brlock.c
++++ b/source3/locking/brlock.c
+@@ -48,7 +48,7 @@ extern void svtfs_set_lockdir_index(int);
+ #define get_brlock_db() brlock_db[svtfs_get_lockdir_index()]
+ #define set_brlock_db(value) brlock_db[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *brlock_db[MAX_BRLOCK_DBS] = {NULL};
++struct db_context *brlock_db[MAX_BRLOCK_DBS] = {NULL};
+ 
+ struct byte_range_lock {
+ 	struct files_struct *fsp;
+@@ -367,7 +367,7 @@ void brl_init(bool read_only)
+ 	while (1) {
+ 
+ 		if (get_brlock_db()) {
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		tdb_flags = TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH;
+@@ -416,7 +416,7 @@ void brl_init(bool read_only)
+ 			}
+ 		}
+ 		TALLOC_FREE(db_path);
+-
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_BRLOCK_DBS ) ) {
+ 			DEBUG(5, ("brl_init: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/locking/leases_db.c b/source3/locking/leases_db.c
+index 539abda..a4da8c3 100644
+--- a/source3/locking/leases_db.c
++++ b/source3/locking/leases_db.c
+@@ -39,7 +39,7 @@ extern void svtfs_set_lockdir_index(int);
+ #define get_leases_db() leases_db[svtfs_get_lockdir_index()]
+ #define set_leases_db(value) leases_db[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *leases_db[MAX_LEASES_DBS] = {NULL};
++struct db_context *leases_db[MAX_LEASES_DBS] = {NULL};
+ 
+ extern bool smbXsrv_lookup_persistent_id(uint64_t);
+ 
+@@ -164,7 +164,7 @@ bool leases_db_init(bool read_only)
+ 
+ 		if (get_leases_db()) {
+ 			return_bool = true;
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		db_path = svtfs_lock_path("leases.tdb");
+@@ -208,6 +208,7 @@ bool leases_db_init(bool read_only)
+ 			}
+ 		}
+ 
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LEASES_DBS ) ) {
+ 			DEBUG(5, ("leases_db_init: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/locking/share_mode_lock.c b/source3/locking/share_mode_lock.c
+index f6c0d4b..8736153 100644
+--- a/source3/locking/share_mode_lock.c
++++ b/source3/locking/share_mode_lock.c
+@@ -64,7 +64,7 @@ extern void svtfs_set_lockdir_index(int);
+ #define get_lock_db() lock_db[svtfs_get_lockdir_index()]
+ #define set_lock_db(value) lock_db[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *lock_db[MAX_LOCK_DBS] = {NULL};
++struct db_context *lock_db[MAX_LOCK_DBS] = {NULL};
+ 
+ /* forward decl */
+ static TDB_DATA unparse_share_modes(struct share_mode_data *d);
+@@ -169,7 +169,7 @@ static bool locking_init_internal(bool read_only)
+ 		brl_init(read_only);
+ 
+ 		if (get_lock_db())
+-			break;
++			goto nextIndex;
+ 
+ 		db_path = svtfs_lock_path("locking.tdb");
+ 		if (db_path == NULL) {
+@@ -222,6 +222,7 @@ static bool locking_init_internal(bool read_only)
+ 
+ 		dbwrap_watch_db(get_lock_db(), server_messaging_context());
+ 
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_LOCK_DBS ) ) {
+ 			DEBUG(5, ("locking_init_internal: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/param/loadparm.c b/source3/param/loadparm.c
+index 7f805a2..7d8ce67 100644
+--- a/source3/param/loadparm.c
++++ b/source3/param/loadparm.c
+@@ -128,12 +128,12 @@ int svtfs_get_lockdir_index (void)
+ void svtfs_set_index_for_ip (const char * ipv4addr)
+ {
+ 	int index;
+-	DEBUG(2,("PJC: Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
++	DEBUG(2,("Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
+ 	index = 0;
+ 	while (svtfs_storage_ip[index] != NULL) {
+ 		if ( 0 == strcmp(svtfs_storage_ip[index],ipv4addr)) {
+ 			svtfs_lockdir_index = index;
+-			DEBUG(2,("PJC: svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
++			DEBUG(2,("svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
+ 			return;
+ 		}
+ 		index++;
+@@ -708,7 +708,7 @@ static void init_globals(struct loadparm_context *lp_ctx, bool reinit_globals)
+ 	lpcfg_string_set(Globals.ctx, &Globals.homedir_map, "auto.home");
+ #endif
+ #endif
+-	lpcfg_string_set(Globals.ctx, &Globals.svtfs_lockdir, "/var/svtfs/samba");
++	lpcfg_string_set(Globals.ctx, &Globals.svtfs_lockdir, "/etc/samba");
+ 	lpcfg_string_set(Globals.ctx, &Globals.svtfs_storageip, "0.0.0.0");
+ 	Globals.time_server = false;
+ 	Globals.bind_interfaces_only = false;
+diff --git a/source3/printing/printer_list.c b/source3/printing/printer_list.c
+index b1661d1..9b20dc1 100644
+--- a/source3/printing/printer_list.c
++++ b/source3/printing/printer_list.c
+@@ -30,64 +30,26 @@
+ #define PL_DATA_FORMAT "ddPPP"
+ #define PL_TSTAMP_FORMAT "dd"
+ 
+-extern char * svtfs_storage_ip[];
+-extern int svtfs_get_lockdir_index(void);
+-extern void svtfs_set_lockdir_index(int);
+-
+ static struct db_context *get_printer_list_db(void)
+ {
+-#define MAX_PRINTER_LIST_DBS 32
+-#define get_db() db[svtfs_get_lockdir_index()]
+-#define set_db(value) db[svtfs_get_lockdir_index()] = value
+-
+-	struct db_context *db[MAX_PRINTER_LIST_DBS] = {NULL};
+-
++	static struct db_context *db;
+ 	char *db_path;
+-	int index,saved_index;
+-	bool return_null = false;
+-
+-	index = 0;
+-	saved_index = svtfs_get_lockdir_index();
+-
+-	svtfs_set_lockdir_index(index);
+-	DEBUG(5, ("get_printer_list_db: setting lockdir_index of 0\n"));
+ 
+-	while (1) {
+-
+-		if (get_db() != NULL) {
+-			break;
+-		}
+-
+-		db_path = svtfs_lock_path("printer_list.tdb");
+-		if (db_path == NULL) {
+-			return_null = true;
+-			break;
+-		}
+-
+-		set_db(db_open(NULL, db_path, 0,
+-			     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
+-			     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_1,
+-			     DBWRAP_FLAG_NONE));
+-		TALLOC_FREE(db_path);
+-
+-		index++;
+-		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_PRINTER_LIST_DBS ) ) {
+-			DEBUG(5, ("get_printer_list_db: breaking with lockdir_index of %i\n", index));
+-			break;
+-		}
+-
+-		DEBUG(5, ("get_printer_list_db: setting lockdir_index of %i\n", index));
+-		svtfs_set_lockdir_index(index);
+-	} /* end while(1) */
+-
+-	DEBUG(5, ("get_printer_list_db: setting lockdir_index back to %d\n", saved_index));
+-	svtfs_set_lockdir_index(saved_index);
++	if (db != NULL) {
++		return db;
++	}
+ 
+-	if ( return_null == true ) {
++	db_path = lock_path("printer_list.tdb");
++	if (db_path == NULL) {
+ 		return NULL;
+-	} else {
+-		return get_db();
+ 	}
++
++	db = db_open(NULL, db_path, 0,
++		     TDB_DEFAULT|TDB_CLEAR_IF_FIRST|TDB_INCOMPATIBLE_HASH,
++		     O_RDWR|O_CREAT, 0644, DBWRAP_LOCK_ORDER_1,
++		     DBWRAP_FLAG_NONE);
++	TALLOC_FREE(db_path);
++	return db;
+ }
+ 
+ bool printer_list_parent_init(void)
+diff --git a/source3/smbd/process.c b/source3/smbd/process.c
+index 842143f..0805e53 100644
+--- a/source3/smbd/process.c
++++ b/source3/smbd/process.c
+@@ -986,6 +986,8 @@ void smbd_setup_sig_term_handler(struct smbd_server_connection *sconn)
+ 	}
+ }
+ 
++extern void closedbs_not_owned(struct smbd_server_connection *);
++
+ static void smbd_sig_hup_handler(struct tevent_context *ev,
+ 				  struct tevent_signal *se,
+ 				  int signum,
+@@ -999,7 +1001,9 @@ static void smbd_sig_hup_handler(struct tevent_context *ev,
+ 
+ 	change_to_root_user();
+ 	DEBUG(1,("Reloading services after SIGHUP\n"));
++
+ 	reload_services(sconn, conn_snum_used, false);
++	closedbs_not_owned(sconn);
+ }
+ 
+ void smbd_setup_sig_hup_handler(struct smbd_server_connection *sconn)
+diff --git a/source3/smbd/proto.h b/source3/smbd/proto.h
+index 9b9c924..c9c734c 100644
+--- a/source3/smbd/proto.h
++++ b/source3/smbd/proto.h
+@@ -1011,6 +1011,7 @@ void delete_and_reload_printers(struct tevent_context *ev,
+ bool reload_services(struct smbd_server_connection *sconn,
+ 		     bool (*snumused) (struct smbd_server_connection *, int),
+ 		     bool test);
++void closedbs_not_owned(struct smbd_server_connection *);
+ 
+ /* The following definitions come from smbd/server_exit.c  */
+ 
+diff --git a/source3/smbd/server.c b/source3/smbd/server.c
+index c999a4f..a09edc4 100644
+--- a/source3/smbd/server.c
++++ b/source3/smbd/server.c
+@@ -52,13 +52,18 @@
+ #include "smbd/smbd_cleanupd.h"
+ #include "lib/util/sys_rw.h"
+ 
+-#define MAX_LOCKDIRS 32
+-
+ #ifdef CLUSTER_SUPPORT
+ #include "ctdb_protocol.h"
+ #endif
+ 
++#ifndef SIMPLIVITY
++#define SIMPLIVITY true
++#endif
++
++#define MAX_SVTFS_PATHS 32
++
+ extern char * svtfs_storage_ip[];
++extern char * svtfs_lockdir_path[];
+ extern int svtfs_get_lockdir_index(void);
+ extern void svtfs_set_lockdir_index(int);
+ 
+@@ -107,6 +112,44 @@ extern void start_fssd(struct tevent_context *ev_ctx,
+ extern void start_mdssd(struct tevent_context *ev_ctx,
+ 			struct messaging_context *msg_ctx);
+ 
++/* svt specific. init of specific tdbs on reload (performed during failover/failback*/
++static void reinit_svtfs_tdbs_on_reload(struct messaging_context *msg_ctx, struct tevent_context *ev_ctx)
++{
++	NTSTATUS status;
++	struct server_id server_id;
++
++       if (!serverid_parent_init(ev_ctx)) {
++                exit_daemon("Samba cannot reinit server id", EACCES);
++        }
++
++        server_id = messaging_server_id(msg_ctx);
++        status = smbXsrv_version_global_init(&server_id);
++        if (!NT_STATUS_IS_OK(status)) {
++                exit_daemon("Samba cannot reinit server context", EACCES);
++        }
++
++        status = smbXsrv_session_global_init();
++        if (!NT_STATUS_IS_OK(status)) {
++                exit_daemon("Samba cannot reinit session context", EACCES);
++        }
++
++        status = smbXsrv_tcon_global_init();
++        if (!NT_STATUS_IS_OK(status)) {
++                exit_daemon("Samba cannot reinit tcon context", EACCES);
++        }
++        status = smbXsrv_open_global_init();
++        if (!NT_STATUS_IS_OK(status)) {
++                exit_daemon("Samba cannot reinit global open", map_errno_from_nt_status(status));
++        }
++
++        if (!leases_db_init(false)) {
++                exit_daemon("Samba cannot reinit leases", EACCES);
++        }
++
++        if (!locking_init())
++                exit_daemon("Samba cannot reinit locking", EACCES);
++}
++
+ /*******************************************************************
+  What to do when smb.conf is updated.
+  ********************************************************************/
+@@ -117,14 +160,15 @@ static void smbd_parent_conf_updated(struct messaging_context *msg,
+ 				     struct server_id server_id,
+ 				     DATA_BLOB *data)
+ {
+-	struct tevent_context *ev_ctx =
+-		talloc_get_type_abort(private_data, struct tevent_context);
+-
+-	DEBUG(10,("smbd_parent_conf_updated: Got message saying smb.conf was "
+-		  "updated. Reloading.\n"));
+-	change_to_root_user();
+-	reload_services(NULL, NULL, false);
+-	printing_subsystem_update(ev_ctx, msg, false);
++#ifndef SIMPLIVITY
++        struct tevent_context *ev_ctx =
++                talloc_get_type_abort(private_data, struct tevent_context);
++#endif
++        change_to_root_user();
++        reload_services(NULL, NULL, false);
++#ifndef SIMPLIVITY
++        printing_subsystem_update(ev_ctx, msg, false);
++#endif
+ }
+ 
+ /*******************************************************************
+@@ -947,6 +991,28 @@ static bool open_sockets_smbd(struct smbd_parent_context *parent,
+ 				}
+ 			}
+ 		}
++		/* Now do the storage IP addresses */
++                for (i = 0; i < MAX_SVTFS_PATHS; i++) {
++                        struct sockaddr_storage ifs;
++                        if (svtfs_storage_ip[i] != NULL) {
++                                interpret_string_addr_prefer_ipv4(&ifs, svtfs_storage_ip[i], 0);
++                                for (j = 0; ports && ports[j]; j++) {
++                                        unsigned port = atoi(ports[j]);
++                                        /* Keep the first port for mDNS service
++                                        * registration.
++                                        */
++                                        if (dns_port == 0) {
++                                                dns_port = port;
++                                        }
++                                        if (!smbd_open_one_socket(parent,
++                                                                ev_ctx,
++                                                                &ifs,
++                                                                port)) {
++                                                return false;
++                                        }
++                                }
++                        }
++                }
+ 	} else {
+ 		/* Just bind to 0.0.0.0 - accept connections
+ 		   from anywhere. */
+@@ -1182,12 +1248,39 @@ static void smbd_parent_sig_hup_handler(struct tevent_context *ev,
+ 	struct smbd_parent_context *parent =
+ 		talloc_get_type_abort(private_data,
+ 		struct smbd_parent_context);
++        int no_svtfs = 0, yes_svtfs = 0;
+ 
++	DEBUG(3,("smbd_parent_sighup_handler: Got message saying smb.conf was "
++		  "updated. Reloading.\n"));
+ 	change_to_root_user();
++        if (svtfs_lockdir_path[svtfs_get_lockdir_index()] == NULL || strstr(svtfs_lockdir_path[svtfs_get_lockdir_index()],"svtfs") == NULL)
++        {
++               /* Starting state is no svtfs*/
++               no_svtfs = 1;
++        }
++
+ 	DEBUG(1,("parent: Reloading services after SIGHUP\n"));
+ 	reload_services(NULL, NULL, false);
+-
++        if (svtfs_lockdir_path[svtfs_get_lockdir_index()] != NULL && strstr(svtfs_lockdir_path[svtfs_get_lockdir_index()],"svtfs"))
++        {
++               /* new lockdir path within svtfs specified */
++               yes_svtfs = 1;
++        }
++        /* If we started out with svtfs and it got added, just a reload is not going to cut it*/
++        /* or if we had svtfs, but it went away, restart as well */
++        /* issue a samba restart, but background it. */
++        if ((no_svtfs && yes_svtfs) || (!no_svtfs && !yes_svtfs))
++        {
++               system("/etc/init.d/samba restart &");
++               return;
++        }
++        closedbs_not_owned(NULL);
++        reinit_svtfs_tdbs_on_reload(parent->msg_ctx, parent->ev_ctx);
++        if (!open_sockets_smbd(parent, parent->ev_ctx, parent->msg_ctx, NULL))
++                exit_server("open_sockets_smbd() failed");
++#ifndef SIMPLIVITY
+ 	printing_subsystem_update(parent->ev_ctx, parent->msg_ctx, true);
++#endif
+ }
+ 
+ /****************************************************************************
+@@ -1213,7 +1306,6 @@ extern void build_options(bool screen);
+ 	int opt;
+ 	poptContext pc;
+ 	bool print_build_options = False;
+-	int index,saved_index;
+         enum {
+ 		OPT_DAEMON = 1000,
+ 		OPT_INTERACTIVE,
+@@ -1578,6 +1670,14 @@ extern void build_options(bool screen);
+ 		exit_daemon("Samba cannot create a SAM SID", EACCES);
+ 	}
+ 
++	if (!smbd_notifyd_init(msg_ctx, interactive)) {
++		exit_daemon("Samba cannot init notification", EACCES);
++	}
++
++	if (!cleanupd_init(msg_ctx, interactive, &parent->cleanupd)) {
++		exit_daemon("Samba cannot init the cleanupd", EACCES);
++	}
++
+ 	server_id = messaging_server_id(msg_ctx);
+ 	status = smbXsrv_version_global_init(&server_id);
+ 	if (!NT_STATUS_IS_OK(status)) {
+@@ -1594,14 +1694,6 @@ extern void build_options(bool screen);
+ 		exit_daemon("Samba cannot init tcon context", EACCES);
+ 	}
+ 
+-	if (!smbd_notifyd_init(msg_ctx, interactive)) {
+-		exit_daemon("Samba cannot init notification", EACCES);
+-	}
+-
+-	if (!cleanupd_init(msg_ctx, interactive, &parent->cleanupd)) {
+-		exit_daemon("Samba cannot init the cleanupd", EACCES);
+-	}
+-
+ 	if (!messaging_parent_dgm_cleanup_init(msg_ctx)) {
+ 		exit(1);
+ 	}
+@@ -1702,6 +1794,7 @@ extern void build_options(bool screen);
+ 			start_fssd(ev_ctx, msg_ctx);
+ 		}
+ 
++#ifndef SIMPLIVITY
+ 		if (!lp__disable_spoolss() &&
+ 		    (rpc_spoolss_daemon() != RPC_DAEMON_DISABLED)) {
+ 			bool bgq = lp_parm_bool(-1, "smbd", "backgroundqueue", true);
+@@ -1710,6 +1803,7 @@ extern void build_options(bool screen);
+ 				exit_daemon("Samba failed to init printing subsystem", EACCES);
+ 			}
+ 		}
++#endif
+ 
+ #ifdef WITH_SPOTLIGHT
+ 		if ((rpc_mdssvc_mode() == RPC_SERVICE_MODE_EXTERNAL) &&
+@@ -1717,11 +1811,13 @@ extern void build_options(bool screen);
+ 			start_mdssd(ev_ctx, msg_ctx);
+ 		}
+ #endif
++#ifndef SIMPLIVITY
+ 	} else if (!lp__disable_spoolss() &&
+ 		   (rpc_spoolss_daemon() != RPC_DAEMON_DISABLED)) {
+ 		if (!printing_subsystem_init(ev_ctx, msg_ctx, false, false)) {
+ 			exit(1);
+ 		}
++#endif
+ 	}
+ 
+ 	if (!is_daemon) {
+@@ -1754,12 +1850,14 @@ extern void build_options(bool screen);
+ 	if (!open_sockets_smbd(parent, ev_ctx, msg_ctx, ports))
+ 		exit_server("open_sockets_smbd() failed");
+ 
++#ifndef SIMPLIVITY
+ 	/* do a printer update now that all messaging has been set up,
+ 	 * before we allow clients to start connecting */
+ 	if (!lp__disable_spoolss() &&
+ 	    (rpc_spoolss_daemon() != RPC_DAEMON_DISABLED)) {
+ 		printing_subsystem_update(ev_ctx, msg_ctx, false);
+ 	}
++#endif
+ 
+ 	TALLOC_FREE(frame);
+ 	/* make sure we always have a valid stackframe */
+diff --git a/source3/smbd/server_reload.c b/source3/smbd/server_reload.c
+index c93c077..ba24674 100644
+--- a/source3/smbd/server_reload.c
++++ b/source3/smbd/server_reload.c
+@@ -30,6 +30,7 @@
+ #include "auth.h"
+ #include "messages.h"
+ #include "lib/param/loadparm.h"
++#include "../lib/tsocket/tsocket.h"
+ 
+ /*
+  * The persistent pcap cache is populated by the background print process. Per
+@@ -118,6 +119,7 @@ void delete_and_reload_printers(struct tevent_context *ev,
+ /****************************************************************************
+  Reload the services file.
+ **************************************************************************/
++extern void reset_tmp_svtfs_lockdir_storageip(void);
+ 
+ bool reload_services(struct smbd_server_connection *sconn,
+ 		     bool (*snumused) (struct smbd_server_connection *, int),
+@@ -143,6 +145,8 @@ bool reload_services(struct smbd_server_connection *sconn,
+ 
+ 	lp_killunused(sconn, snumused);
+ 
++	reset_tmp_svtfs_lockdir_storageip();
++
+ 	ret = lp_load_with_shares(get_dyn_CONFIGFILE());
+ 
+ 	/* perhaps the config filename is now set */
+@@ -170,3 +174,48 @@ bool reload_services(struct smbd_server_connection *sconn,
+ 
+ 	return(ret);
+ }
++
++extern void closedb_for_index( struct db_context **, int);
++extern void get_removed_svtfs_lockdir_storageip_indices (int * indexArray);
++extern struct db_context * brlock_db[], * leases_db[], * lock_db[], * smbXsrv_client_global_db_ctx[], * smbXsrv_open_global_db_ctx[], * smbXsrv_tcon_global_db_ctx[], * smbXsrv_session_global_db_ctx[], * smbXsrv_version_global_db_ctx[];
++#define MAX_LOCKDIRS 32
++extern char * svtfs_storage_ip[];
++extern char * svtfs_lockdir_path[];
++
++void closedbs_not_owned(struct smbd_server_connection * sconn)
++{
++        int indexArray[MAX_LOCKDIRS], i, j;
++        char * storip = NULL;
++        if (sconn) {
++                if (tsocket_address_is_inet(sconn->local_address, "ip")) {
++                        storip = tsocket_address_inet_addr_string( sconn->local_address, talloc_tos());
++                        DEBUG(1, ("closedbs_not_owned: storage_ip for this connection = %s\n", storip));
++                }
++        }
++
++        for (i=0; i < MAX_LOCKDIRS; i++) indexArray[i]=-1;
++        get_removed_svtfs_lockdir_storageip_indices(&indexArray[0]);
++        for (i=0; i < MAX_LOCKDIRS; i++)
++        {
++                j = indexArray[i];
++                if (j == -1) continue;
++                if (storip) {
++                        DEBUG(1, ("closedbs_not_owned: storage_ip for this connection = %s, storeip for index = %s\n", storip,svtfs_storage_ip[j]));
++                        /*exit_server_cleanly("svtfs: Exiting because the storage IP is gone!");*/
++                        if (strcmp(svtfs_storage_ip[j],storip) == 0) exit(0);
++                }
++                closedb_for_index (brlock_db, j);
++                closedb_for_index (leases_db, j);
++                closedb_for_index (lock_db, j);
++                closedb_for_index (smbXsrv_client_global_db_ctx, j);
++                closedb_for_index (smbXsrv_open_global_db_ctx, j);
++                closedb_for_index (smbXsrv_tcon_global_db_ctx, j);
++                closedb_for_index (smbXsrv_session_global_db_ctx, j);
++                closedb_for_index (smbXsrv_version_global_db_ctx, j);
++                if (svtfs_lockdir_path[j] != NULL) {
++                        talloc_free(svtfs_lockdir_path[j]);
++                        svtfs_lockdir_path[j]=NULL;
++                }
++                if (svtfs_storage_ip[j] != NULL) {talloc_free(svtfs_storage_ip[j]); svtfs_storage_ip[j]=NULL;}
++        }
++}
+diff --git a/source3/smbd/smbXsrv_client.c b/source3/smbd/smbXsrv_client.c
+index b253aba..c92ad44 100644
+--- a/source3/smbd/smbXsrv_client.c
++++ b/source3/smbd/smbXsrv_client.c
+@@ -56,7 +56,7 @@ struct smbXsrv_client_table {
+ #define get_smbXsrv_client_global_db_ctx() smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()]
+ #define set_smbXsrv_client_global_db_ctx(value) smbXsrv_client_global_db_ctx[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *smbXsrv_client_global_db_ctx[MAX_CLIENT_GLOBAL_DB_CONTEXTS] = {NULL};
++struct db_context *smbXsrv_client_global_db_ctx[MAX_CLIENT_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ NTSTATUS smbXsrv_client_global_init(void)
+ {
+@@ -74,7 +74,7 @@ NTSTATUS smbXsrv_client_global_init(void)
+ 	while (1) {
+ 
+ 		if (get_smbXsrv_client_global_db_ctx() != NULL) {
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		/*
+@@ -102,6 +102,7 @@ NTSTATUS smbXsrv_client_global_init(void)
+ 
+ 		set_smbXsrv_client_global_db_ctx(db_ctx);
+ 
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_CLIENT_GLOBAL_DB_CONTEXTS ) ) {
+ 			DEBUG(5, ("smbXsrv_client_global_init: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index a885fd6..40cd0cc 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -66,7 +66,7 @@ extern void svtfs_set_lockdir_index(int);
+ #define get_smbXsrv_open_global_db_ctx() smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()]
+ #define set_smbXsrv_open_global_db_ctx(value) smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *smbXsrv_open_global_db_ctx[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {NULL};
++struct db_context *smbXsrv_open_global_db_ctx[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
+ 
+@@ -185,7 +185,7 @@ NTSTATUS smbXsrv_open_global_init(void)
+ 	while (1) {
+ 
+ 		if (get_smbXsrv_open_global_db_ctx() != NULL) {
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		global_path = svtfs_lock_path("smbXsrv_open_global.tdb");
+@@ -213,6 +213,7 @@ NTSTATUS smbXsrv_open_global_init(void)
+ 					 smbXsrv_open_global_traverse_persist_fn,
+ 					 NULL, NULL);
+ 
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
+ 			DEBUG(5, ("smbXsrv_session_open_init: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/smbd/smbXsrv_session.c b/source3/smbd/smbXsrv_session.c
+index 8d8b9b7..aabbe6c 100644
+--- a/source3/smbd/smbXsrv_session.c
++++ b/source3/smbd/smbXsrv_session.c
+@@ -59,7 +59,7 @@ extern void svtfs_set_lockdir_index(int);
+ #define get_smbXsrv_session_global_db_ctx() smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()]
+ #define set_smbXsrv_session_global_db_ctx(value) smbXsrv_session_global_db_ctx[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *smbXsrv_session_global_db_ctx[MAX_SESSION_GLOBAL_DB_CONTEXTS] = {NULL};
++struct db_context *smbXsrv_session_global_db_ctx[MAX_SESSION_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ NTSTATUS smbXsrv_session_global_init(void)
+ {
+@@ -76,7 +76,7 @@ NTSTATUS smbXsrv_session_global_init(void)
+ 
+ 	while (1) {
+ 		if (get_smbXsrv_session_global_db_ctx() != NULL) {
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		/*
+@@ -104,6 +104,7 @@ NTSTATUS smbXsrv_session_global_init(void)
+ 
+ 		set_smbXsrv_session_global_db_ctx(db_ctx);
+ 
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_SESSION_GLOBAL_DB_CONTEXTS ) ) {
+ 			DEBUG(5, ("smbXsrv_session_global_init: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/smbd/smbXsrv_tcon.c b/source3/smbd/smbXsrv_tcon.c
+index cfbc3d3..82c4845 100644
+--- a/source3/smbd/smbXsrv_tcon.c
++++ b/source3/smbd/smbXsrv_tcon.c
+@@ -51,7 +51,7 @@ extern void svtfs_set_lockdir_index(int);
+ #define get_smbXsrv_tcon_global_db_ctx() smbXsrv_tcon_global_db_ctx[svtfs_get_lockdir_index()]
+ #define set_smbXsrv_tcon_global_db_ctx(value) smbXsrv_tcon_global_db_ctx[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *smbXsrv_tcon_global_db_ctx[MAX_TCON_GLOBAL_DB_CONTEXTS] = {NULL};
++struct db_context *smbXsrv_tcon_global_db_ctx[MAX_TCON_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ NTSTATUS smbXsrv_tcon_global_init(void)
+ {
+@@ -69,7 +69,7 @@ NTSTATUS smbXsrv_tcon_global_init(void)
+ 	while (1) {
+ 
+ 		if (get_smbXsrv_tcon_global_db_ctx() != NULL) {
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		global_path = svtfs_lock_path("smbXsrv_tcon_global.tdb");
+@@ -95,6 +95,7 @@ NTSTATUS smbXsrv_tcon_global_init(void)
+ 
+ 		set_smbXsrv_tcon_global_db_ctx(db_ctx);
+ 
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL)  || ( index >= MAX_TCON_GLOBAL_DB_CONTEXTS ) ) {
+                         DEBUG(5, ("smbXsrv_tcon_global_init: breaking with lockdir_index of %i\n", index));
+diff --git a/source3/smbd/smbXsrv_version.c b/source3/smbd/smbXsrv_version.c
+index 9fe80cd..fefe49b 100644
+--- a/source3/smbd/smbXsrv_version.c
++++ b/source3/smbd/smbXsrv_version.c
+@@ -51,7 +51,7 @@ extern void svtfs_set_lockdir_index(int);
+ #define get_smbXsrv_version_global_db_ctx() smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()]
+ #define set_smbXsrv_version_global_db_ctx(value) smbXsrv_version_global_db_ctx[svtfs_get_lockdir_index()] = value
+ 
+-static struct db_context *smbXsrv_version_global_db_ctx[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {NULL};
++struct db_context *smbXsrv_version_global_db_ctx[MAX_VERSION_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ #define get_smbXsrv_version_global_current_version() smbXsrv_version_global_current_version[svtfs_get_lockdir_index()]
+ #define set_smbXsrv_version_global_current_version(value) smbXsrv_version_global_current_version[svtfs_get_lockdir_index()] = value
+@@ -90,7 +90,7 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
+ 	while (1) {
+ 
+ 		if (get_smbXsrv_version_global_db_ctx() != NULL) {
+-			break;
++			goto nextIndex;
+ 		}
+ 
+ 		global_path = svtfs_lock_path("smbXsrv_version_global.tdb");
+@@ -271,6 +271,7 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
+ 		set_smbXsrv_version_global_db_ctx(db_ctx);
+ 		set_smbXsrv_version_global_current_version(global_blob.version);
+ 
++nextIndex:
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_VERSION_GLOBAL_DB_CONTEXTS ) ) {
+ 			DEBUG(5, ("smbXsrv_version_global_init: breaking with lockdir_index of %i\n", index));
