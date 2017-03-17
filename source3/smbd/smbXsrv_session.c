@@ -1704,7 +1704,9 @@ NTSTATUS smbXsrv_session_logoff(struct smbXsrv_session *session)
 
 	if (global_rec != NULL) {
 		status = dbwrap_record_delete(global_rec);
-		if (!NT_STATUS_IS_OK(status)) {
+                /* SVT: There can be a case where the tdb is closed via a sighup handler */
+                /* Ignore NT_STATUS_NOT_FOUND errors here. This entry will be cleaned up on reopen/reconnect */
+                if ( !NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND) && !NT_STATUS_IS_OK(status)) {
 			TDB_DATA key = dbwrap_record_get_key(global_rec);
 
 			DEBUG(0, ("smbXsrv_session_logoff(0x%08x): "

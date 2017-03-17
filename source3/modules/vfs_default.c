@@ -1000,13 +1000,27 @@ static int vfswrap_fsync(vfs_handle_struct *handle, files_struct *fsp)
 #endif
 }
 
+static void vfswrap_set_fsid (vfs_handle_struct *handle, SMB_STRUCT_STAT * sbuf)
+{
+	connection_struct *conn = handle->conn;
+	struct vfs_statvfs_struct statbuf;
+	int ret;
+	uint64_t fsid;
+	ZERO_STRUCT(statbuf);
+	ret = sys_statvfs(conn->connectpath, &statbuf);
+	if (ret == 0 && statbuf.FsIdentifier != 0 ) {
+		DEBUG(10,("dev id before setting %llu\n",sbuf->st_ex_dev));
+		fsid = statbuf.FsIdentifier;
+		DEBUG(10,("setting fsid to %llu\n",fsid));
+		sbuf->st_ex_dev = fsid;
+	}
+}
+
 static int vfswrap_stat(vfs_handle_struct *handle,
 			struct smb_filename *smb_fname)
 {
 	int result = -1;
-
 	START_PROFILE(syscall_stat);
-
 	if (smb_fname->stream_name) {
 		errno = ENOENT;
 		goto out;
@@ -1014,6 +1028,7 @@ static int vfswrap_stat(vfs_handle_struct *handle,
 
 	result = sys_stat(smb_fname->base_name, &smb_fname->st,
 			  lp_fake_directory_create_times(SNUM(handle->conn)));
+	vfswrap_set_fsid (handle, &smb_fname->st);
  out:
 	END_PROFILE(syscall_stat);
 	return result;
@@ -1026,6 +1041,7 @@ static int vfswrap_fstat(vfs_handle_struct *handle, files_struct *fsp, SMB_STRUC
 	START_PROFILE(syscall_fstat);
 	result = sys_fstat(fsp->fh->fd,
 			   sbuf, lp_fake_directory_create_times(SNUM(handle->conn)));
+	vfswrap_set_fsid (handle, sbuf);
 	END_PROFILE(syscall_fstat);
 	return result;
 }
@@ -1044,6 +1060,7 @@ static int vfswrap_lstat(vfs_handle_struct *handle,
 
 	result = sys_lstat(smb_fname->base_name, &smb_fname->st,
 			   lp_fake_directory_create_times(SNUM(handle->conn)));
+	vfswrap_set_fsid (handle, &smb_fname->st);
  out:
 	END_PROFILE(syscall_lstat);
 	return result;

@@ -969,7 +969,9 @@ NTSTATUS smbXsrv_tcon_disconnect(struct smbXsrv_tcon *tcon, uint64_t vuid)
 
 	if (global_rec != NULL) {
 		status = dbwrap_record_delete(global_rec);
-		if (!NT_STATUS_IS_OK(status)) {
+                /* SVT: There can be a case where the tdb is closed via a sighup handler */
+                /* Ignore NT_STATUS_NOT_FOUND errors here. This entry will be cleaned up on reopen/reconnect */
+                if ( !NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND) && !NT_STATUS_IS_OK(status)) {
 			TDB_DATA key = dbwrap_record_get_key(global_rec);
 
 			DEBUG(0, ("smbXsrv_tcon_disconnect(0x%08x, '%s'): "
