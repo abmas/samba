@@ -1173,6 +1173,9 @@ sub provision($$$$$$$$)
 	my $shadow_shrdir="$shadow_basedir/share";
 	push(@dirs,$shadow_shrdir);
 
+	my $nosymlinks_shrdir="$shrdir/nosymlinks";
+	push(@dirs,$nosymlinks_shrdir);
+
 	# this gets autocreated by winbindd
 	my $wbsockdir="$prefix_abs/winbindd";
 	my $wbsockprivdir="$lockdir/winbindd_privileged";
@@ -1680,6 +1683,28 @@ sub provision($$$$$$$$)
 	vfs objects = fake_dfq
 	admin users = $unix_name
 	include = $dfqconffile
+[dfq_owner]
+	path = $shrdir/dfree
+	vfs objects = acl_xattr fake_acls xattr_tdb fake_dfq
+	inherit owner = yes
+	include = $dfqconffile
+
+[acl_xattr_ign_sysacl_posix]
+	copy = tmp
+	acl_xattr:ignore system acls = yes
+	acl_xattr:default acl style = posix
+[acl_xattr_ign_sysacl_windows]
+	copy = tmp
+	acl_xattr:ignore system acls = yes
+	acl_xattr:default acl style = windows
+[nosymlinks]
+	copy = tmp
+	path = $nosymlinks_shrdir
+	follow symlinks = no
+[kernel_oplocks]
+	copy = tmp
+	kernel oplocks = yes
+	vfs objects = streams_xattr xattr_tdb
 	";
 	close(CONF);
 
