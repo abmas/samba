@@ -1,3 +1,10 @@
+samba (2:4.4.5+dfsg-2+svt5) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-3240: Patch for HYP-3240
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Wed, 22 Mar 2017 16:06:16 -0400
+
 samba (2:4.4.5+dfsg-2+svt4) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
