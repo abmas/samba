@@ -39,3 +39,4 @@
 0039-HYP-1934-Clustering-support-for-Samba-on-svtfs.patch
 0040-HYP-3580-Changes-to-create-tdb-hive-directory-if-one.patch
 0041-HYP-3234-Changes-to-support-reload-on-failover-and-f.patch
+0042-HYP-3240-Set-device-ID-to-fsid-so-failover-failback-.patch

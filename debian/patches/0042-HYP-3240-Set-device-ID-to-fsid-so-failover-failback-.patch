@@ -1,0 +1,126 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Fri, 17 Mar 2017 10:09:45 -0400
+Subject: HYP-3240: Set device ID to fsid so failover/failback can work even
+ if device IDs are different on different nodes/across reboots.
+
+---
+ source3/modules/vfs_default.c  | 21 +++++++++++++++++++--
+ source3/smbd/smbXsrv_open.c    |  8 ++++++--
+ source3/smbd/smbXsrv_session.c |  4 +++-
+ source3/smbd/smbXsrv_tcon.c    |  4 +++-
+ 4 files changed, 31 insertions(+), 6 deletions(-)
+
+diff --git a/source3/modules/vfs_default.c b/source3/modules/vfs_default.c
+index 6a0872c..a35ddaa 100644
+--- a/source3/modules/vfs_default.c
++++ b/source3/modules/vfs_default.c
+@@ -1000,13 +1000,27 @@ static int vfswrap_fsync(vfs_handle_struct *handle, files_struct *fsp)
+ #endif
+ }
+ 
++static void vfswrap_set_fsid (vfs_handle_struct *handle, SMB_STRUCT_STAT * sbuf)
++{
++	connection_struct *conn = handle->conn;
++	struct vfs_statvfs_struct statbuf;
++	int ret;
++	uint64_t fsid;
++	ZERO_STRUCT(statbuf);
++	ret = sys_statvfs(conn->connectpath, &statbuf);
++	if (ret == 0 && statbuf.FsIdentifier != 0 ) {
++		DEBUG(10,("dev id before setting %llu\n",sbuf->st_ex_dev));
++		fsid = statbuf.FsIdentifier;
++		DEBUG(10,("setting fsid to %llu\n",fsid));
++		sbuf->st_ex_dev = fsid;
++	}
++}
++
+ static int vfswrap_stat(vfs_handle_struct *handle,
+ 			struct smb_filename *smb_fname)
+ {
+ 	int result = -1;
+-
+ 	START_PROFILE(syscall_stat);
+-
+ 	if (smb_fname->stream_name) {
+ 		errno = ENOENT;
+ 		goto out;
+@@ -1014,6 +1028,7 @@ static int vfswrap_stat(vfs_handle_struct *handle,
+ 
+ 	result = sys_stat(smb_fname->base_name, &smb_fname->st,
+ 			  lp_fake_directory_create_times(SNUM(handle->conn)));
++	vfswrap_set_fsid (handle, &smb_fname->st);
+  out:
+ 	END_PROFILE(syscall_stat);
+ 	return result;
+@@ -1026,6 +1041,7 @@ static int vfswrap_fstat(vfs_handle_struct *handle, files_struct *fsp, SMB_STRUC
+ 	START_PROFILE(syscall_fstat);
+ 	result = sys_fstat(fsp->fh->fd,
+ 			   sbuf, lp_fake_directory_create_times(SNUM(handle->conn)));
++	vfswrap_set_fsid (handle, sbuf);
+ 	END_PROFILE(syscall_fstat);
+ 	return result;
+ }
+@@ -1044,6 +1060,7 @@ static int vfswrap_lstat(vfs_handle_struct *handle,
+ 
+ 	result = sys_lstat(smb_fname->base_name, &smb_fname->st,
+ 			   lp_fake_directory_create_times(SNUM(handle->conn)));
++	vfswrap_set_fsid (handle, &smb_fname->st);
+  out:
+ 	END_PROFILE(syscall_lstat);
+ 	return result;
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index 40cd0cc..fa53cd3 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -1276,7 +1276,9 @@ NTSTATUS smbXsrv_open_disconnect(struct smbXsrv_open_global0 *global, struct db_
+ 
+ 	if (global_rec != NULL) {
+ 		status = dbwrap_record_delete(global_rec);
+-		if (!NT_STATUS_IS_OK(status)) {
++		/* SVT: There can be a case where the tdb is closed via a sighup handler */
++		/* Ignore NT_STATUS_NOT_FOUND errors here. This entry will be cleaned up on reopen/reconnect */
++		if ( !NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND) && !NT_STATUS_IS_OK(status)) {
+ 			TDB_DATA key = dbwrap_record_get_key(global_rec);
+ 
+ 			DEBUG(0, ("smbXsrv_open_disconnect(0x%08x): "
+@@ -1379,7 +1381,9 @@ NTSTATUS smbXsrv_open_close(struct smbXsrv_open *op, NTTIME now)
+ 
+ 	if (global_rec != NULL) {
+ 		status = dbwrap_record_delete(global_rec);
+-		if (!NT_STATUS_IS_OK(status)) {
++                /* SVT: There can be a case where the tdb is closed via a sighup handler */
++                /* Ignore NT_STATUS_NOT_FOUND errors here. This entry will be cleaned up on reopen/reconnect */
++                if ( !NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND) && !NT_STATUS_IS_OK(status)) {
+ 			TDB_DATA key = dbwrap_record_get_key(global_rec);
+ 
+ 			DEBUG(0, ("smbXsrv_open_close(0x%08x): "
+diff --git a/source3/smbd/smbXsrv_session.c b/source3/smbd/smbXsrv_session.c
+index aabbe6c..1f07238 100644
+--- a/source3/smbd/smbXsrv_session.c
++++ b/source3/smbd/smbXsrv_session.c
+@@ -1704,7 +1704,9 @@ NTSTATUS smbXsrv_session_logoff(struct smbXsrv_session *session)
+ 
+ 	if (global_rec != NULL) {
+ 		status = dbwrap_record_delete(global_rec);
+-		if (!NT_STATUS_IS_OK(status)) {
++                /* SVT: There can be a case where the tdb is closed via a sighup handler */
++                /* Ignore NT_STATUS_NOT_FOUND errors here. This entry will be cleaned up on reopen/reconnect */
++                if ( !NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND) && !NT_STATUS_IS_OK(status)) {
+ 			TDB_DATA key = dbwrap_record_get_key(global_rec);
+ 
+ 			DEBUG(0, ("smbXsrv_session_logoff(0x%08x): "
+diff --git a/source3/smbd/smbXsrv_tcon.c b/source3/smbd/smbXsrv_tcon.c
+index 82c4845..ebc5417 100644
+--- a/source3/smbd/smbXsrv_tcon.c
++++ b/source3/smbd/smbXsrv_tcon.c
+@@ -969,7 +969,9 @@ NTSTATUS smbXsrv_tcon_disconnect(struct smbXsrv_tcon *tcon, uint64_t vuid)
+ 
+ 	if (global_rec != NULL) {
+ 		status = dbwrap_record_delete(global_rec);
+-		if (!NT_STATUS_IS_OK(status)) {
++                /* SVT: There can be a case where the tdb is closed via a sighup handler */
++                /* Ignore NT_STATUS_NOT_FOUND errors here. This entry will be cleaned up on reopen/reconnect */
++                if ( !NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND) && !NT_STATUS_IS_OK(status)) {
+ 			TDB_DATA key = dbwrap_record_get_key(global_rec);
+ 
+ 			DEBUG(0, ("smbXsrv_tcon_disconnect(0x%08x, '%s'): "
