@@ -1251,19 +1251,22 @@ static void smbd_parent_sig_hup_handler(struct tevent_context *ev,
         int no_svtfs = 0, yes_svtfs = 0;
 
 	DEBUG(3,("smbd_parent_sighup_handler: Got message saying smb.conf was "
-		  "updated. Reloading.\n"));
+		  "updated. Reloading. svtfs index = %d\n", svtfs_get_lockdir_index()));
 	change_to_root_user();
         if (svtfs_lockdir_path[svtfs_get_lockdir_index()] == NULL || strstr(svtfs_lockdir_path[svtfs_get_lockdir_index()],"svtfs") == NULL)
         {
                /* Starting state is no svtfs*/
+               DEBUG(3,("smbd_parent_sighup_handler: Did not detect svtfs to begin with.\n"));
                no_svtfs = 1;
         }
 
 	DEBUG(1,("parent: Reloading services after SIGHUP\n"));
 	reload_services(NULL, NULL, false);
+        closedbs_not_owned(NULL);
         if (svtfs_lockdir_path[svtfs_get_lockdir_index()] != NULL && strstr(svtfs_lockdir_path[svtfs_get_lockdir_index()],"svtfs"))
         {
                /* new lockdir path within svtfs specified */
+               DEBUG(3,("smbd_parent_sighup_handler: svtfs is being used.\n"));
                yes_svtfs = 1;
         }
         /* If we started out with svtfs and it got added, just a reload is not going to cut it*/
@@ -1271,10 +1274,10 @@ static void smbd_parent_sig_hup_handler(struct tevent_context *ev,
         /* issue a samba restart, but background it. */
         if ((no_svtfs && yes_svtfs) || (!no_svtfs && !yes_svtfs))
         {
+               DEBUG(3,("smbd_parent_sighup_handler: Restarting samba instead of reload.\n"));
                system("/etc/init.d/samba restart &");
                return;
         }
-        closedbs_not_owned(NULL);
         reinit_svtfs_tdbs_on_reload(parent->msg_ctx, parent->ev_ctx);
         if (!open_sockets_smbd(parent, parent->ev_ctx, parent->msg_ctx, NULL))
                 exit_server("open_sockets_smbd() failed");
