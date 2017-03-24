@@ -41,3 +41,4 @@
 0041-HYP-3234-Changes-to-support-reload-on-failover-and-f.patch
 0042-HYP-3240-Set-device-ID-to-fsid-so-failover-failback-.patch
 0043-HYP-4417-The-code-to-detect-removing-of-svtfs-hives-.patch
+0044-HYP-3240-Additional-debug-logging-set-fsid-to-16384-.patch
