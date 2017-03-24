@@ -605,10 +605,12 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	}
 
 	if (!cookie.allow_reconnect) {
+		DEBUG(10,("cookie.allow_reconnect not set. returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
 	if (strcmp(cookie.servicepath, conn->connectpath) != 0) {
+		DEBUG(10,("cookie.servicepath doesn't match. returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
@@ -629,11 +631,13 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	}
 
 	if (!S_ISREG(smb_fname->st.st_ex_mode)) {
+		DEBUG(10,("smb_fname->st.st_ex_mode incorrect\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
 	file_id = vfs_file_id_from_sbuf(conn, &smb_fname->st);
 	if (!file_id_equal(&cookie.id, &file_id)) {
+		DEBUG(10,("file id mismatch cookie = %llu, stat = %llu\n",cookie.id.devid, file_id.devid));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 

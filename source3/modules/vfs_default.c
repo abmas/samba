@@ -1002,18 +1002,9 @@ static int vfswrap_fsync(vfs_handle_struct *handle, files_struct *fsp)
 
 static void vfswrap_set_fsid (vfs_handle_struct *handle, SMB_STRUCT_STAT * sbuf)
 {
-	connection_struct *conn = handle->conn;
-	struct vfs_statvfs_struct statbuf;
-	int ret;
-	uint64_t fsid;
-	ZERO_STRUCT(statbuf);
-	ret = sys_statvfs(conn->connectpath, &statbuf);
-	if (ret == 0 && statbuf.FsIdentifier != 0 ) {
-		DEBUG(10,("dev id before setting %llu\n",sbuf->st_ex_dev));
-		fsid = statbuf.FsIdentifier;
-		DEBUG(10,("setting fsid to %llu\n",fsid));
-		sbuf->st_ex_dev = fsid;
-	}
+	uint64_t fsid = 16384;
+	DEBUG(10,("dev id before setting %lu, setting to %lu\n",sbuf->st_ex_dev,fsid));
+	sbuf->st_ex_dev = fsid;
 }
 
 static int vfswrap_stat(vfs_handle_struct *handle,
