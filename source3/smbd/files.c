@@ -512,13 +512,23 @@ void fsp_free(files_struct *fsp)
 
 void file_free(struct smb_request *req, files_struct *fsp)
 {
-	struct smbd_server_connection *sconn = fsp->conn->sconn;
+	struct smbd_server_connection *sconn = NULL;
 	uint64_t fnum = fsp->fnum;
 
+        if ( fsp->conn ) {
+                sconn = fsp->conn->sconn;
+        }
+
+        if ( sconn == NULL ) {
+	        DEBUG(0,("file_free:  sconn is NULL; continuing other cleanup\n"));
+        }
+
 	if (fsp->notify) {
-		struct notify_context *notify_ctx =
-			fsp->conn->sconn->notify_ctx;
-		notify_remove(notify_ctx, fsp);
+                if ( sconn ) {
+		        struct notify_context *notify_ctx =
+			        fsp->conn->sconn->notify_ctx;
+		        notify_remove(notify_ctx, fsp);
+                }
 		TALLOC_FREE(fsp->notify);
 	}
 
@@ -543,7 +553,7 @@ void file_free(struct smb_request *req, files_struct *fsp)
 	}
 
 	/* Closing a file can invalidate the positive cache. */
-	if (fsp == sconn->fsp_fi_cache.fsp) {
+	if (sconn && (fsp == sconn->fsp_fi_cache.fsp)) {
 		ZERO_STRUCT(sconn->fsp_fi_cache);
 	}
 
@@ -553,7 +563,8 @@ void file_free(struct smb_request *req, files_struct *fsp)
 	fsp_free(fsp);
 
 	DEBUG(5,("freed files structure %llu (%u used)\n",
-		 (unsigned long long)fnum, (unsigned int)sconn->num_files));
+		 (unsigned long long)fnum,
+                 sconn ? (unsigned int)sconn->num_files : (unsigned int)0));
 }
 
 /****************************************************************************
