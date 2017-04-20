@@ -178,8 +178,8 @@ bool leases_db_init(bool read_only)
 				    TDB_INCOMPATIBLE_HASH,
 				    read_only ? O_RDONLY : O_RDWR|O_CREAT, 0644,
 				    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
-		TALLOC_FREE(db_path);
 		if (get_leases_db() == NULL) {
+		    TALLOC_FREE(db_path);
 			DEBUG(1, ("ERROR: Failed to initialise leases database\n"));
 			return_bool = false;
 			break;
@@ -198,15 +198,14 @@ bool leases_db_init(bool read_only)
 					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
 					DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
 				if (!get_leases_db()) {
+		            TALLOC_FREE(db_path);
 					DEBUG(0,("ERROR: Failed to initialise lease database\n"));
-					TALLOC_FREE(db_path);
 					return_bool = False;
 					break;
 				}
-			} else {
-				TALLOC_FREE(db_path);
 			}
 		}
+        TALLOC_FREE(db_path);
 
 nextIndex:
 		index++;
