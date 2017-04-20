@@ -1,0 +1,40 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 20 Apr 2017 15:46:06 -0400
+Subject: HYP-4303: Do not free db_path prematurely.
+
+---
+ source3/locking/leases_db.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/source3/locking/leases_db.c b/source3/locking/leases_db.c
+index a4da8c3..0f70071 100644
+--- a/source3/locking/leases_db.c
++++ b/source3/locking/leases_db.c
+@@ -178,8 +178,8 @@ bool leases_db_init(bool read_only)
+ 				    TDB_INCOMPATIBLE_HASH,
+ 				    read_only ? O_RDONLY : O_RDWR|O_CREAT, 0644,
+ 				    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
+-		TALLOC_FREE(db_path);
+ 		if (get_leases_db() == NULL) {
++		    TALLOC_FREE(db_path);
+ 			DEBUG(1, ("ERROR: Failed to initialise leases database\n"));
+ 			return_bool = false;
+ 			break;
+@@ -198,15 +198,14 @@ bool leases_db_init(bool read_only)
+ 					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+ 					DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
+ 				if (!get_leases_db()) {
++		            TALLOC_FREE(db_path);
+ 					DEBUG(0,("ERROR: Failed to initialise lease database\n"));
+-					TALLOC_FREE(db_path);
+ 					return_bool = False;
+ 					break;
+ 				}
+-			} else {
+-				TALLOC_FREE(db_path);
+ 			}
+ 		}
++        TALLOC_FREE(db_path);
+ 
+ nextIndex:
+ 		index++;

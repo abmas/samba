@@ -42,3 +42,7 @@
 0042-HYP-3240-Set-device-ID-to-fsid-so-failover-failback-.patch
 0043-HYP-4417-The-code-to-detect-removing-of-svtfs-hives-.patch
 0044-HYP-3240-Additional-debug-logging-set-fsid-to-16384-.patch
+0045-CVE-2017-2619-Security-patch.patch
+0046-HYP-4585-NULL-connection-pointer.patch
+0047-Add-failure-domain.patch
+0048-HYP-4303-Do-not-free-db_path-prematurely.patch

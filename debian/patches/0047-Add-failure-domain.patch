@@ -1,0 +1,93 @@
+From: Jason Taylor <jason.taylor@simplivity.com>
+Date: Thu, 20 Apr 2017 15:31:04 -0400
+Subject: Add failure domain
+
+---
+ docs-xml/smbdotconf/misc/svtfsfailuredomain.xml | 21 ++++++++++++++++++
+ source3/librpc/crypto/gse_krb5.c                | 29 +++++++++++++++++++++++--
+ 2 files changed, 48 insertions(+), 2 deletions(-)
+ create mode 100644 docs-xml/smbdotconf/misc/svtfsfailuredomain.xml
+
+diff --git a/docs-xml/smbdotconf/misc/svtfsfailuredomain.xml b/docs-xml/smbdotconf/misc/svtfsfailuredomain.xml
+new file mode 100644
+index 0000000..60181a0
+--- /dev/null
++++ b/docs-xml/smbdotconf/misc/svtfsfailuredomain.xml
+@@ -0,0 +1,21 @@
++<samba:parameter name="svtfs failure domain"
++                 context="G"
++                 type="ustring"
++                 constant="1"
++                 xmlns:samba="http://www.samba.org/samba/DTD/samba-doc">
++<synonym>failure domain</synonym>
++<description>
++	<para>This option specifies the failure domain for the
++	SimpliVity cluster. It is used to locate additional SPN
++        entries in the Kerberos system keytab.
++	</para>
++
++	<para>
++		Note: This option can not be set inside registry
++		configurations.
++	</para>
++</description>
++
++<value type="default"></value>
++<value type="example">fd-omnicube-io</value>
++</samba:parameter>
+diff --git a/source3/librpc/crypto/gse_krb5.c b/source3/librpc/crypto/gse_krb5.c
+index 3597329..1b9bb3c 100644
+--- a/source3/librpc/crypto/gse_krb5.c
++++ b/source3/librpc/crypto/gse_krb5.c
+@@ -335,10 +335,12 @@ static krb5_error_code fill_mem_keytab_from_system_keytab(krb5_context krbctx,
+ 	krb5_keytab keytab = NULL;
+ 	krb5_kt_cursor kt_cursor;
+ 	krb5_keytab_entry kt_entry;
+-	char *valid_princ_formats[7] = { NULL, NULL, NULL,
+-					 NULL, NULL, NULL, NULL };
++	char *valid_princ_formats[10] = { NULL, NULL, NULL,
++					 NULL, NULL, NULL, NULL,
++                                         NULL, NULL, NULL };
+ 	char *entry_princ_s = NULL;
+ 	fstring my_name, my_fqdn;
++	fstring my_fd_name, my_fd_fqdn;
+ 	int i;
+ 	int err;
+ 
+@@ -351,6 +353,11 @@ static krb5_error_code fill_mem_keytab_from_system_keytab(krb5_context krbctx,
+ 	my_fqdn[0] = '\0';
+ 	name_to_fqdn(my_fqdn, lp_netbios_name());
+ 
++	fstrcpy(my_fd_name, lp_svtfs_failure_domain());
++
++	my_fd_fqdn[0] = '\0';
++	name_to_fqdn(my_fd_fqdn, lp_svtfs_failure_domain());
++
+ 	err = asprintf(&valid_princ_formats[0],
+ 			"%s$@%s", my_name, lp_realm());
+ 	if (err == -1) {
+@@ -393,6 +400,24 @@ static krb5_error_code fill_mem_keytab_from_system_keytab(krb5_context krbctx,
+ 		ret = ENOMEM;
+ 		goto out;
+ 	}
++	err = asprintf(&valid_princ_formats[7],
++			"cifs/%s@%s", my_fd_name, lp_realm());
++	if (err == -1) {
++		ret = ENOMEM;
++		goto out;
++	}
++	err = asprintf(&valid_princ_formats[8],
++			"cifs/%s@%s", my_fd_fqdn, lp_realm());
++	if (err == -1) {
++		ret = ENOMEM;
++		goto out;
++	}
++	err = asprintf(&valid_princ_formats[9],
++			"cifs/%s.%s@%s", my_fd_name, lp_realm(), lp_realm());
++	if (err == -1) {
++		ret = ENOMEM;
++		goto out;
++	}
+ 
+ 	ZERO_STRUCT(kt_entry);
+ 	ZERO_STRUCT(kt_cursor);
