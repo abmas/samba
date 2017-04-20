@@ -1,0 +1,21 @@
+<samba:parameter name="svtfs failure domain"
+                 context="G"
+                 type="ustring"
+                 constant="1"
+                 xmlns:samba="http://www.samba.org/samba/DTD/samba-doc">
+<synonym>failure domain</synonym>
+<description>
+	<para>This option specifies the failure domain for the
+	SimpliVity cluster. It is used to locate additional SPN
+        entries in the Kerberos system keytab.
+	</para>
+
+	<para>
+		Note: This option can not be set inside registry
+		configurations.
+	</para>
+</description>
+
+<value type="default"></value>
+<value type="example">fd-omnicube-io</value>
+</samba:parameter>

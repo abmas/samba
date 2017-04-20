@@ -335,10 +335,12 @@ static krb5_error_code fill_mem_keytab_from_system_keytab(krb5_context krbctx,
 	krb5_keytab keytab = NULL;
 	krb5_kt_cursor kt_cursor;
 	krb5_keytab_entry kt_entry;
-	char *valid_princ_formats[7] = { NULL, NULL, NULL,
-					 NULL, NULL, NULL, NULL };
+	char *valid_princ_formats[10] = { NULL, NULL, NULL,
+					 NULL, NULL, NULL, NULL,
+                                         NULL, NULL, NULL };
 	char *entry_princ_s = NULL;
 	fstring my_name, my_fqdn;
+	fstring my_fd_name, my_fd_fqdn;
 	int i;
 	int err;
 
@@ -350,6 +352,11 @@ static krb5_error_code fill_mem_keytab_from_system_keytab(krb5_context krbctx,
 
 	my_fqdn[0] = '\0';
 	name_to_fqdn(my_fqdn, lp_netbios_name());
+
+	fstrcpy(my_fd_name, lp_svtfs_failure_domain());
+
+	my_fd_fqdn[0] = '\0';
+	name_to_fqdn(my_fd_fqdn, lp_svtfs_failure_domain());
 
 	err = asprintf(&valid_princ_formats[0],
 			"%s$@%s", my_name, lp_realm());
@@ -389,6 +396,24 @@ static krb5_error_code fill_mem_keytab_from_system_keytab(krb5_context krbctx,
 	}
 	err = asprintf(&valid_princ_formats[6],
 			"cifs/%s.%s@%s", my_name, lp_realm(), lp_realm());
+	if (err == -1) {
+		ret = ENOMEM;
+		goto out;
+	}
+	err = asprintf(&valid_princ_formats[7],
+			"cifs/%s@%s", my_fd_name, lp_realm());
+	if (err == -1) {
+		ret = ENOMEM;
+		goto out;
+	}
+	err = asprintf(&valid_princ_formats[8],
+			"cifs/%s@%s", my_fd_fqdn, lp_realm());
+	if (err == -1) {
+		ret = ENOMEM;
+		goto out;
+	}
+	err = asprintf(&valid_princ_formats[9],
+			"cifs/%s.%s@%s", my_fd_name, lp_realm(), lp_realm());
 	if (err == -1) {
 		ret = ENOMEM;
 		goto out;
