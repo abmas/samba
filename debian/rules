@@ -151,7 +151,6 @@ override_dh_install:
 	# correct place by dh_install
 	cp debian/smb.conf* $(DESTDIR)/usr/share/samba/
 	install -m755 debian/panic-action $(DESTDIR)/usr/share/samba/panic-action
-	install -m755 debian/svt-samba-init $(DESTDIR)/usr/sbin/svt-samba-init
 	cp debian/gdbcommands $(DESTDIR)/etc/samba/
 	mkdir -p $(DESTDIR)/etc/dhcp/dhclient-enter-hooks.d
 	install -m755 debian/samba-common.dhcp $(DESTDIR)/etc/dhcp/dhclient-enter-hooks.d/samba

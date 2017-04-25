@@ -1,3 +1,11 @@
+samba (2:4.4.5+dfsg-2+svt6) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * patches for svt6 samba
+  * HYP-4444: Remove svt-samba-init from debian package.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Thu, 20 Apr 2017 16:07:03 -0400
+
 samba (2:4.4.5+dfsg-2+svt5) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
