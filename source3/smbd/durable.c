@@ -637,7 +637,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 
 	file_id = vfs_file_id_from_sbuf(conn, &smb_fname->st);
 	if (!file_id_equal(&cookie.id, &file_id)) {
-		DEBUG(10,("file id mismatch cookie = %llu, stat = %llu\n",cookie.id.devid, file_id.devid));
+		DEBUG(10,("file id mismatch cookie = %llu, stat = %llu\n",(unsigned long long)cookie.id.devid, (unsigned long long)file_id.devid));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 

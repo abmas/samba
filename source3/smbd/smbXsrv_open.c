@@ -1922,9 +1922,11 @@ bool smbXsrv_open_is_resilient(uint64_t persistent_id)
 		goto done;
 	}
 
-	if ( op->resilient ) {
-		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x], [persistent: 0x%16lx] is resilient\n", global_id, persistent_id));
+	if ( op->resilient || op->persistent ) {
+	        DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x], [persistent: 0x%16lx] is resilient or persistent\n", global_id, persistent_id));
 		ret = true;
+	} else {
+		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x], [persistent: 0x%16lx] is not resilient or persistent\n", global_id, persistent_id));
 	}
 done:
 	talloc_free(frame);
