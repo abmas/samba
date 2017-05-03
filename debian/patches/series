@@ -46,3 +46,4 @@
 0046-HYP-4585-NULL-connection-pointer.patch
 0047-Add-failure-domain.patch
 0048-HYP-4303-Do-not-free-db_path-prematurely.patch
+0049-Revert-CVE-2017-2619-Security-patch.patch
