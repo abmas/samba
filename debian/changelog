@@ -1,3 +1,10 @@
+samba (2:4.4.5+dfsg-2+svt7) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * Revert security patch
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Wed, 03 May 2017 14:28:55 -0400
+
 samba (2:4.4.5+dfsg-2+svt6) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
