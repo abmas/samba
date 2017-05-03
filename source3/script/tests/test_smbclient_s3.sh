@@ -1071,113 +1071,6 @@ done
 
 LOGDIR=$(mktemp -d ${PREFIX}/${LOGDIR_PREFIX}_XXXXXX)
 
-# Test follow symlinks can't access symlinks
-test_nosymlinks()
-{
-# Setup test dirs.
-    slink_name="$LOCAL_PATH/nosymlinks/source"
-    slink_target="$LOCAL_PATH/nosymlinks/target"
-    mkdir_target="$LOCAL_PATH/nosymlinks/a"
-    dir1="$LOCAL_PATH/nosymlinks/foo"
-    dir2="$LOCAL_PATH/nosymlinks/foo/bar"
-    get_target="$LOCAL_PATH/nosymlinks/foo/bar/testfile"
-
-    rm -f $slink_target
-    rm -f $slink_name
-    rm -rf $mkdir_target
-    rm -rf $dir1
-
-    touch $slink_target
-    ln -s $slink_target $slink_name
-
-    mkdir $dir1
-    mkdir $dir2
-    touch $get_target
-
-# Getting a file through a symlink name should fail.
-    tmpfile=$PREFIX/smbclient_interactive_prompt_commands
-    cat > $tmpfile <<EOF
-get source
-quit
-EOF
-    cmd='CLI_FORCE_INTERACTIVE=yes $SMBCLIENT "$@" -U$USERNAME%$PASSWORD //$SERVER/nosymlinks -I $SERVER_IP $ADDARGS < $tmpfile 2>&1'
-    eval echo "$cmd"
-    out=`eval $cmd`
-    ret=$?
-    rm -f $tmpfile
-
-    if [ $ret -ne 0 ] ; then
-       echo "$out"
-       echo "failed accessing nosymlinks with error $ret"
-       false
-       return
-    fi
-
-    echo "$out" | grep 'NT_STATUS_ACCESS_DENIED'
-    ret=$?
-    if [ $ret -ne 0 ] ; then
-       echo "$out"
-       echo "failed - should get NT_STATUS_ACCESS_DENIED getting \\nosymlinks\\source"
-       false
-       return
-    fi
-
-# But we should be able to create and delete directories.
-    cat > $tmpfile <<EOF
-mkdir a
-mkdir a\\b
-quit
-EOF
-    cmd='CLI_FORCE_INTERACTIVE=yes $SMBCLIENT "$@" -U$USERNAME%$PASSWORD //$SERVER/nosymlinks -I $SERVER_IP $ADDARGS < $tmpfile 2>&1'
-    eval echo "$cmd"
-    out=`eval $cmd`
-    ret=$?
-    rm -f $tmpfile
-
-    if [ $ret -ne 0 ] ; then
-       echo "$out"
-       echo "failed accessing nosymlinks with error $ret"
-       false
-       return
-    fi
-
-    echo "$out" | grep 'NT_STATUS'
-    ret=$?
-    if [ $ret -eq 0 ] ; then
-	echo "$out"
-	echo "failed - NT_STATUS_XXXX doing mkdir a; mkdir a\\b on \\nosymlinks"
-	false
-    fi
-
-# Ensure regular file/directory access also works.
-    cat > $tmpfile <<EOF
-cd foo\\bar
-ls
-get testfile -
-quit
-EOF
-    cmd='CLI_FORCE_INTERACTIVE=yes $SMBCLIENT "$@" -U$USERNAME%$PASSWORD //$SERVER/nosymlinks -I $SERVER_IP $ADDARGS < $tmpfile 2>&1'
-    eval echo "$cmd"
-    out=`eval $cmd`
-    ret=$?
-    rm -f $tmpfile
-
-    if [ $ret -ne 0 ] ; then
-       echo "$out"
-       echo "failed accessing nosymlinks with error $ret"
-       false
-       return
-    fi
-
-    echo "$out" | grep 'NT_STATUS'
-    ret=$?
-    if [ $ret -eq 0 ] ; then
-       echo "$out"
-       echo "failed - NT_STATUS_XXXX doing cd foo\\bar; get testfile on \\nosymlinks"
-       false
-       return
-    fi
-}
 
 testit "smbclient -L $SERVER_IP" $SMBCLIENT -L $SERVER_IP -N -p 139 || failed=`expr $failed + 1`
 testit "smbclient -L $SERVER -I $SERVER_IP" $SMBCLIENT -L $SERVER -I $SERVER_IP -N -p 139 -c quit || failed=`expr $failed + 1`
@@ -1260,10 +1153,6 @@ testit "creating a :stream at root of share" \
 
 testit "Ensure widelinks are restricted" \
     test_widelinks || \
-    failed=`expr $failed + 1`
-
-testit "follow symlinks = no" \
-    test_nosymlinks || \
     failed=`expr $failed + 1`
 
 testit "rm -rf $LOGDIR" \

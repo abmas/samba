@@ -24,7 +24,6 @@
 #include "../libcli/smb/smb_common.h"
 #include "trans2.h"
 #include "../lib/util/tevent_ntstatus.h"
-#include "system/filesys.h"
 
 static struct tevent_req *smbd_smb2_query_directory_send(TALLOC_CTX *mem_ctx,
 					      struct tevent_context *ev,
@@ -323,23 +322,7 @@ static struct tevent_req *smbd_smb2_query_directory_send(TALLOC_CTX *mem_ctx,
 	}
 
 	if (in_flags & SMB2_CONTINUE_FLAG_REOPEN) {
-		int flags;
-
 		dptr_CloseDir(fsp);
-
-		/*
-		 * dptr_CloseDir() will close and invalidate the fsp's file
-		 * descriptor, we have to reopen it.
-		 */
-
-		flags = O_RDONLY;
-#ifdef O_DIRECTORY
-		flags |= O_DIRECTORY;
-#endif
-		status = fd_open(conn, fsp, flags, 0);
-		if (tevent_req_nterror(req, status)) {
-			return tevent_req_post(req, ev);
-		}
 	}
 
 	if (!smbreq->posix_pathnames) {
