@@ -1,0 +1,41 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Mon, 1 May 2017 14:17:01 +0000
+Subject: HYP-4653: With kerberos,
+ HyperV wants persistent handles to be reconnected after hours!
+
+---
+ source3/smbd/durable.c      | 2 +-
+ source3/smbd/smbXsrv_open.c | 6 ++++--
+ 2 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/source3/smbd/durable.c b/source3/smbd/durable.c
+index 79614e2..bf2f597 100644
+--- a/source3/smbd/durable.c
++++ b/source3/smbd/durable.c
+@@ -637,7 +637,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
+ 
+ 	file_id = vfs_file_id_from_sbuf(conn, &smb_fname->st);
+ 	if (!file_id_equal(&cookie.id, &file_id)) {
+-		DEBUG(10,("file id mismatch cookie = %llu, stat = %llu\n",cookie.id.devid, file_id.devid));
++		DEBUG(10,("file id mismatch cookie = %llu, stat = %llu\n",(unsigned long long)cookie.id.devid, (unsigned long long)file_id.devid));
+ 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+ 	}
+ 
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index fa53cd3..9d89f22 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -1922,9 +1922,11 @@ bool smbXsrv_open_is_resilient(uint64_t persistent_id)
+ 		goto done;
+ 	}
+ 
+-	if ( op->resilient ) {
+-		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x], [persistent: 0x%16lx] is resilient\n", global_id, persistent_id));
++	if ( op->resilient || op->persistent ) {
++	        DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x], [persistent: 0x%16lx] is resilient or persistent\n", global_id, persistent_id));
+ 		ret = true;
++	} else {
++		DEBUG(1, ("smbXsrv_open_is_resilient[global: 0x%08x], [persistent: 0x%16lx] is not resilient or persistent\n", global_id, persistent_id));
+ 	}
+ done:
+ 	talloc_free(frame);

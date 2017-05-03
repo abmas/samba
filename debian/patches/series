@@ -47,3 +47,4 @@
 0047-Add-failure-domain.patch
 0048-HYP-4303-Do-not-free-db_path-prematurely.patch
 0049-Revert-CVE-2017-2619-Security-patch.patch
+0050-HYP-4653-With-kerberos-HyperV-wants-persistent-handl.patch
