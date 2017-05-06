@@ -26,6 +26,7 @@
 #include "util_tdb.h"
 #include "ndr.h"
 #include "librpc/gen_ndr/ndr_leases_db.h"
+#include "tdb_wrap/tdb_wrap.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_LOCKING
@@ -175,6 +176,7 @@ bool leases_db_init(bool read_only)
 
 		set_leases_db(db_open(NULL, db_path, 0,
 				    TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/
+				    (read_only ? 0 : TDB_TRIM_SIZE)|
 				    TDB_INCOMPATIBLE_HASH,
 				    read_only ? O_RDONLY : O_RDWR|O_CREAT, 0644,
 				    DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));

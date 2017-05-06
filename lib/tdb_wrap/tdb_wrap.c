@@ -23,6 +23,7 @@
 #include "lib/util/dlinklist.h"
 #include "lib/util/debug.h"
 #include "tdb_wrap.h"
+#include "system/filesys.h"
 
 /*
  Log tdb messages via DEBUG().
@@ -72,6 +73,39 @@ struct tdb_wrap_private {
 	struct tdb_wrap_private *next, *prev;
 };
 
+static int failed;
+
+static int copy_fn(TDB_CONTEXT *tdb, TDB_DATA key, TDB_DATA dbuf, void *state)
+{
+        TDB_CONTEXT *tdb_new = (TDB_CONTEXT *)state;
+
+        if (tdb_store(tdb_new, key, dbuf, TDB_INSERT) != 0) {
+                DEBUG(0,("TRIMTDB:Failed to insert into %s\n", tdb_name(tdb_new)));
+                failed = 1;
+                return 1;
+        }
+        return 0;
+}
+
+static int dummy_fn(TDB_CONTEXT *tdb, TDB_DATA key, TDB_DATA dbuf, void *state)
+{
+        return 0;
+}
+
+static char *add_suffix(const char *name, const char *suffix)
+{
+        char *ret;
+        int len = strlen(name) + strlen(suffix) + 1;
+        ret = (char *)malloc(len);
+        if (!ret) {
+                DEBUG(0,("TRIMTDB:Out of memory!\n"));
+                exit(1);
+        }
+        snprintf(ret, len, "%s%s", name, suffix);
+        return ret;
+}
+
+
 static struct tdb_wrap_private *tdb_list;
 
 /* destroy the last connection to a tdb */
@@ -91,6 +125,11 @@ static struct tdb_wrap_private *tdb_wrap_private_open(TALLOC_CTX *mem_ctx,
 {
 	struct tdb_wrap_private *result;
 	struct tdb_logging_context lctx = { .log_fn = tdb_wrap_log };
+	TDB_CONTEXT *tdb;
+	TDB_CONTEXT *tdb_new;
+	char *tmp_name;
+	int count1, count2;
+	struct stat st;
 
 	result = talloc_pooled_object(mem_ctx, struct tdb_wrap_private,
 				      1, strlen(name)+1);
@@ -105,6 +144,114 @@ static struct tdb_wrap_private *tdb_wrap_private_open(TALLOC_CTX *mem_ctx,
 	if (result->tdb == NULL) {
 		goto fail;
 	}
+	tdb = result->tdb;
+	if ( (tdb_flags & TDB_TRIM_SIZE) == TDB_TRIM_SIZE) {
+		if (stat(name, &st) == 0) {
+			DEBUG(0,("TDBTRIM: Size of tdb %s before trim = %u\n",name,(uint32_t)st.st_size));
+		}
+		tmp_name = add_suffix(name, ".tmp");
+		unlink(tmp_name);
+		tdb_new = tdb_open_ex(tmp_name,
+				hash_size,
+				tdb_flags|TDB_NOMMAP,
+				open_flags, mode,
+				&lctx, NULL);
+		if (!tdb_new) {
+			DEBUG(0,("TDBTRIM:Unable to open file %s\n",tmp_name));
+			free(tmp_name);
+			goto cont;
+		}
+		if (tdb_transaction_start(tdb) != 0) {
+			DEBUG(0,("TDBTRIM:Failed to start transaction on original tdb\n"));
+			tdb_close(tdb_new);
+			unlink(tmp_name);
+			free(tmp_name);
+			goto cont;
+		}
+		/* lock the backup tdb so that nobody else can change it */
+		if (tdb_lockall(tdb_new) != 0) {
+			DEBUG(0,("TDBTRIM:Failed to lock backup tdb\n"));
+			tdb_close(tdb_new);
+			unlink(tmp_name);
+			free(tmp_name);
+			if (tdb_transaction_cancel(tdb) != 0 ) goto fail;
+			goto cont;
+		}
+
+		failed = 0;
+
+		/* traverse and copy */
+		count1 = tdb_traverse(tdb, copy_fn, (void *)tdb_new);
+		if (count1 < 0 || failed) {
+			DEBUG(0,("TDBTRIM:failed to copy %s\n", name));
+			tdb_close(tdb_new);
+			unlink(tmp_name);
+			free(tmp_name);
+			if (tdb_transaction_cancel(tdb) != 0 ) goto fail;
+			goto cont;
+		}
+
+		/* copy done, unlock the backup tdb */
+		tdb_unlockall(tdb_new);
+
+#ifdef HAVE_FDATASYNC
+		if (fdatasync(tdb_fd(tdb_new)) != 0)
+#else
+		if (fsync(tdb_fd(tdb_new)) != 0)
+#endif
+		{
+			/* not fatal */
+			DEBUG(0,("TDBTRIM:failed to fsync backup file\n"));
+		}
+
+		/* close the new tdb and re-open read-only */
+		tdb_close(tdb_new);
+		tdb_new = tdb_open_ex(tmp_name,
+				0,
+				tdb_flags|TDB_NOMMAP,
+				O_RDONLY, 0,
+				&lctx, NULL);
+
+		if (!tdb_new) {
+			DEBUG(0,("TDBTRIM:failed to reopen %s\n", tmp_name));
+			unlink(tmp_name);
+			free(tmp_name);
+			if (tdb_transaction_cancel(tdb) != 0 ) goto fail;
+			goto cont;
+		}
+		/* traverse the new tdb to confirm */
+		count2 = tdb_traverse(tdb_new, dummy_fn, NULL);
+		if (count2 != count1) {
+			DEBUG(0,("TDBTRIM:failed to copy %s\n", name));
+			tdb_close(tdb_new);
+			unlink(tmp_name);
+			free(tmp_name);
+			if (tdb_transaction_cancel(tdb) != 0 ) goto fail;
+			goto cont;
+		}
+
+		/* close the new tdb and rename it to original file */
+		tdb_close(tdb_new);
+		tdb_close(tdb);
+		if (rename(tmp_name, name) != 0) {
+			DEBUG(0,("TDBTRIM:failed to copy %s\n", name));
+			free(tmp_name);
+			goto fail; /* unexpected, fail */
+		}
+
+		free(tmp_name);
+
+		if (stat(name, &st) == 0) {
+			DEBUG(0,("TDBTRIM: Size of tdb %s after trim = %u\n",name,(uint32_t)st.st_size));
+		}
+		/* Now reopen the trimmed tdb file! */
+		result->tdb = tdb_open_ex(name, hash_size, tdb_flags,
+				open_flags, mode, &lctx, NULL);
+		if (result->tdb == NULL) {
+			goto fail;
+		}
+	}
+cont:
 	talloc_set_destructor(result, tdb_wrap_private_destructor);
 	DLIST_ADD(tdb_list, result);
 	return result;

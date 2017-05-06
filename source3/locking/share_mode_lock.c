@@ -49,6 +49,7 @@
 #include "source3/lib/dbwrap/dbwrap_watch.h"
 #include "locking/leases_db.h"
 #include "../lib/util/memcache.h"
+#include "tdb_wrap/tdb_wrap.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_LOCKING
@@ -181,7 +182,8 @@ static bool locking_init_internal(bool read_only)
 		/* handle related entries. If something fails in the middle, we will get rid of the db and move on*/
 		set_lock_db(db_open(NULL, db_path,
 				  SMB_OPEN_DATABASE_TDB_HASH_SIZE,
-				  TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH,
+				  TDB_DEFAULT|TDB_VOLATILE|/*TDB_CLEAR_IF_FIRST|*/TDB_INCOMPATIBLE_HASH|
+				  (read_only?0:TDB_TRIM_SIZE),
 				  read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
 				  DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE));
 		if (!get_lock_db()) {

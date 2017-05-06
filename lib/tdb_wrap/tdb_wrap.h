@@ -32,6 +32,8 @@
 #include <talloc.h>
 #include <tdb.h>
 
+#define TDB_TRIM_SIZE 8192 /* Trim tdb file so excess free space is freed*/
+
 struct tdb_wrap {
 	struct tdb_context *tdb;
 };

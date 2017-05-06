@@ -30,6 +30,7 @@
 #include "lib/util/util_tdb.h"
 #include "librpc/gen_ndr/ndr_smbXsrv.h"
 #include "serverid.h"
+#include "tdb_wrap/tdb_wrap.h"
 
 /* Remove the paranoid malloc checker. */
 #ifdef malloc
@@ -196,7 +197,7 @@ NTSTATUS smbXsrv_open_global_init(void)
 
 		db_ctx = db_open(NULL, global_path,
 				 0, /* hash_size */
-				 TDB_DEFAULT |
+				 TDB_DEFAULT | TDB_TRIM_SIZE |
 				 TDB_INCOMPATIBLE_HASH,
 				 O_RDWR | O_CREAT, 0600,
 				 DBWRAP_LOCK_ORDER_1,

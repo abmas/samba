@@ -33,6 +33,7 @@
 #include "serverid.h"
 #include "messages.h"
 #include "util_tdb.h"
+#include "tdb_wrap/tdb_wrap.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_LOCKING
@@ -387,6 +388,7 @@ void brl_init(bool read_only)
 			break;
 		}
 
+		if (!read_only) tdb_flags |= TDB_TRIM_SIZE;
 		set_brlock_db(db_open(NULL, db_path,
 				    SMB_OPEN_DATABASE_TDB_HASH_SIZE, tdb_flags,
 				    read_only?O_RDONLY:(O_RDWR|O_CREAT), 0644,
