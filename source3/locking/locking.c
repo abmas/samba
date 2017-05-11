@@ -118,20 +118,22 @@ bool strict_lock_default(files_struct *fsp, struct lock_struct *plock)
 	}
 
 	if (strict_locking == Auto) {
-		if  (EXCLUSIVE_OPLOCK_TYPE(fsp->oplock_type) &&
-		     (plock->lock_type == READ_LOCK ||
-		      plock->lock_type == WRITE_LOCK)) {
-			DEBUG(10, ("is_locked: optimisation - exclusive oplock "
-				   "on file %s\n", fsp_str_dbg(fsp)));
-			return true;
-		}
-		if ((fsp->oplock_type == LEVEL_II_OPLOCK) &&
-		    (plock->lock_type == READ_LOCK)) {
-			DEBUG(10, ("is_locked: optimisation - level II oplock "
-				   "on file %s\n", fsp_str_dbg(fsp)));
-			return true;
-		}
-	}
+        uint32_t lease_type = fsp_lease_type(fsp);
+        if ((lease_type & SMB2_LEASE_READ) &&
+            (plock->lock_type == READ_LOCK))
+        {
+            DEBUG(5,("optimisation - read oplock/lease on file %s\n",
+            fsp_str_dbg(fsp)));
+            return true;
+        }
+        if ((lease_type & SMB2_LEASE_WRITE) &&
+            (plock->lock_type == WRITE_LOCK))
+        {
+            DEBUG(5,("optimisation - write oplock/lease on file %s\n",
+            fsp_str_dbg(fsp)));
+            return true;
+        }
+    }
 
 	br_lck = brl_get_locks_readonly(fsp);
 	if (!br_lck) {

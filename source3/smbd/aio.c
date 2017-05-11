@@ -911,8 +911,8 @@ NTSTATUS schedule_aio_smb2_write(connection_struct *conn,
 	smbreq->async_priv = aio_ex;
 
 	/* This should actually be improved to span the write. */
-	contend_level2_oplocks_begin(fsp, LEVEL2_CONTEND_WRITE);
-	contend_level2_oplocks_end(fsp, LEVEL2_CONTEND_WRITE);
+	/* contend_level2_oplocks_begin(fsp, LEVEL2_CONTEND_WRITE);*/
+	/* contend_level2_oplocks_end(fsp, LEVEL2_CONTEND_WRITE);*/
 
 	/*
 	 * We don't want to do write behind due to ownership
