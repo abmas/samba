@@ -1,3 +1,10 @@
+samba (2:4.4.5+dfsg-2+svt8) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * patches for svt8
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Thu, 11 May 2017 16:26:56 -0400
+
 samba (2:4.4.5+dfsg-2+svt7) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
