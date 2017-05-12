@@ -1,0 +1,65 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 11 May 2017 13:35:07 -0400
+Subject: HYP-4451: Performance improvements in the lock/lease handling of IO.
+
+---
+ source3/locking/locking.c | 30 ++++++++++++++++--------------
+ source3/smbd/aio.c        |  4 ++--
+ 2 files changed, 18 insertions(+), 16 deletions(-)
+
+diff --git a/source3/locking/locking.c b/source3/locking/locking.c
+index 603a5d4..4bdc808 100644
+--- a/source3/locking/locking.c
++++ b/source3/locking/locking.c
+@@ -118,20 +118,22 @@ bool strict_lock_default(files_struct *fsp, struct lock_struct *plock)
+ 	}
+ 
+ 	if (strict_locking == Auto) {
+-		if  (EXCLUSIVE_OPLOCK_TYPE(fsp->oplock_type) &&
+-		     (plock->lock_type == READ_LOCK ||
+-		      plock->lock_type == WRITE_LOCK)) {
+-			DEBUG(10, ("is_locked: optimisation - exclusive oplock "
+-				   "on file %s\n", fsp_str_dbg(fsp)));
+-			return true;
+-		}
+-		if ((fsp->oplock_type == LEVEL_II_OPLOCK) &&
+-		    (plock->lock_type == READ_LOCK)) {
+-			DEBUG(10, ("is_locked: optimisation - level II oplock "
+-				   "on file %s\n", fsp_str_dbg(fsp)));
+-			return true;
+-		}
+-	}
++        uint32_t lease_type = fsp_lease_type(fsp);
++        if ((lease_type & SMB2_LEASE_READ) &&
++            (plock->lock_type == READ_LOCK))
++        {
++            DEBUG(5,("optimisation - read oplock/lease on file %s\n",
++            fsp_str_dbg(fsp)));
++            return true;
++        }
++        if ((lease_type & SMB2_LEASE_WRITE) &&
++            (plock->lock_type == WRITE_LOCK))
++        {
++            DEBUG(5,("optimisation - write oplock/lease on file %s\n",
++            fsp_str_dbg(fsp)));
++            return true;
++        }
++    }
+ 
+ 	br_lck = brl_get_locks_readonly(fsp);
+ 	if (!br_lck) {
+diff --git a/source3/smbd/aio.c b/source3/smbd/aio.c
+index 32a1ce0..f98377b 100644
+--- a/source3/smbd/aio.c
++++ b/source3/smbd/aio.c
+@@ -911,8 +911,8 @@ NTSTATUS schedule_aio_smb2_write(connection_struct *conn,
+ 	smbreq->async_priv = aio_ex;
+ 
+ 	/* This should actually be improved to span the write. */
+-	contend_level2_oplocks_begin(fsp, LEVEL2_CONTEND_WRITE);
+-	contend_level2_oplocks_end(fsp, LEVEL2_CONTEND_WRITE);
++	/* contend_level2_oplocks_begin(fsp, LEVEL2_CONTEND_WRITE);*/
++	/* contend_level2_oplocks_end(fsp, LEVEL2_CONTEND_WRITE);*/
+ 
+ 	/*
+ 	 * We don't want to do write behind due to ownership
