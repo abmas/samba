@@ -50,3 +50,4 @@
 0050-HYP-4653-With-kerberos-HyperV-wants-persistent-handl.patch
 0051-HYP-4451-Performance-improvements-in-the-lock-lease-.patch
 0052-HYP-4645-Changes-to-trim-db-files-on-samba-startup.patch
+0053-HYP-4645-Additional-changes-to-restrict-trimming-onl.patch
