@@ -3414,6 +3414,7 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn
 	struct smbd_smb2_request_read_state *state = &xconn->smb2.request_read_state;
 	size_t max_send_queue_len;
 	size_t cur_send_queue_len;
+	static bool paused = false;
 
 	if (!NT_STATUS_IS_OK(xconn->transport.status)) {
 		/*
@@ -3439,6 +3440,8 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn
 		 * we wait until they are on the wire until we
 		 * ask for the next request.
 		 */
+		DEBUG(3,("smbd_smb2_request_next_incoming: Pausing read from socket until sendq (size %d) drained\n",cur_send_queue_len));
+		paused = true;
 		return NT_STATUS_OK;
 	}
 
@@ -3448,6 +3451,11 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn
 	if (state->req == NULL) {
 		return NT_STATUS_NO_MEMORY;
 	}
+	if (paused == true) {
+		DEBUG(3,("smbd_smb2_request_next_incoming: Unpausing read from socket with sendq (size %d)\n",cur_send_queue_len));
+		paused = false;
+	}
+
 	state->req->sconn = sconn;
 	state->req->xconn = xconn;
 	state->min_recv_size = lp_min_receive_file_size();
@@ -3572,6 +3580,7 @@ static NTSTATUS smbd_smb2_flush_send_queue(struct smbXsrv_connection *xconn)
 	int ret;
 	int err;
 	bool retry;
+	NTSTATUS status;
 
 	if (xconn->smb2.send_queue == NULL) {
 		TEVENT_FD_NOT_WRITEABLE(xconn->transport.fde);
@@ -3583,10 +3592,10 @@ static NTSTATUS smbd_smb2_flush_send_queue(struct smbXsrv_connection *xconn)
 		bool ok;
 
 		if (e->sendfile_header != NULL) {
-			NTSTATUS status = NT_STATUS_INTERNAL_ERROR;
 			size_t size = 0;
 			size_t i = 0;
 			uint8_t *buf;
+			status = NT_STATUS_INTERNAL_ERROR;
 
 			for (i=0; i < e->count; i++) {
 				size += e->vector[i].iov_len;
@@ -3657,6 +3666,15 @@ static NTSTATUS smbd_smb2_flush_send_queue(struct smbXsrv_connection *xconn)
 		xconn->smb2.send_queue_len--;
 		DLIST_REMOVE(xconn->smb2.send_queue, e);
 		talloc_free(e->mem_ctx);
+	}
+    /*
+     * Restart reads if we were blocked on
+     * draining the send queue.
+     */
+
+	status = smbd_smb2_request_next_incoming(xconn);
+	if (!NT_STATUS_IS_OK(status)) {
+		return status;
 	}
 
 	return NT_STATUS_OK;
