@@ -409,6 +409,60 @@ fail:
 	return false;
 }
 
+void scavenger_schedule_persistent_disconnected(struct smbXsrv_open_global0 *global, struct messaging_context * msg_ctx, struct file_id file_id)
+{
+	NTSTATUS status;
+	struct server_id self = messaging_server_id(msg_ctx);
+	struct timeval disconnect_time, until;
+	uint64_t timeout_usec;
+	struct scavenger_message msg;
+	DATA_BLOB msg_blob;
+	struct server_id_buf tmp;
+
+	if (global == NULL) {
+		return;
+	}
+	disconnect_time = timeval_current();
+
+	timeout_usec = 1000 * global->durable_timeout_msec;
+	until = timeval_add(&disconnect_time,
+			    timeout_usec / 1000000,
+			    timeout_usec % 1000000);
+
+	ZERO_STRUCT(msg);
+	msg.file_id = file_id;
+	msg.open_persistent_id = global->open_persistent_id;
+	msg.until = timeval_to_nttime(&until);
+
+	DEBUG(10, ("smbd: %s mark file %s as disconnected at %s with timeout "
+		   "at %s in %fs\n",
+		   server_id_str_buf(self, &tmp),
+		   file_id_string_tos(&file_id),
+		   timeval_string(talloc_tos(), &disconnect_time, true),
+		   timeval_string(talloc_tos(), &until, true),
+		   global->durable_timeout_msec/1000.0));
+
+	SMB_ASSERT(server_id_is_disconnected(&global->server_id));
+	SMB_ASSERT(!smbd_scavenger_state->am_scavenger);
+
+	msg_blob = data_blob_const(&msg, sizeof(msg));
+	DEBUG(10, ("send message to scavenger\n"));
+
+	status = messaging_send(smbd_scavenger_state->msg,
+				smbd_scavenger_state->parent_id,
+				MSG_SMB_SCAVENGER,
+				&msg_blob);
+	if (!NT_STATUS_IS_OK(status)) {
+		struct server_id_buf tmp1, tmp2;
+		DEBUG(2, ("Failed to send message to parent smbd %s "
+			  "from %s: %s\n",
+			  server_id_str_buf(smbd_scavenger_state->parent_id,
+					    &tmp1),
+			  server_id_str_buf(self, &tmp2),
+			  nt_errstr(status)));
+	}
+}
+
 void scavenger_schedule_disconnected(struct files_struct *fsp)
 {
 	NTSTATUS status;

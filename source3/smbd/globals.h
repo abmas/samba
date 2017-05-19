@@ -555,6 +555,9 @@ NTSTATUS smbXsrv_connection_init_tables(struct smbXsrv_connection *conn,
 					enum protocol_types protocol);
 
 bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find);
+void smbXsrv_set_persistent_file_id_map(uint64_t  persistent_id, struct file_id file_id);
+struct file_id smbXsrv_get_persistent_file_id_map(uint64_t  persistent_id);
+
 NTSTATUS smbXsrv_session_global_init(void);
 NTSTATUS smbXsrv_session_create(struct smbXsrv_connection *conn,
 				NTTIME now,
@@ -632,6 +635,7 @@ NTSTATUS smbXsrv_tcon_global_traverse(
 			void *private_data);
 
 NTSTATUS smbXsrv_open_global_init(void);
+NTSTATUS smbXsrv_open_global_scavenger_setup(void);
 NTSTATUS smbXsrv_open_create(struct smbXsrv_connection *conn,
 			     struct auth_session_info *session_info,
 			     NTTIME now,
@@ -938,5 +942,6 @@ void smbd_init_globals(void);
 struct smbXsrv_open_persistent_id {
         struct smbXsrv_open_persistent_id *next;
         uint64_t open_persistent_id;
+        struct file_id file_id;
 };
 

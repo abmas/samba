@@ -27,6 +27,7 @@
 #include "ndr.h"
 #include "librpc/gen_ndr/ndr_leases_db.h"
 #include "tdb_wrap/tdb_wrap.h"
+#include "smbd/globals.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_LOCKING
@@ -107,6 +108,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
 		if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
 			entry->stale = false; /* [skip] in idl */
 			found_persistent_open = True;
+			smbXsrv_set_persistent_file_id_map(entry->open_persistent_id, entry->id);
 			DEBUG(1, ("leases_db_traverse_persist_fn: Found a persistent open, retaining record for id %ld\n", entry->open_persistent_id));
 		} else {
 			entry->stale = true; /* [skip] in idl */

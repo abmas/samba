@@ -27,5 +27,6 @@ bool smbd_scavenger_init(TALLOC_CTX *mem_ctx,
 			 struct tevent_context *ev);
 
 void scavenger_schedule_disconnected(struct files_struct *fsp);
+void scavenger_schedule_persistent_disconnected(struct smbXsrv_open_global0 *global, struct messaging_context * msg_ctx, struct file_id file_id);
 
 #endif

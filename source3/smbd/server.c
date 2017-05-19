@@ -148,6 +148,11 @@ static void reinit_svtfs_tdbs_on_reload(struct messaging_context *msg_ctx, struc
 
         if (!locking_init())
                 exit_daemon("Samba cannot reinit locking", EACCES);
+
+        status = smbXsrv_open_global_scavenger_setup();
+        if (!NT_STATUS_IS_OK(status)) {
+                DEBUG(0,("reinit_svtfs_tdbs_on_reload: Unable to setup scavenge timer for Persistent Handles.\n"));
+        }
 }
 
 /*******************************************************************
@@ -1749,6 +1754,11 @@ extern void build_options(bool screen);
 	if (!locking_init())
 		exit_daemon("Samba cannot init locking", EACCES);
 
+	status = smbXsrv_open_global_scavenger_setup();
+
+	if (!NT_STATUS_IS_OK(status)) {
+		DEBUG(0,("main: Unable to setup scavenge timer for Persistent Handles.\n"));
+	}
 	/* This MUST be done before start_epmd() because otherwise
 	 * start_epmd() forks and races against dcesrv_ep_setup() to
 	 * call directory_create_or_exist() */

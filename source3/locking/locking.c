@@ -48,6 +48,7 @@
 #include "../librpc/gen_ndr/ndr_open_files.h"
 #include "librpc/gen_ndr/ndr_file_id.h"
 #include "locking/leases_db.h"
+#include "smbd/proto.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_LOCKING
