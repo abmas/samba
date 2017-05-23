@@ -51,3 +51,4 @@
 0051-HYP-4451-Performance-improvements-in-the-lock-lease-.patch
 0052-HYP-4645-Changes-to-trim-db-files-on-samba-startup.patch
 0053-HYP-4645-Additional-changes-to-restrict-trimming-onl.patch
+0054-HYP-2907-Applying-patch-from-samba-for-https-bugzill.patch

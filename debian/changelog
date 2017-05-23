@@ -1,3 +1,11 @@
+samba (2:4.4.5+dfsg-2+svt9) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * Additional changes for HYP-4645
+  * HYP-2907: Patches for Hyp-2907
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Thu, 18 May 2017 14:18:04 -0400
+
 samba (2:4.4.5+dfsg-2+svt8) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
