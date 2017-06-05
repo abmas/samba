@@ -1,0 +1,405 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Fri, 19 May 2017 20:04:35 +0000
+Subject: HYP-3183: Setup scavenge timer for saved persistent opens.
+
+---
+ source3/locking/leases_db.c |   2 +
+ source3/locking/locking.c   |   1 +
+ source3/smbd/globals.h      |   5 ++
+ source3/smbd/scavenger.c    |  54 +++++++++++++++
+ source3/smbd/scavenger.h    |   1 +
+ source3/smbd/server.c       |  10 +++
+ source3/smbd/smbXsrv_open.c | 161 +++++++++++++++++++++++++++++++++++++++++++-
+ 7 files changed, 233 insertions(+), 1 deletion(-)
+
+diff --git a/source3/locking/leases_db.c b/source3/locking/leases_db.c
+index 1082719..970ebac 100644
+--- a/source3/locking/leases_db.c
++++ b/source3/locking/leases_db.c
+@@ -27,6 +27,7 @@
+ #include "ndr.h"
+ #include "librpc/gen_ndr/ndr_leases_db.h"
+ #include "tdb_wrap/tdb_wrap.h"
++#include "smbd/globals.h"
+ 
+ #undef DBGC_CLASS
+ #define DBGC_CLASS DBGC_LOCKING
+@@ -107,6 +108,7 @@ static int leases_db_traverse_persist_fn(struct db_record *rec, void *_state)
+ 		if ( entry->open_persistent_id != UINT64_MAX && smbXsrv_lookup_persistent_id(entry->open_persistent_id) ) {
+ 			entry->stale = false; /* [skip] in idl */
+ 			found_persistent_open = True;
++			smbXsrv_set_persistent_file_id_map(entry->open_persistent_id, entry->id);
+ 			DEBUG(1, ("leases_db_traverse_persist_fn: Found a persistent open, retaining record for id %ld\n", entry->open_persistent_id));
+ 		} else {
+ 			entry->stale = true; /* [skip] in idl */
+diff --git a/source3/locking/locking.c b/source3/locking/locking.c
+index 4bdc808..9fa9ddd 100644
+--- a/source3/locking/locking.c
++++ b/source3/locking/locking.c
+@@ -48,6 +48,7 @@
+ #include "../librpc/gen_ndr/ndr_open_files.h"
+ #include "librpc/gen_ndr/ndr_file_id.h"
+ #include "locking/leases_db.h"
++#include "smbd/proto.h"
+ 
+ #undef DBGC_CLASS
+ #define DBGC_CLASS DBGC_LOCKING
+diff --git a/source3/smbd/globals.h b/source3/smbd/globals.h
+index e01bb05..63d9e76 100644
+--- a/source3/smbd/globals.h
++++ b/source3/smbd/globals.h
+@@ -555,6 +555,9 @@ NTSTATUS smbXsrv_connection_init_tables(struct smbXsrv_connection *conn,
+ 					enum protocol_types protocol);
+ 
+ bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find);
++void smbXsrv_set_persistent_file_id_map(uint64_t  persistent_id, struct file_id file_id);
++struct file_id smbXsrv_get_persistent_file_id_map(uint64_t  persistent_id);
++
+ NTSTATUS smbXsrv_session_global_init(void);
+ NTSTATUS smbXsrv_session_create(struct smbXsrv_connection *conn,
+ 				NTTIME now,
+@@ -632,6 +635,7 @@ NTSTATUS smbXsrv_tcon_global_traverse(
+ 			void *private_data);
+ 
+ NTSTATUS smbXsrv_open_global_init(void);
++NTSTATUS smbXsrv_open_global_scavenger_setup(void);
+ NTSTATUS smbXsrv_open_create(struct smbXsrv_connection *conn,
+ 			     struct auth_session_info *session_info,
+ 			     NTTIME now,
+@@ -938,5 +942,6 @@ void smbd_init_globals(void);
+ struct smbXsrv_open_persistent_id {
+         struct smbXsrv_open_persistent_id *next;
+         uint64_t open_persistent_id;
++        struct file_id file_id;
+ };
+ 
+diff --git a/source3/smbd/scavenger.c b/source3/smbd/scavenger.c
+index 48bd795..3e41ba3 100644
+--- a/source3/smbd/scavenger.c
++++ b/source3/smbd/scavenger.c
+@@ -409,6 +409,60 @@ fail:
+ 	return false;
+ }
+ 
++void scavenger_schedule_persistent_disconnected(struct smbXsrv_open_global0 *global, struct messaging_context * msg_ctx, struct file_id file_id)
++{
++	NTSTATUS status;
++	struct server_id self = messaging_server_id(msg_ctx);
++	struct timeval disconnect_time, until;
++	uint64_t timeout_usec;
++	struct scavenger_message msg;
++	DATA_BLOB msg_blob;
++	struct server_id_buf tmp;
++
++	if (global == NULL) {
++		return;
++	}
++	disconnect_time = timeval_current();
++
++	timeout_usec = 1000 * global->durable_timeout_msec;
++	until = timeval_add(&disconnect_time,
++			    timeout_usec / 1000000,
++			    timeout_usec % 1000000);
++
++	ZERO_STRUCT(msg);
++	msg.file_id = file_id;
++	msg.open_persistent_id = global->open_persistent_id;
++	msg.until = timeval_to_nttime(&until);
++
++	DEBUG(10, ("smbd: %s mark file %s as disconnected at %s with timeout "
++		   "at %s in %fs\n",
++		   server_id_str_buf(self, &tmp),
++		   file_id_string_tos(&file_id),
++		   timeval_string(talloc_tos(), &disconnect_time, true),
++		   timeval_string(talloc_tos(), &until, true),
++		   global->durable_timeout_msec/1000.0));
++
++	SMB_ASSERT(server_id_is_disconnected(&global->server_id));
++	SMB_ASSERT(!smbd_scavenger_state->am_scavenger);
++
++	msg_blob = data_blob_const(&msg, sizeof(msg));
++	DEBUG(10, ("send message to scavenger\n"));
++
++	status = messaging_send(smbd_scavenger_state->msg,
++				smbd_scavenger_state->parent_id,
++				MSG_SMB_SCAVENGER,
++				&msg_blob);
++	if (!NT_STATUS_IS_OK(status)) {
++		struct server_id_buf tmp1, tmp2;
++		DEBUG(2, ("Failed to send message to parent smbd %s "
++			  "from %s: %s\n",
++			  server_id_str_buf(smbd_scavenger_state->parent_id,
++					    &tmp1),
++			  server_id_str_buf(self, &tmp2),
++			  nt_errstr(status)));
++	}
++}
++
+ void scavenger_schedule_disconnected(struct files_struct *fsp)
+ {
+ 	NTSTATUS status;
+diff --git a/source3/smbd/scavenger.h b/source3/smbd/scavenger.h
+index 966c80d..c92aa7f 100644
+--- a/source3/smbd/scavenger.h
++++ b/source3/smbd/scavenger.h
+@@ -27,5 +27,6 @@ bool smbd_scavenger_init(TALLOC_CTX *mem_ctx,
+ 			 struct tevent_context *ev);
+ 
+ void scavenger_schedule_disconnected(struct files_struct *fsp);
++void scavenger_schedule_persistent_disconnected(struct smbXsrv_open_global0 *global, struct messaging_context * msg_ctx, struct file_id file_id);
+ 
+ #endif
+diff --git a/source3/smbd/server.c b/source3/smbd/server.c
+index 6ad268a..4e09a8e 100644
+--- a/source3/smbd/server.c
++++ b/source3/smbd/server.c
+@@ -148,6 +148,11 @@ static void reinit_svtfs_tdbs_on_reload(struct messaging_context *msg_ctx, struc
+ 
+         if (!locking_init())
+                 exit_daemon("Samba cannot reinit locking", EACCES);
++
++        status = smbXsrv_open_global_scavenger_setup();
++        if (!NT_STATUS_IS_OK(status)) {
++                DEBUG(0,("reinit_svtfs_tdbs_on_reload: Unable to setup scavenge timer for Persistent Handles.\n"));
++        }
+ }
+ 
+ /*******************************************************************
+@@ -1749,6 +1754,11 @@ extern void build_options(bool screen);
+ 	if (!locking_init())
+ 		exit_daemon("Samba cannot init locking", EACCES);
+ 
++	status = smbXsrv_open_global_scavenger_setup();
++
++	if (!NT_STATUS_IS_OK(status)) {
++		DEBUG(0,("main: Unable to setup scavenge timer for Persistent Handles.\n"));
++	}
+ 	/* This MUST be done before start_epmd() because otherwise
+ 	 * start_epmd() forks and races against dcesrv_ep_setup() to
+ 	 * call directory_create_or_exist() */
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index ed91f7a..07feb2d 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -31,6 +31,7 @@
+ #include "librpc/gen_ndr/ndr_smbXsrv.h"
+ #include "serverid.h"
+ #include "tdb_wrap/tdb_wrap.h"
++#include "smbd/scavenger.h"
+ 
+ /* Remove the paranoid malloc checker. */
+ #ifdef malloc
+@@ -62,11 +63,14 @@ struct db_record {
+ extern char * svtfs_storage_ip[];
+ extern int svtfs_get_lockdir_index(void);
+ extern void svtfs_set_lockdir_index(int);
++static const struct file_id  EmptyFileId;
+ 
+ #define MAX_OPEN_GLOBAL_DB_CONTEXTS 32
+ #define get_smbXsrv_open_global_db_ctx() smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()]
+ #define set_smbXsrv_open_global_db_ctx(value) smbXsrv_open_global_db_ctx[svtfs_get_lockdir_index()] = value
+ 
++bool scavenge_setup[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {false};
++
+ struct db_context *smbXsrv_open_global_db_ctx[MAX_OPEN_GLOBAL_DB_CONTEXTS] = {NULL};
+ 
+ struct smbXsrv_open_persistent_id *smbXsrv_open_global_persistent_ids = NULL;
+@@ -90,6 +94,8 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
+         struct db_record *result;
+ 	TDB_DATA key;
+ 	TDB_DATA val;
++	struct timeval tv;
++	NTTIME now;
+ 
+ 	status = smbXsrv_open_global_parse_record(talloc_tos(), rec, &global);
+ 	if (!NT_STATUS_IS_OK(status)) {
+@@ -114,6 +120,7 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
+ 
+                 persistent_id_element->next = NULL;
+                 persistent_id_element->open_persistent_id = global->open_persistent_id;
++                persistent_id_element->file_id = EmptyFileId;
+ 
+                 if (last_element != NULL) {
+                        while (last_element->next != NULL) {
+@@ -123,7 +130,9 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
+                 } else {
+                        smbXsrv_open_global_persistent_ids = persistent_id_element;
+                 }
+-		smbXsrv_open_disconnect(global, get_smbXsrv_open_global_db_ctx(), 0);
++		tv = timeval_current();
++		now = timeval_to_nttime(&tv);
++		smbXsrv_open_disconnect(global, get_smbXsrv_open_global_db_ctx(), now);
+         } else {
+                 status = dbwrap_record_delete(rec);
+ 	        if (!NT_STATUS_IS_OK(status)) {
+@@ -140,6 +149,42 @@ static int smbXsrv_open_global_traverse_persist_fn(struct db_record *rec, void *
+ 	return 0;
+ }
+ 
++static int smbXsrv_open_global_traverse_scavenger_fn(struct db_record *rec, void *data)
++{
++	struct smbXsrv_open_global0 *global = NULL;
++	NTSTATUS status;
++	struct db_record *result;
++	TDB_DATA key;
++	TDB_DATA val;
++	struct messaging_context * msg_ctx = NULL;
++	struct file_id file_id;
++
++	msg_ctx = server_messaging_context();
++
++	status = smbXsrv_open_global_parse_record(talloc_tos(), rec, &global);
++	if (!NT_STATUS_IS_OK(status)) {
++	        DEBUG(1, ("parse record failed on open_global\n"));
++		return -1;
++	}
++
++	key = dbwrap_record_get_key(rec);
++
++	val = dbwrap_record_get_value(rec);
++
++	result = (struct db_record *)talloc_size( global, sizeof(struct db_record) + key.dsize + val.dsize);
++
++	global->db_rec = result;
++	memcpy(global->db_rec, rec, sizeof(struct db_record) + key.dsize + val.dsize);
++
++	if (server_id_is_disconnected(&global->server_id) && (global->persistent|global->resilient) == 1 && msg_ctx != NULL) {
++		file_id = smbXsrv_get_persistent_file_id_map(global->open_persistent_id);
++		if (file_id.inode) scavenger_schedule_persistent_disconnected (global, msg_ctx, file_id);
++	}
++
++	talloc_free(global);
++	return 0;
++}
++
+ bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find)
+ {
+ 
+@@ -161,6 +206,119 @@ bool smbXsrv_lookup_persistent_id(uint64_t persistent_id_to_find)
+         return false;
+ }
+ 
++void smbXsrv_cleanup_persistent_id_map(void)
++{
++        struct smbXsrv_open_persistent_id *current_id, *next_id;
++        current_id = smbXsrv_open_global_persistent_ids;
++        smbXsrv_open_global_persistent_ids = NULL;
++        while (current_id != NULL) {
++                next_id = current_id->next;
++                free(current_id);
++                current_id = next_id;
++        }
++}
++
++
++void smbXsrv_set_persistent_file_id_map(uint64_t  persistent_id, struct file_id file_id)
++{
++        struct smbXsrv_open_persistent_id *current_id;
++
++        if (smbXsrv_open_global_persistent_ids == NULL) {
++                return ;
++        }
++        current_id = smbXsrv_open_global_persistent_ids;
++        while (current_id != NULL) {
++                if (current_id->open_persistent_id == persistent_id) {
++                        current_id->file_id = file_id;
++                        return;
++                }
++                current_id = current_id->next;
++        }
++}
++
++struct file_id smbXsrv_get_persistent_file_id_map(uint64_t  persistent_id)
++{
++        struct smbXsrv_open_persistent_id *current_id;
++
++        if (smbXsrv_open_global_persistent_ids == NULL) {
++                return EmptyFileId;
++        }
++        current_id = smbXsrv_open_global_persistent_ids;
++        while (current_id != NULL) {
++                if (current_id->open_persistent_id == persistent_id) {
++                        return current_id->file_id;
++                }
++               	current_id = current_id->next;
++        }
++        return EmptyFileId;
++}
++
++
++NTSTATUS smbXsrv_open_global_scavenger_setup(void)
++{
++	char *global_path = NULL;
++	struct db_context *db_ctx = NULL;
++	NTSTATUS status = NT_STATUS_OK;
++	int index,saved_index;
++
++	index = 0;
++	saved_index = svtfs_get_lockdir_index();
++
++	svtfs_set_lockdir_index(index);
++	DEBUG(5, ("smbXsrv_open_global_scavenger_setup: setting lockdir_index of 0\n"));
++
++	while (1) {
++
++		if (get_smbXsrv_open_global_db_ctx() == NULL || scavenge_setup[index] == false) {
++			goto nextIndex;
++		}
++
++		global_path = svtfs_lock_path("smbXsrv_open_global.tdb");
++		if (global_path == NULL) {
++			status = NT_STATUS_NO_MEMORY;
++			scavenge_setup[index] = false;
++			break;
++		}
++
++		db_ctx = db_open(NULL, global_path,
++				 0, /* hash_size */
++				 TDB_DEFAULT | TDB_TRIM_SIZE |
++				 TDB_INCOMPATIBLE_HASH,
++				 O_RDWR | O_CREAT, 0600,
++				 DBWRAP_LOCK_ORDER_1,
++				 DBWRAP_FLAG_NONE);
++		TALLOC_FREE(global_path);
++		if (db_ctx == NULL) {
++			DEBUG(1, ("Null context on open_global\n"));
++			status = map_nt_error_from_unix_common(errno);
++			scavenge_setup[index] = false;
++			break;
++		}
++
++		set_smbXsrv_open_global_db_ctx(db_ctx);
++		status = dbwrap_traverse(get_smbXsrv_open_global_db_ctx(),
++					 smbXsrv_open_global_traverse_scavenger_fn,
++					 NULL, NULL);
++
++		scavenge_setup[index] = false;
++nextIndex:
++		index++;
++		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
++			DEBUG(5, ("smbXsrv_open_global_scavenger_setup: breaking with lockdir_index of %i\n", index));
++			break;
++		}
++
++		DEBUG(5, ("smbXsrv_open_global_scavenger_setup: setting lockdir_index of %i\n", index));
++		svtfs_set_lockdir_index(index);
++	} /* end while(1) */
++
++	DEBUG(5, ("smbXsrv_open_global_scavenger_setup: setting lockdir_index back to %d\n", saved_index));
++	svtfs_set_lockdir_index(saved_index);
++	smbXsrv_cleanup_persistent_id_map();
++
++	return status;
++}
++
+ NTSTATUS smbXsrv_open_global_init(void)
+ {
+ 	char *global_path = NULL;
+@@ -213,6 +371,7 @@ NTSTATUS smbXsrv_open_global_init(void)
+ 		status = dbwrap_traverse(get_smbXsrv_open_global_db_ctx(),
+ 					 smbXsrv_open_global_traverse_persist_fn,
+ 					 NULL, NULL);
++		scavenge_setup[index] = true;
+ 
+ nextIndex:
+ 		index++;
