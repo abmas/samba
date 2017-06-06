@@ -52,3 +52,4 @@
 0052-HYP-4645-Changes-to-trim-db-files-on-samba-startup.patch
 0053-HYP-4645-Additional-changes-to-restrict-trimming-onl.patch
 0054-HYP-2907-Applying-patch-from-samba-for-https-bugzill.patch
+0055-HYP-3183-Setup-scavenge-timer-for-saved-persistent-o.patch
