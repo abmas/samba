@@ -478,36 +478,52 @@ void file_sync_all(connection_struct *conn)
 
 void fsp_free(files_struct *fsp)
 {
-	struct smbd_server_connection *sconn = fsp->conn->sconn;
+        struct smbd_server_connection *sconn = NULL;
 
-	DLIST_REMOVE(sconn->files, fsp);
-	SMB_ASSERT(sconn->num_files > 0);
-	sconn->num_files--;
+        if (fsp == NULL) {
+                return;
+        }
 
-	TALLOC_FREE(fsp->fake_file_handle);
+        if (fsp->conn != NULL) {
+                sconn = fsp->conn->sconn;
+        }
 
-	if (fsp->fh->ref_count == 1) {
-		TALLOC_FREE(fsp->fh);
-	} else {
-		fsp->fh->ref_count--;
-	}
+        if (sconn != NULL) {
+                DLIST_REMOVE(sconn->files, fsp);
+                SMB_ASSERT(sconn->num_files > 0);
+                sconn->num_files--;
+        }
 
-	if (fsp->lease != NULL) {
-		if (fsp->lease->ref_count == 1) {
-			TALLOC_FREE(fsp->lease);
-		} else {
-			fsp->lease->ref_count--;
-		}
-	}
+        if (fsp->fake_file_handle != NULL) {
+                TALLOC_FREE(fsp->fake_file_handle);
+        }
 
-	fsp->conn->num_files_open--;
+        if (fsp->fh != NULL) {
+                if (fsp->fh->ref_count == 1) {
+                        TALLOC_FREE(fsp->fh);
+                } else {
+                        fsp->fh->ref_count--;
+                }
+        }
 
-	/* this is paranoia, just in case someone tries to reuse the
-	   information */
-	ZERO_STRUCTP(fsp);
+        if (fsp->lease != NULL) {
+                if (fsp->lease->ref_count == 1) {
+                       TALLOC_FREE(fsp->lease);
+                } else {
+                       fsp->lease->ref_count--;
+                }
+        }
 
-	/* fsp->fsp_name is a talloc child and is free'd automatically. */
-	TALLOC_FREE(fsp);
+        if (fsp->conn != NULL) {
+                fsp->conn->num_files_open--;
+        }
+
+        /* this is paranoia, just in case someone tries to reuse the
+           information */
+        ZERO_STRUCTP(fsp);
+
+        /* fsp->fsp_name is a talloc child and is free'd automatically. */
+        TALLOC_FREE(fsp);
 }
 
 void file_free(struct smb_request *req, files_struct *fsp)
