@@ -54,3 +54,4 @@
 0054-HYP-2907-Applying-patch-from-samba-for-https-bugzill.patch
 0055-HYP-3183-Setup-scavenge-timer-for-saved-persistent-o.patch
 0056-CVE-2017-7494-rpc_server3-Refuse-to-open-pipe-names-.patch
+0057-HYP-4860-Check-for-null-pointers-when-freeing-fsp.patch
