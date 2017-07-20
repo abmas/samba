@@ -319,12 +319,33 @@ nextIndex:
 	return status;
 }
 
+static bool file_copy (const char * source, const char * dest)
+{
+	int in_fd = open(source, O_RDONLY);
+	int out_fd = open(dest, O_WRONLY|O_CREAT);
+	char buf[8192];
+	if ( in_fd < 0 || out_fd < 0) goto fail;
+
+	while (1) {
+    		ssize_t result = read(in_fd, &buf[0], sizeof(buf));
+    		if (!result) break;
+    		if (result <= 0) goto fail;
+    		if (write(out_fd, &buf[0], result) != result) goto fail;
+	}
+	return true;
+fail:
+	if (in_fd > 0) close(in_fd);
+	if (out_fd > 0) close(out_fd);
+	return false;
+}
+
 NTSTATUS smbXsrv_open_global_init(void)
 {
-	char *global_path = NULL;
-	struct db_context *db_ctx = NULL;
-	NTSTATUS status = NT_STATUS_OK;
-	int index,saved_index;
+        char *global_path = NULL;
+        const char *tmp_path="/etc/samba/smbXsrv_open_global.tdb";
+        struct db_context *db_ctx = NULL;
+        NTSTATUS status = NT_STATUS_OK;
+        int index,saved_index;
 
         /**
          *  Not using the 'state' feature at the moment, so commenting it out
@@ -335,59 +356,93 @@ NTSTATUS smbXsrv_open_global_init(void)
 	};
         */
 
-	index = 0;
-	saved_index = svtfs_get_lockdir_index();
+        index = 0;
+        saved_index = svtfs_get_lockdir_index();
 
-	svtfs_set_lockdir_index(index);
-	DEBUG(5, ("smbXsrv_open_global_init: setting lockdir_index of 0\n"));
+        svtfs_set_lockdir_index(index);
+        DEBUG(5, ("smbXsrv_open_global_init: setting lockdir_index of 0\n"));
 
-	while (1) {
+        while (1) {
 
-		if (get_smbXsrv_open_global_db_ctx() != NULL) {
-			goto nextIndex;
-		}
+                if (get_smbXsrv_open_global_db_ctx() != NULL) {
+                        goto nextIndex;
+                }
 
-		global_path = svtfs_lock_path("smbXsrv_open_global.tdb");
-		if (global_path == NULL) {
-			status = NT_STATUS_NO_MEMORY;
-			break;
-		}
+                global_path = svtfs_lock_path("smbXsrv_open_global.tdb");
+                if (global_path == NULL) {
+                        status = NT_STATUS_NO_MEMORY;
+                        break;
+                }
+                /* Delete any old file */
+                unlink(tmp_path);
+                /* Copy the file to work with */
+                if (true != file_copy(global_path, tmp_path)) {
+                        DEBUG(1, ("Unable to copy %s to %s for initialization.\n",global_path,tmp_path));
+                        status = map_nt_error_from_unix_common(errno);
+                        break;
+                }
 
-		db_ctx = db_open(NULL, global_path,
-				 0, /* hash_size */
-				 TDB_DEFAULT | TDB_TRIM_SIZE |
-				 TDB_INCOMPATIBLE_HASH,
-				 O_RDWR | O_CREAT, 0600,
-				 DBWRAP_LOCK_ORDER_1,
-				 DBWRAP_FLAG_NONE);
-		TALLOC_FREE(global_path);
-		if (db_ctx == NULL) {
-			DEBUG(1, ("Null context on open_global\n"));
-			status = map_nt_error_from_unix_common(errno);
-			break;
-		}
+                db_ctx = db_open(NULL, tmp_path,
+                                0, /* hash_size */
+                                TDB_DEFAULT | TDB_TRIM_SIZE |
+                                TDB_INCOMPATIBLE_HASH,
+                                O_RDWR | O_CREAT, 0600,
+                                DBWRAP_LOCK_ORDER_1,
+                                DBWRAP_FLAG_NONE);
+                if (db_ctx == NULL) {
+                        DEBUG(1, ("Null context on open_global\n"));
+                        status = map_nt_error_from_unix_common(errno);
+                        rename(tmp_path, global_path);
+                        TALLOC_FREE(global_path);
+                        break;
+                }
 
-		set_smbXsrv_open_global_db_ctx(db_ctx);
-		status = dbwrap_traverse(get_smbXsrv_open_global_db_ctx(),
-					 smbXsrv_open_global_traverse_persist_fn,
-					 NULL, NULL);
-		scavenge_setup[index] = true;
+                status = dbwrap_traverse(db_ctx,
+                                smbXsrv_open_global_traverse_persist_fn,
+                                NULL, NULL);
+		closedb(db_ctx);
+                TALLOC_FREE(db_ctx);
+
+                /* Bulk of work has been done with tdb file in /var/tmp for performance. Now copy back*/
+                if (true != file_copy(tmp_path, global_path)) {
+                        DEBUG(1, ("Unable to copy %s back to original location.\n",global_path));
+                        status = map_nt_error_from_unix_common(errno);
+                        break;
+                }
+
+                db_ctx = db_open(NULL, global_path,
+                                0, /* hash_size */
+                                TDB_DEFAULT |
+                                TDB_INCOMPATIBLE_HASH,
+                                O_RDWR | O_CREAT, 0600,
+                                DBWRAP_LOCK_ORDER_1,
+                                DBWRAP_FLAG_NONE);
+
+                TALLOC_FREE(global_path);
+                if (db_ctx == NULL) {
+                        DEBUG(1, ("Null context on open_global\n"));
+                        status = map_nt_error_from_unix_common(errno);
+                        break;
+                }
+
+                set_smbXsrv_open_global_db_ctx(db_ctx);
+                scavenge_setup[index] = true;
 
 nextIndex:
-		index++;
-		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
-			DEBUG(5, ("smbXsrv_session_open_init: breaking with lockdir_index of %i\n", index));
-			break;
-		}
+                index++;
+                if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
+                        DEBUG(5, ("smbXsrv_session_open_init: breaking with lockdir_index of %i\n", index));
+                        break;
+                }
 
-		DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index of %i\n", index));
-		svtfs_set_lockdir_index(index);
-	} /* end while(1) */
+                DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index of %i\n", index));
+                svtfs_set_lockdir_index(index);
+        } /* end while(1) */
 
-	DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index back to %d\n", saved_index));
-	svtfs_set_lockdir_index(saved_index);
+        DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index back to %d\n", saved_index));
+        svtfs_set_lockdir_index(saved_index);
 
-	return status;
+        return status;
 }
 
 /*
@@ -1323,7 +1378,6 @@ static NTSTATUS smbXsrv_open_clear_replay_cache(struct smbXsrv_open *op)
 
 NTSTATUS smbXsrv_open_update(struct smbXsrv_open *op)
 {
-	struct smbXsrv_open_table *table = op->table;
 	NTSTATUS status;
 	uint8_t key_buf[SMBXSRV_OPEN_GLOBAL_TDB_KEY_SIZE];
 	TDB_DATA key;

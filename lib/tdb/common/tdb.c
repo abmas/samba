@@ -151,13 +151,13 @@ static int tdb_update_hash(struct tdb_context *tdb, TDB_DATA key, uint32_t hash,
 		return -1;
 
 	/* it could be an exact duplicate of what is there - this is
-	 * surprisingly common (eg. with a ldb re-index). */
+	 * surprisingly common (eg. with a ldb re-index). 
 	if (rec.key_len == key.dsize &&
 	    rec.data_len == dbuf.dsize &&
 	    rec.full_hash == hash &&
 	    tdb_parse_record(tdb, key, tdb_update_hash_cmp, &dbuf) == 0) {
 		return 0;
-	}
+	} */
 
 	/* must be long enough key, data and tailer */
 	if (rec.rec_len < key.dsize + dbuf.dsize + sizeof(tdb_off_t)) {

@@ -3440,7 +3440,7 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn
 		 * we wait until they are on the wire until we
 		 * ask for the next request.
 		 */
-		DEBUG(3,("smbd_smb2_request_next_incoming: Pausing read from socket until sendq (size %d) drained\n",cur_send_queue_len));
+		DEBUG(3,("smbd_smb2_request_next_incoming: Pausing read from socket until sendq (size %d) drained\n",(int)cur_send_queue_len));
 		paused = true;
 		return NT_STATUS_OK;
 	}
@@ -3452,7 +3452,7 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn
 		return NT_STATUS_NO_MEMORY;
 	}
 	if (paused == true) {
-		DEBUG(3,("smbd_smb2_request_next_incoming: Unpausing read from socket with sendq (size %d)\n",cur_send_queue_len));
+		DEBUG(3,("smbd_smb2_request_next_incoming: Unpausing read from socket with sendq (size %d)\n",(int)cur_send_queue_len));
 		paused = false;
 	}
 

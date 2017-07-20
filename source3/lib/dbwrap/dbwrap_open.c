@@ -182,3 +182,26 @@ void closedb_for_index (struct db_context * db_ctx[], int index)
 	    db_ctx[index] = NULL;
         }
 }
+
+void closedb (struct db_context * db_ctx)
+{
+        struct db_tdb_ctx * tdb_context;
+        DEBUG(3, ("closedb called with db_context %p \n", db_ctx));
+
+        if (db_ctx != NULL ) {
+            /*close db
+            db_context->private_data is struct db_tdb_ctx *.
+            db_context->private_data->wtdb is struct tdb_wrap *;
+            db_context->private_data->wtdb->tdb is finally, but to close the tdb,
+            all we need to do is TALLOC_FREE the tdb_wrap *.
+            */
+            if (db_ctx->private_data) {
+                tdb_context = (struct db_tdb_ctx *) db_ctx->private_data;
+                /* freeing wtdb causes the tdb file to be closed */
+                DEBUG(2, ("closedb closing tdb at 0x%p \n",tdb_context->wtdb));
+                TALLOC_FREE(tdb_context->wtdb);
+                TALLOC_FREE(tdb_context);
+            }
+        }
+}
+
