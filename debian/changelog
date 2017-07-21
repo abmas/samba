@@ -1,3 +1,12 @@
+samba (2:4.4.5+dfsg-2+svt10) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-4839: Patch for CVE-2017-7494
+  * HYP-4860: Check for null pointers when freeing fsp
+  * HYP-4844: Optimize smbXsrv_open_global_init
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Fri, 21 Jul 2017 12:59:54 -0400
+
 samba (2:4.4.5+dfsg-2+svt9) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
