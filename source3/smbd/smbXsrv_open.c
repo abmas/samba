@@ -342,7 +342,7 @@ fail:
 NTSTATUS smbXsrv_open_global_init(void)
 {
         char *global_path = NULL;
-        const char *tmp_path="/etc/samba/smbXsrv_open_global.tdb";
+        const char *tmp_path="/etc/samba/smbxsrv_open_global.tdb";
         struct db_context *db_ctx = NULL;
         NTSTATUS status = NT_STATUS_OK;
         int index,saved_index;
