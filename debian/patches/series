@@ -57,3 +57,4 @@
 0057-HYP-4860-Check-for-null-pointers-when-freeing-fsp.patch
 0058-HYP-4844-Disable-hash-recomputation-optimization-and.patch
 0059-Fix-open-flags.patch
+0060-Use-a-different-file-name-for-temp-file.patch
