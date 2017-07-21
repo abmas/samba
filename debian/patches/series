@@ -56,3 +56,4 @@
 0056-CVE-2017-7494-rpc_server3-Refuse-to-open-pipe-names-.patch
 0057-HYP-4860-Check-for-null-pointers-when-freeing-fsp.patch
 0058-HYP-4844-Disable-hash-recomputation-optimization-and.patch
+0059-Fix-open-flags.patch
