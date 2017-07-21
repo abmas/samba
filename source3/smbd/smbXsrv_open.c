@@ -322,7 +322,7 @@ nextIndex:
 static bool file_copy (const char * source, const char * dest)
 {
 	int in_fd = open(source, O_RDONLY);
-	int out_fd = open(dest, O_WRONLY|O_CREAT);
+	int out_fd = open(dest, O_WRONLY|O_CREAT|O_TRUNC, 0600);
 	char buf[8192];
 	if ( in_fd < 0 || out_fd < 0) goto fail;
 
