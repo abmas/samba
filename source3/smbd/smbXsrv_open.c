@@ -378,8 +378,7 @@ NTSTATUS smbXsrv_open_global_init(void)
                 /* Copy the file to work with */
                 if (true != file_copy(global_path, tmp_path)) {
                         DEBUG(1, ("Unable to copy %s to %s for initialization.\n",global_path,tmp_path));
-                        status = map_nt_error_from_unix_common(errno);
-                        break;
+                        goto cont;
                 }
 
                 db_ctx = db_open(NULL, tmp_path,
@@ -409,7 +408,7 @@ NTSTATUS smbXsrv_open_global_init(void)
                         status = map_nt_error_from_unix_common(errno);
                         break;
                 }
-
+cont:
                 db_ctx = db_open(NULL, global_path,
                                 0, /* hash_size */
                                 TDB_DEFAULT |
