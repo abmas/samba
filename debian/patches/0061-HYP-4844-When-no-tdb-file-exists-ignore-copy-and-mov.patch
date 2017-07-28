@@ -1,0 +1,31 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 27 Jul 2017 21:18:29 +0000
+Subject: HYP-4844: When no tdb file exists, ignore copy and move on.
+
+---
+ source3/smbd/smbXsrv_open.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index 9827d1e..467175f 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -378,8 +378,7 @@ NTSTATUS smbXsrv_open_global_init(void)
+                 /* Copy the file to work with */
+                 if (true != file_copy(global_path, tmp_path)) {
+                         DEBUG(1, ("Unable to copy %s to %s for initialization.\n",global_path,tmp_path));
+-                        status = map_nt_error_from_unix_common(errno);
+-                        break;
++                        goto cont;
+                 }
+ 
+                 db_ctx = db_open(NULL, tmp_path,
+@@ -409,7 +408,7 @@ NTSTATUS smbXsrv_open_global_init(void)
+                         status = map_nt_error_from_unix_common(errno);
+                         break;
+                 }
+-
++cont:
+                 db_ctx = db_open(NULL, global_path,
+                                 0, /* hash_size */
+                                 TDB_DEFAULT |
