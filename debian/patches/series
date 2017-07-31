@@ -55,3 +55,7 @@
 0055-HYP-3183-Setup-scavenge-timer-for-saved-persistent-o.patch
 0056-CVE-2017-7494-rpc_server3-Refuse-to-open-pipe-names-.patch
 0057-HYP-4860-Check-for-null-pointers-when-freeing-fsp.patch
+0058-HYP-4844-Disable-hash-recomputation-optimization-and.patch
+0059-Fix-open-flags.patch
+0060-Use-a-different-file-name-for-temp-file.patch
+0061-HYP-4844-When-no-tdb-file-exists-ignore-copy-and-mov.patch
