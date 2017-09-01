@@ -3408,6 +3408,8 @@ static bool is_smb2_recvfile_write(struct smbd_smb2_request_read_state *state)
 	return true;
 }
 
+extern volatile bool svtfs_io_paused;
+
 static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn)
 {
 	struct smbd_server_connection *sconn = xconn->client->sconn;
@@ -3442,6 +3444,10 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn
 		 */
 		DEBUG(3,("smbd_smb2_request_next_incoming: Pausing read from socket until sendq (size %d) drained\n",(int)cur_send_queue_len));
 		paused = true;
+		return NT_STATUS_OK;
+	}
+	if (svtfs_io_paused == true) {
+		DEBUG(3,("smbd_smb2_request_next_incoming: Pausing read from socket until access to TDB hives is restored\n"));
 		return NT_STATUS_OK;
 	}
 

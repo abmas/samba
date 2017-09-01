@@ -78,12 +78,26 @@ TDB_DATA dbwrap_record_get_value(const struct db_record *rec)
 	return rec->value;
 }
 
+volatile bool svtfs_io_paused = false;
+#define MAX_RETRY_SLEEP_LOOP 20
+
 NTSTATUS dbwrap_record_store(struct db_record *rec, TDB_DATA data, int flags)
 {
 	NTSTATUS status;
 	struct db_context *db;
+	int i;
 
-	status = rec->store(rec, data, flags);
+	for ( i = 0; i < MAX_RETRY_SLEEP_LOOP; i++)
+	{
+		status = rec->store(rec, data, flags);
+		if (NT_STATUS_IS_OK(status)) {
+			svtfs_io_paused = false;
+			break;
+		} else {
+			svtfs_io_paused = true;
+			if (i < MAX_RETRY_SLEEP_LOOP - 1) sleep(0.1);
+		}
+	}
 	if (!NT_STATUS_IS_OK(status)) {
 		return status;
 	}
@@ -109,8 +123,19 @@ NTSTATUS dbwrap_record_delete(struct db_record *rec)
 {
 	NTSTATUS status;
 	struct db_context *db;
+	int i;
 
-	status = rec->delete_rec(rec);
+	for ( i = 0; i < MAX_RETRY_SLEEP_LOOP; i++)
+	{
+		status = rec->delete_rec(rec);
+		if (NT_STATUS_IS_OK(status)) {
+			svtfs_io_paused = false;
+			break;
+		} else {
+			svtfs_io_paused = true;
+			if (i < MAX_RETRY_SLEEP_LOOP - 1) sleep(0.1);
+		}
+	}
 	if (!NT_STATUS_IS_OK(status)) {
 		return status;
 	}
@@ -232,8 +257,20 @@ struct db_record *dbwrap_fetch_locked(struct db_context *db,
 				      TALLOC_CTX *mem_ctx,
 				      TDB_DATA key)
 {
-	return dbwrap_fetch_locked_internal(db, mem_ctx, key,
-					    db->fetch_locked);
+	struct db_record * rec;
+	int i;
+	for ( i = 0; i < MAX_RETRY_SLEEP_LOOP; i++)
+	{
+		rec = dbwrap_fetch_locked_internal(db, mem_ctx, key,db->fetch_locked);
+		if (rec != NULL) {
+			svtfs_io_paused = false;
+			break;
+		} else {
+			svtfs_io_paused = true;
+			if (i < MAX_RETRY_SLEEP_LOOP - 1) sleep(0.1);
+		}
+	}
+	return rec;
 }
 
 struct db_record *dbwrap_try_fetch_locked(struct db_context *db,
