@@ -1,0 +1,109 @@
+From: ashok ramakrishnan <ashok.ramakrishnan@hpe.com>
+Date: Fri, 1 Sep 2017 14:19:43 -0400
+Subject: HYP-4816: Pause IO if we get error when trying to access TDB hives.
+
+---
+ lib/dbwrap/dbwrap.c        | 45 +++++++++++++++++++++++++++++++++++++++++----
+ source3/smbd/smb2_server.c |  6 ++++++
+ 2 files changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/lib/dbwrap/dbwrap.c b/lib/dbwrap/dbwrap.c
+index a1b98c3..b47ae82 100644
+--- a/lib/dbwrap/dbwrap.c
++++ b/lib/dbwrap/dbwrap.c
+@@ -78,12 +78,26 @@ TDB_DATA dbwrap_record_get_value(const struct db_record *rec)
+ 	return rec->value;
+ }
+ 
++volatile bool svtfs_io_paused = false;
++#define MAX_RETRY_SLEEP_LOOP 20
++
+ NTSTATUS dbwrap_record_store(struct db_record *rec, TDB_DATA data, int flags)
+ {
+ 	NTSTATUS status;
+ 	struct db_context *db;
++	int i;
+ 
+-	status = rec->store(rec, data, flags);
++	for ( i = 0; i < MAX_RETRY_SLEEP_LOOP; i++)
++	{
++		status = rec->store(rec, data, flags);
++		if (NT_STATUS_IS_OK(status)) {
++			svtfs_io_paused = false;
++			break;
++		} else {
++			svtfs_io_paused = true;
++			if (i < MAX_RETRY_SLEEP_LOOP - 1) sleep(0.1);
++		}
++	}
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		return status;
+ 	}
+@@ -109,8 +123,19 @@ NTSTATUS dbwrap_record_delete(struct db_record *rec)
+ {
+ 	NTSTATUS status;
+ 	struct db_context *db;
++	int i;
+ 
+-	status = rec->delete_rec(rec);
++	for ( i = 0; i < MAX_RETRY_SLEEP_LOOP; i++)
++	{
++		status = rec->delete_rec(rec);
++		if (NT_STATUS_IS_OK(status)) {
++			svtfs_io_paused = false;
++			break;
++		} else {
++			svtfs_io_paused = true;
++			if (i < MAX_RETRY_SLEEP_LOOP - 1) sleep(0.1);
++		}
++	}
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		return status;
+ 	}
+@@ -232,8 +257,20 @@ struct db_record *dbwrap_fetch_locked(struct db_context *db,
+ 				      TALLOC_CTX *mem_ctx,
+ 				      TDB_DATA key)
+ {
+-	return dbwrap_fetch_locked_internal(db, mem_ctx, key,
+-					    db->fetch_locked);
++	struct db_record * rec;
++	int i;
++	for ( i = 0; i < MAX_RETRY_SLEEP_LOOP; i++)
++	{
++		rec = dbwrap_fetch_locked_internal(db, mem_ctx, key,db->fetch_locked);
++		if (rec != NULL) {
++			svtfs_io_paused = false;
++			break;
++		} else {
++			svtfs_io_paused = true;
++			if (i < MAX_RETRY_SLEEP_LOOP - 1) sleep(0.1);
++		}
++	}
++	return rec;
+ }
+ 
+ struct db_record *dbwrap_try_fetch_locked(struct db_context *db,
+diff --git a/source3/smbd/smb2_server.c b/source3/smbd/smb2_server.c
+index 1163dd2..d8c91a0 100644
+--- a/source3/smbd/smb2_server.c
++++ b/source3/smbd/smb2_server.c
+@@ -3408,6 +3408,8 @@ static bool is_smb2_recvfile_write(struct smbd_smb2_request_read_state *state)
+ 	return true;
+ }
+ 
++extern volatile bool svtfs_io_paused;
++
+ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn)
+ {
+ 	struct smbd_server_connection *sconn = xconn->client->sconn;
+@@ -3444,6 +3446,10 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbXsrv_connection *xconn
+ 		paused = true;
+ 		return NT_STATUS_OK;
+ 	}
++	if (svtfs_io_paused == true) {
++		DEBUG(3,("smbd_smb2_request_next_incoming: Pausing read from socket until access to TDB hives is restored\n"));
++		return NT_STATUS_OK;
++	}
+ 
+ 	/* ask for the next request */
+ 	ZERO_STRUCTP(state);
