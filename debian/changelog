@@ -1,3 +1,12 @@
+samba (2:4.4.5+dfsg-2+svt11) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * HYP-4844: Use a different file name for temp file.
+  * HYP-4844: When there are no tdb files in /mnt/svtfs/0/.smb/*/, ignore copy error
+  * svt11 changes
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Mon, 11 Sep 2017 16:09:05 -0400
+
 samba (2:4.4.5+dfsg-2+svt10) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
