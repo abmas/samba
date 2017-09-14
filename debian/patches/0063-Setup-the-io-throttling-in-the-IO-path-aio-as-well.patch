@@ -1,0 +1,43 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 14 Sep 2017 13:07:51 -0400
+Subject: Setup the io throttling in the IO path (aio) as well.
+
+---
+ source3/smbd/aio.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/source3/smbd/aio.c b/source3/smbd/aio.c
+index f98377b..fc2bf61 100644
+--- a/source3/smbd/aio.c
++++ b/source3/smbd/aio.c
+@@ -29,6 +29,8 @@
+  Statics plus accessor functions.
+ *****************************************************************************/
+ 
++extern volatile bool svtfs_io_paused;
++
+ static int outstanding_aio_calls;
+ 
+ int get_outstanding_aio_calls(void)
+@@ -814,8 +816,10 @@ static void aio_pread_smb2_done(struct tevent_req *req)
+ 
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		tevent_req_nterror(subreq, status);
++		if (NT_STATUS_EQUAL(status,NT_STATUS_RETRY)) svtfs_io_paused = true;
+ 		return;
+ 	}
++	if (svtfs_io_paused == true) svtfs_io_paused = false;
+ 	tevent_req_done(subreq);
+ }
+ 
+@@ -975,7 +979,10 @@ static void aio_pwrite_smb2_done(struct tevent_req *req)
+ 
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		tevent_req_nterror(subreq, status);
++		if (NT_STATUS_EQUAL(status,NT_STATUS_RETRY)) svtfs_io_paused = true;
+ 		return;
+ 	}
++
++	if (svtfs_io_paused == true) svtfs_io_paused = false;
+ 	tevent_req_done(subreq);
+ }
