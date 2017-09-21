@@ -1068,14 +1068,14 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 						persistent_id, create_guid,
 						now, &op);
 			if (!NT_STATUS_IS_OK(status)) {
-				DEBUG(3, ("smbd_smb2_create_send: "
+				DEBUG(2, ("smbd_smb2_create_send: "
 					  "smb2srv_open_recreate failed: %s\n",
 					  nt_errstr(status)));
 				tevent_req_nterror(req, status);
 				return tevent_req_post(req, ev);
 			}
 
-			DEBUG(10, ("smb2_create_send: %s to recreate the "
+			DEBUG(2, ("smb2_create_send: %s to recreate the "
 				   "smb2srv_open struct for a durable handle.\n",
                                    (op->global->durable || op->global->resilient || op->global->persistent) ? "succeded" : "failed"));
 
@@ -1105,7 +1105,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 
 				return_status = NT_STATUS_OBJECT_NAME_NOT_FOUND;
 
-				DEBUG(3, ("smbd_smb2_create_send: "
+				DEBUG(2, ("smbd_smb2_create_send: "
 					  "durable_reconnect failed: %s => %s\n",
 					  nt_errstr(status),
 					  nt_errstr(return_status)));
@@ -1114,7 +1114,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 				return tevent_req_post(req, ev);
 			}
 
-			DEBUG(10, ("result->oplock_type=%u, lease_ptr==%p\n",
+			DEBUG(2, ("result->oplock_type=%u, lease_ptr==%p\n",
 				   (unsigned)result->oplock_type, lease_ptr));
 
 			status = smbd_smb2_create_durable_lease_check(
