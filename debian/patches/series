@@ -61,3 +61,4 @@
 0061-HYP-4844-When-no-tdb-file-exists-ignore-copy-and-mov.patch
 0062-HYP-4816-Pause-IO-if-we-get-error-when-trying-to-acc.patch
 0063-Setup-the-io-throttling-in-the-IO-path-aio-as-well.patch
+0064-HYP-5305-Enable-debugging-at-log-level-2-for-some-cr.patch
