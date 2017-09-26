@@ -399,26 +399,26 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(
 		if (fsp->oplock_type != LEASE_OPLOCK) {
 			return NT_STATUS_OK;
 		}
-		DEBUG(10, ("Reopened file has lease, but no lease "
+		DEBUG(2, ("Reopened file has lease, but no lease "
 			   "requested\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
 	if (fsp->oplock_type != LEASE_OPLOCK) {
-		DEBUG(10, ("Lease requested, but reopened file has no "
+		DEBUG(2, ("Lease requested, but reopened file has no "
 			   "lease\n"));
-		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+		return NT_STATUS_OBJECT_NAME_NOT_FOUND; 
 	}
 
 	if (!smb2_lease_key_equal(&lease_ptr->lease_key,
 				  &fsp->lease->lease.lease_key)) {
-		DEBUG(10, ("Different lease key requested than found "
+		DEBUG(2, ("Different lease key requested than found "
 			   "in reopened file\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 	status = check_path_syntax(unix_syntax_filename);
 	if (!NT_STATUS_IS_OK(status)) {
-		DEBUG(10, ("smbd_smb2_create_durable_lease_check: check_path_syntax returned %s\n",
+		DEBUG(2, ("smbd_smb2_create_durable_lease_check: check_path_syntax returned %s\n",
 			   nt_errstr(status)));
 		free(unix_syntax_filename);
 		return status;
@@ -428,14 +428,14 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(
 				  unix_syntax_filename, ucf_flags,
 				  NULL, &smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
-		DEBUG(10, ("filename_convert returned %s\n",
+		DEBUG(2, ("filename_convert returned %s\n",
 			   nt_errstr(status)));
 		free(unix_syntax_filename);
 		return status;
 	}
 
 	if (!strequal(fsp->fsp_name->base_name, smb_fname->base_name)) {
-		DEBUG(10, ("Lease requested for file %s, reopened file "
+		DEBUG(2, ("Lease requested for file %s, reopened file "
 			   "is named %s\n", smb_fname->base_name,
 			   fsp->fsp_name->base_name));
 		free(unix_syntax_filename);
