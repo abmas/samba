@@ -1,3 +1,13 @@
+samba (2:4.4.5+dfsg-2+svt12) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * svt11 changes
+  * Changelog for svt11
+  * HYP-4816: Pause network IO when svtfs returns EAGAIN, unpause on next success.
+  * HYP-5305: DEbug logging.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Thu, 21 Sep 2017 15:53:15 -0400
+
 samba (2:4.4.5+dfsg-2+svt11) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
