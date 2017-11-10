@@ -1394,10 +1394,9 @@ static NTSTATUS libnet_join_joindomain_rpc(TALLOC_CTX *mem_ctx,
 		status = result;
 		goto done;
 	}
-
 	/* Fill in the additional account flags now */
 
-	acct_flags |= ACB_PWNOEXP;
+	acct_flags |= ACB_PWNOEXP|ACB_TRUSTED_TO_AUTHENTICATE_FOR_DELEGATION;
 
 	/* Set account flags on machine account */
 	ZERO_STRUCT(user_info.info16);
@@ -1431,7 +1430,6 @@ static NTSTATUS libnet_join_joindomain_rpc(TALLOC_CTX *mem_ctx,
 			nt_errstr(status));
 		goto done;
 	}
-
 	/* Set password on machine account - first try level 26 */
 
 	/*
