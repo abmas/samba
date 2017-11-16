@@ -479,8 +479,19 @@ void file_sync_all(connection_struct *conn)
 void fsp_free(files_struct *fsp)
 {
         struct smbd_server_connection *sconn = NULL;
+        int i;
 
         if (fsp == NULL) {
+                return;
+        }
+
+        /* If fsp has already been zeroed out, it has been freed. move on.*/
+        for (i = 0; i < sizeof(*fsp); i++)
+        {
+                if (*((char *)fsp + i)) break;
+        }
+
+        if (i == sizeof(*fsp)) {
                 return;
         }
 
