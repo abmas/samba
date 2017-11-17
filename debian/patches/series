@@ -63,3 +63,5 @@
 0063-Setup-the-io-throttling-in-the-IO-path-aio-as-well.patch
 0064-HYP-5305-Enable-debugging-at-log-level-2-for-some-cr.patch
 0065-Change-logging-level-on-durable-reconnect-related-lo.patch
+0066-HYP-none-Add-the-ACB_TRUSTED_TO_AUTHENTICATE_FOR_DEL.patch
+0067-HYP-5545-If-the-files_struct-is-already-zeroed-out-d.patch
