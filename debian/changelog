@@ -1,3 +1,10 @@
+samba (2:4.4.5+dfsg-2+svt13) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * svt13 changes.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Fri, 17 Nov 2017 11:31:53 -0500
+
 samba (2:4.4.5+dfsg-2+svt12) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
