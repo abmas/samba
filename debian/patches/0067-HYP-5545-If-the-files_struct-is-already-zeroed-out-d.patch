@@ -1,0 +1,35 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 16 Nov 2017 09:36:39 -0500
+Subject: HYP-5545: If the files_struct is already zeroed out, do not free.
+
+---
+ source3/smbd/files.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/source3/smbd/files.c b/source3/smbd/files.c
+index 313090c..93c292a 100644
+--- a/source3/smbd/files.c
++++ b/source3/smbd/files.c
+@@ -479,11 +479,22 @@ void file_sync_all(connection_struct *conn)
+ void fsp_free(files_struct *fsp)
+ {
+         struct smbd_server_connection *sconn = NULL;
++        int i;
+ 
+         if (fsp == NULL) {
+                 return;
+         }
+ 
++        /* If fsp has already been zeroed out, it has been freed. move on.*/
++        for (i = 0; i < sizeof(*fsp); i++)
++        {
++                if (*((char *)fsp + i)) break;
++        }
++
++        if (i == sizeof(*fsp)) {
++                return;
++        }
++
+         if (fsp->conn != NULL) {
+                 sconn = fsp->conn->sconn;
+         }
