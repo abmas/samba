@@ -1,0 +1,36 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Fri, 1 Dec 2017 14:39:01 -0500
+Subject: HYP-5691: smbd: Chain code can return uninitialized memory when
+ talloc buffer is grown
+
+Fix by Jeremy Allison of Samba team. BUG: https://bugzilla.samba.org/show_bug.cgi?id=13077
+---
+ source3/smbd/srvstr.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/source3/smbd/srvstr.c b/source3/smbd/srvstr.c
+index 56dceba..de24f30 100644
+--- a/source3/smbd/srvstr.c
++++ b/source3/smbd/srvstr.c
+@@ -110,6 +110,21 @@ ssize_t message_push_string(uint8_t **outbuf, const char *str, int flags)
+ 		DEBUG(0, ("srvstr_push failed\n"));
+ 		return -1;
+ 	}
++
++
++	/*
++	 * Ensure we clear out the extra data we have
++	 * grown the buffer by, but not written to.
++	 */
++	if (buf_size + result < buf_size) {
++		return -1;
++	}
++	if (grow_size < result) {
++		return -1;
++	}
++
++	memset(tmp + buf_size + result, '\0', grow_size - result);
++
+ 	set_message_bcc((char *)tmp, smb_buflen(tmp) + result);
+ 
+ 	*outbuf = tmp;
