@@ -275,9 +275,15 @@ NTSTATUS leases_db_add(const struct GUID *client_guid,
 	struct leases_db_value *value = NULL;
 	enum ndr_err_code ndr_err;
 
-	if (!leases_db_init(false)) {
-		return NT_STATUS_INTERNAL_ERROR;
-	}
+        /* We only want to do an init if the current index hasn't been initialized */
+	if (get_leases_db() == NULL) {
+		DEBUG(3, ("leases_db_add: calling leases_db_init()\n"));
+		if (!leases_db_init(false)) {
+			return NT_STATUS_INTERNAL_ERROR;
+		}
+	} else {
+                DEBUG(3, ("leases_db_add: DB already initialized.\n"));
+        }
 
 	ok = leases_db_key(talloc_tos(), client_guid, lease_key, &db_key);
 	if (!ok) {
@@ -401,8 +407,14 @@ NTSTATUS leases_db_del(const struct GUID *client_guid,
 	uint32_t i;
 	bool ok;
 
-	if (!leases_db_init(false)) {
-		return NT_STATUS_INTERNAL_ERROR;
+        /* We only want to do an init if the current index hasn't been initialized */
+	if (get_leases_db() == NULL) {
+		DEBUG(3, ("leases_db_delete: calling leases_db_init()\n"));
+		if (!leases_db_init(false)) {
+			return NT_STATUS_INTERNAL_ERROR;
+		}
+	} else {
+                DEBUG(3, ("leases_db_delete: DB already initialized.\n"));
 	}
 
 	ok = leases_db_key(talloc_tos(), client_guid, lease_key, &db_key);
@@ -548,9 +560,15 @@ NTSTATUS leases_db_parse(const struct GUID *client_guid,
 	NTSTATUS status;
 	bool ok;
 
-	if (!leases_db_init(true)) {
-		return NT_STATUS_INTERNAL_ERROR;
-	}
+        /* We only want to do an init if the current index hasn't been initialized */
+        if (get_leases_db() == NULL) {
+                DEBUG(3, ("leases_db_parse: calling leases_db_init()\n"));
+                if (!leases_db_init(true)) {
+                        return NT_STATUS_INTERNAL_ERROR;
+                }
+        } else {
+                DEBUG(3, ("leases_db_parse: DB already initialized.\n"));
+        }
 
 	ok = leases_db_key(talloc_tos(), client_guid, lease_key, &db_key);
 	if (!ok) {
