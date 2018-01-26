@@ -90,6 +90,11 @@ static void exit_server_common(enum server_exit_reason how,
 	struct smbXsrv_connection *xconn = NULL;
 	struct smbd_server_connection *sconn = NULL;
 	struct messaging_context *msg_ctx = server_messaging_context();
+	pid_t wpid;
+	int status;
+
+	/* First wait for all children to exit */
+	while (am_parent && ((wpid = wait(&status)) > 0));
 
 	if (client != NULL) {
 		sconn = client->sconn;
