@@ -1,3 +1,12 @@
+samba (2:4.4.5+dfsg-2+svt14) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * Patch for HYP-5651
+  * patch for HYP-5860
+  * svt14
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Fri, 26 Jan 2018 10:19:21 -0500
+
 samba (2:4.4.5+dfsg-2+svt13) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]

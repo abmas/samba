@@ -67,3 +67,4 @@
 0067-HYP-5545-If-the-files_struct-is-already-zeroed-out-d.patch
 0068-HYP-5691-smbd-Chain-code-can-return-uninitialized-me.patch
 0069-HYP-5651-Do-not-call-init-from-leases_db_add-del-par.patch
+0070-HYP-5860-Wait-for-all-children-to-exit-before-exitin.patch

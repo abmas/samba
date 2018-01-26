@@ -1,0 +1,25 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 25 Jan 2018 19:25:40 -0500
+Subject: HYP-5860: Wait for all children to exit before exiting the parent
+ smbd process.
+
+---
+ source3/smbd/server_exit.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/source3/smbd/server_exit.c b/source3/smbd/server_exit.c
+index bf50394..ffbb1b1 100644
+--- a/source3/smbd/server_exit.c
++++ b/source3/smbd/server_exit.c
+@@ -90,6 +90,11 @@ static void exit_server_common(enum server_exit_reason how,
+ 	struct smbXsrv_connection *xconn = NULL;
+ 	struct smbd_server_connection *sconn = NULL;
+ 	struct messaging_context *msg_ctx = server_messaging_context();
++	pid_t wpid;
++	int status;
++
++	/* First wait for all children to exit */
++	while (am_parent && ((wpid = wait(&status)) > 0));
+ 
+ 	if (client != NULL) {
+ 		sconn = client->sconn;
