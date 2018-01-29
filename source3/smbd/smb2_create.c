@@ -5,6 +5,10 @@
    Copyright (C) Stefan Metzmacher 2009
    Copyright (C) Jeremy Allison 2010
 
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
+
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3 of the License, or
@@ -1303,7 +1307,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		{
 			update_open = true;
                         /*
-                         * Ashok:  earlier, we use op->global->durable (or resilient)
+                         *         earlier, we use op->global->durable (or resilient)
                          *         when we're doing a durable reconnect, so I think
                          *         'durable' is already appropriately set in that case.
                          *         Therefore, I'm thinking we only want to set

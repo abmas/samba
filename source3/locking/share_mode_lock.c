@@ -33,6 +33,10 @@
 
    Added POSIX locking support. Jeremy Allison (jeremy@valinux.com), Apr. 2000.
    Added Unix Extensions POSIX locking support. Jeremy Allison Mar 2006.
+
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
 */
 
 #include "includes.h"
@@ -194,7 +198,7 @@ static bool locking_init_internal(bool read_only)
 		}
 
 		if ( read_only == false ) {
-			/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
+			/* traverse the db and only get rid of entries not belonging to a persistent open */
 			status = dbwrap_traverse(get_lock_db(), sml_traverse_persist_fn, NULL, NULL);
 
 			if ( ! NT_STATUS_IS_OK(status) ) {

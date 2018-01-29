@@ -3,6 +3,10 @@
    Authenticate against a remote domain
    Copyright (C) Andrew Tridgell 1992-2002
    Copyright (C) Andrew Bartlett 2002
+
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
    
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by

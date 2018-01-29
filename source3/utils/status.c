@@ -24,6 +24,10 @@
    21-Jul-1998: rsharpe@ns.aus.com (Richard Sharpe)
    Added -L (locks only) -S (shares only) flags and code
 
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
+
 */
 
 /*

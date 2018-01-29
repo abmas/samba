@@ -4,6 +4,10 @@
    Copyright (C) Andrew Tridgell 1992-1998
    Copyright (C) Volker Lendecke 2005-2007
 
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
+
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3 of the License, or
@@ -4012,7 +4016,7 @@ void smbd_process(struct tevent_context *ev_ctx,
 		remaddr = "0.0.0.0";
 	}
 
-	/* Ashok: Set the svtfs_lockdir_index based on the locaddr */
+	/* Set the svtfs_lockdir_index based on the locaddr */
 	svtfs_set_index_for_ip (locaddr);
 
 	/* this is needed so that we get decent entries

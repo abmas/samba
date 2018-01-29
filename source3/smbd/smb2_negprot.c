@@ -4,6 +4,10 @@
 
    Copyright (C) Stefan Metzmacher 2009
 
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
+
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3 of the License, or
@@ -325,11 +329,11 @@ NTSTATUS smbd_smb2_request_process_negprot(struct smbd_smb2_request *req)
 		capabilities |= SMB2_CAP_ENCRYPTION;
 	}
 
-        /* Ashok: Advertise persistent handles capability */
+        /* Advertise persistent handles capability */
         if (protocol >= PROTOCOL_SMB3_00) {
                if (in_capabilities & SMB2_CAP_PERSISTENT_HANDLES) {
                        capabilities |= SMB2_CAP_PERSISTENT_HANDLES;
-		/*Ashok: Add setting connection datastructure flag for PH */
+		/*Add setting connection datastructure flag for PH */
                }
         }
 

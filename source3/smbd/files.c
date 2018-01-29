@@ -2,6 +2,10 @@
    Unix SMB/CIFS implementation.
    Files[] structure handling
    Copyright (C) Andrew Tridgell 1998
+  
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by

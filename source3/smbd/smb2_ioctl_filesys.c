@@ -5,6 +5,10 @@
    Copyright (C) Stefan Metzmacher 2009
    Copyright (C) David Disseldorp 2013-2015
 
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
+
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3 of the License, or
@@ -474,7 +478,7 @@ struct tevent_req *smb2_ioctl_filesys(uint32_t ctl_code,
 		return tevent_req_post(req, ev);
 		break;
         case FSCTL_SET_INTEGRITY_INFORMATION:
-                /* Ashok: Cheat and return success */
+                /* Cheat and return success */
                 tevent_req_done(req);
                 return tevent_req_post(req, ev);
                 break;

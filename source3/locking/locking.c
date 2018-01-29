@@ -33,6 +33,10 @@
 
    Added POSIX locking support. Jeremy Allison (jeremy@valinux.com), Apr. 2000.
    Added Unix Extensions POSIX locking support. Jeremy Allison Mar 2006.
+
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+   Added support for Hyper-V over SMB 3.
 */
 
 #include "includes.h"
