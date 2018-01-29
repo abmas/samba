@@ -1,0 +1,1065 @@
+From: Sridevi Arvindekar <sridevi.arvindekar@simplivity.com>
+Date: Mon, 29 Jan 2018 03:12:34 -0500
+Subject: HYP-5425: Changes for OSRB approval.
+
+---
+ lib/dbwrap/dbwrap.c                    | 4 ++++
+ lib/dbwrap/dbwrap_tdb.c                | 4 ++++
+ lib/dbwrap/dbwrap_tdb.h                | 4 ++++
+ lib/param/loadparm.c                   | 4 ++++
+ lib/tdb/common/open.c                  | 4 ++++
+ lib/tdb/common/tdb.c                   | 4 ++++
+ lib/tdb/tools/tdbtool.c                | 4 ++++
+ lib/tdb_wrap/tdb_wrap.c                | 4 ++++
+ lib/tdb_wrap/tdb_wrap.h                | 4 ++++
+ lib/torture/torture.h                  | 4 ++++
+ source3/lib/dbwrap/dbwrap_open.c       | 4 ++++
+ source3/lib/dbwrap/dbwrap_open.h       | 4 ++++
+ source3/lib/dbwrap/dbwrap_watch.c      | 4 ++++
+ source3/lib/g_lock.c                   | 4 ++++
+ source3/lib/gencache.c                 | 4 ++++
+ source3/lib/netapi/netapi.c            | 4 ++++
+ source3/lib/server_mutex.c             | 4 ++++
+ source3/lib/serverid.c                 | 4 ++++
+ source3/lib/util.c                     | 4 ++++
+ source3/lib/util_path.c                | 4 ++++
+ source3/lib/util_path.h                | 4 ++++
+ source3/libnet/libnet_join.c           | 4 ++++
+ source3/librpc/crypto/gse_krb5.c       | 4 ++++
+ source3/locking/brlock.c               | 4 ++++
+ source3/locking/leases_db.c            | 4 ++++
+ source3/locking/leases_db.h            | 4 ++++
+ source3/locking/locking.c              | 4 ++++
+ source3/locking/proto.h                | 4 ++++
+ source3/locking/share_mode_lock.c      | 6 +++++-
+ source3/modules/vfs_default.c          | 4 ++++
+ source3/param/loadparm.c               | 4 ++++
+ source3/printing/printer_list.c        | 4 ++++
+ source3/smbd/aio.c                     | 4 ++++
+ source3/smbd/close.c                   | 4 ++++
+ source3/smbd/durable.c                 | 4 ++++
+ source3/smbd/files.c                   | 4 ++++
+ source3/smbd/globals.h                 | 4 ++++
+ source3/smbd/open.c                    | 4 ++++
+ source3/smbd/oplock.c                  | 4 ++++
+ source3/smbd/process.c                 | 6 +++++-
+ source3/smbd/proto.h                   | 4 ++++
+ source3/smbd/reply.c                   | 4 ++++
+ source3/smbd/scavenger.c               | 4 ++++
+ source3/smbd/scavenger.h               | 4 ++++
+ source3/smbd/server.c                  | 4 ++++
+ source3/smbd/server_exit.c             | 4 ++++
+ source3/smbd/server_reload.c           | 4 ++++
+ source3/smbd/smb2_break.c              | 4 ++++
+ source3/smbd/smb2_create.c             | 6 +++++-
+ source3/smbd/smb2_ioctl.c              | 4 ++++
+ source3/smbd/smb2_ioctl_filesys.c      | 6 +++++-
+ source3/smbd/smb2_ioctl_network_fs.c   | 4 ++++
+ source3/smbd/smb2_negprot.c            | 8 ++++++--
+ source3/smbd/smb2_server.c             | 4 ++++
+ source3/smbd/smb2_tcon.c               | 4 ++++
+ source3/smbd/smbXsrv_client.c          | 4 ++++
+ source3/smbd/smbXsrv_open.c            | 4 ++++
+ source3/smbd/smbXsrv_session.c         | 4 ++++
+ source3/smbd/smbXsrv_tcon.c            | 4 ++++
+ source3/smbd/smbXsrv_version.c         | 4 ++++
+ source3/utils/status.c                 | 4 ++++
+ source4/torture/smb2/durable_v2_open.c | 4 ++++
+ source4/torture/smbtorture.c           | 4 ++++
+ 63 files changed, 258 insertions(+), 6 deletions(-)
+
+diff --git a/lib/dbwrap/dbwrap.c b/lib/dbwrap/dbwrap.c
+index b47ae82..1bba46d 100644
+--- a/lib/dbwrap/dbwrap.c
++++ b/lib/dbwrap/dbwrap.c
+@@ -5,6 +5,10 @@
+ 
+    Major code contributions from Aleksey Fedoseev (fedoseev@ru.ibm.com)
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/lib/dbwrap/dbwrap_tdb.c b/lib/dbwrap/dbwrap_tdb.c
+index 516aec6..b3690f4 100644
+--- a/lib/dbwrap/dbwrap_tdb.c
++++ b/lib/dbwrap/dbwrap_tdb.c
+@@ -3,6 +3,10 @@
+    Database interface wrapper around tdb
+    Copyright (C) Volker Lendecke 2005-2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/lib/dbwrap/dbwrap_tdb.h b/lib/dbwrap/dbwrap_tdb.h
+index ed860be..228e22d 100644
+--- a/lib/dbwrap/dbwrap_tdb.h
++++ b/lib/dbwrap/dbwrap_tdb.h
+@@ -3,6 +3,10 @@
+    Database interface wrapper around tdb
+    Copyright (C) Volker Lendecke 2005-2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/lib/param/loadparm.c b/lib/param/loadparm.c
+index 40380b6..a2680d6 100644
+--- a/lib/param/loadparm.c
++++ b/lib/param/loadparm.c
+@@ -13,6 +13,10 @@
+    Copyright (C) Jelmer Vernooij <jelmer@samba.org> 2007
+    Copyright (C) Andrew Bartlett 2011-2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/lib/tdb/common/open.c b/lib/tdb/common/open.c
+index fb96856..3b0946a 100644
+--- a/lib/tdb/common/open.c
++++ b/lib/tdb/common/open.c
+@@ -7,6 +7,10 @@
+    Copyright (C) Paul `Rusty' Russell		   2000
+    Copyright (C) Jeremy Allison			   2000-2003
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+      ** NOTE! The following LGPL license applies to the tdb
+      ** library. This does NOT imply that all of Samba is released
+      ** under the LGPL
+diff --git a/lib/tdb/common/tdb.c b/lib/tdb/common/tdb.c
+index 6ec5bda..f3670dd 100644
+--- a/lib/tdb/common/tdb.c
++++ b/lib/tdb/common/tdb.c
+@@ -7,6 +7,10 @@
+    Copyright (C) Paul `Rusty' Russell		   2000
+    Copyright (C) Jeremy Allison			   2000-2003
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+      ** NOTE! The following LGPL license applies to the tdb
+      ** library. This does NOT imply that all of Samba is released
+      ** under the LGPL
+diff --git a/lib/tdb/tools/tdbtool.c b/lib/tdb/tools/tdbtool.c
+index 0bfd280..d0d7f2a 100644
+--- a/lib/tdb/tools/tdbtool.c
++++ b/lib/tdb/tools/tdbtool.c
+@@ -6,6 +6,10 @@
+    Copyright (C) Jeremy Allison			   2000
+    Copyright (C) Andrew Esh                        2001
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/lib/tdb_wrap/tdb_wrap.c b/lib/tdb_wrap/tdb_wrap.c
+index f86b358..fc2e201 100644
+--- a/lib/tdb_wrap/tdb_wrap.c
++++ b/lib/tdb_wrap/tdb_wrap.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Andrew Tridgell 2004
+    Copyright (C) Jelmer Vernooij <jelmer@samba.org> 2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/lib/tdb_wrap/tdb_wrap.h b/lib/tdb_wrap/tdb_wrap.h
+index 56e801a..4126226 100644
+--- a/lib/tdb_wrap/tdb_wrap.h
++++ b/lib/tdb_wrap/tdb_wrap.h
+@@ -4,6 +4,10 @@
+    database wrap headers
+ 
+    Copyright (C) Andrew Tridgell 2004
++
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+    
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+diff --git a/lib/torture/torture.h b/lib/torture/torture.h
+index 5ec2d8b..a1e6369 100644
+--- a/lib/torture/torture.h
++++ b/lib/torture/torture.h
+@@ -3,6 +3,10 @@
+    SMB torture UI functions
+ 
+    Copyright (C) Jelmer Vernooij 2006
++
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+    
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+diff --git a/source3/lib/dbwrap/dbwrap_open.c b/source3/lib/dbwrap/dbwrap_open.c
+index e12c0e3..2a35a1f 100644
+--- a/source3/lib/dbwrap/dbwrap_open.c
++++ b/source3/lib/dbwrap/dbwrap_open.c
+@@ -4,6 +4,10 @@
+ 
+    Copyright (C) Volker Lendecke 2005-2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/dbwrap/dbwrap_open.h b/source3/lib/dbwrap/dbwrap_open.h
+index 1b43ead..f7ffba3 100644
+--- a/source3/lib/dbwrap/dbwrap_open.h
++++ b/source3/lib/dbwrap/dbwrap_open.h
+@@ -4,6 +4,10 @@
+ 
+    Copyright (C) Volker Lendecke 2005-2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/dbwrap/dbwrap_watch.c b/source3/lib/dbwrap/dbwrap_watch.c
+index 09e67fb..0203e1c 100644
+--- a/source3/lib/dbwrap/dbwrap_watch.c
++++ b/source3/lib/dbwrap/dbwrap_watch.c
+@@ -3,6 +3,10 @@
+    Watch dbwrap record changes
+    Copyright (C) Volker Lendecke 2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/g_lock.c b/source3/lib/g_lock.c
+index 30c5f52..3e6f886 100644
+--- a/source3/lib/g_lock.c
++++ b/source3/lib/g_lock.c
+@@ -3,6 +3,10 @@
+    global locks based on dbwrap and messaging
+    Copyright (C) 2009 by Volker Lendecke
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/gencache.c b/source3/lib/gencache.c
+index ed16d79..77f24f4 100644
+--- a/source3/lib/gencache.c
++++ b/source3/lib/gencache.c
+@@ -7,6 +7,10 @@
+    Copyright (C) Rafal Szczesniak    2002
+    Copyright (C) Volker Lendecke     2009
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/netapi/netapi.c b/source3/lib/netapi/netapi.c
+index b73a371..1c9c742 100644
+--- a/source3/lib/netapi/netapi.c
++++ b/source3/lib/netapi/netapi.c
+@@ -3,6 +3,10 @@
+  *  NetApi Support
+  *  Copyright (C) Guenther Deschner 2007-2008
+  *
++ *  Copyright © Hewlett Packard Enterprise Development LP 2018
++ *  Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ *  Added support for Hyper-V over SMB 3.   
++ *
+  *  This program is free software; you can redistribute it and/or modify
+  *  it under the terms of the GNU General Public License as published by
+  *  the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/server_mutex.c b/source3/lib/server_mutex.c
+index 0891e47..a8a29d8 100644
+--- a/source3/lib/server_mutex.c
++++ b/source3/lib/server_mutex.c
+@@ -3,6 +3,10 @@
+    Authenticate against a remote domain
+    Copyright (C) Andrew Tridgell 1992-2002
+    Copyright (C) Andrew Bartlett 2002
++
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+    
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+diff --git a/source3/lib/serverid.c b/source3/lib/serverid.c
+index 1ac2c08..42566f3 100644
+--- a/source3/lib/serverid.c
++++ b/source3/lib/serverid.c
+@@ -3,6 +3,10 @@
+    Implementation of a reliable server_exists()
+    Copyright (C) Volker Lendecke 2010
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/util.c b/source3/lib/util.c
+index 0e6e503..95db079 100644
+--- a/source3/lib/util.c
++++ b/source3/lib/util.c
+@@ -7,6 +7,10 @@
+    Copyright (C) Jim McDonough <jmcd@us.ibm.com> 2003
+    Copyright (C) James Peach 2006
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/util_path.c b/source3/lib/util_path.c
+index 20d7c75..60b1e22 100644
+--- a/source3/lib/util_path.c
++++ b/source3/lib/util_path.c
+@@ -7,6 +7,10 @@
+  * Copyright (C) Jim McDonough <jmcd@us.ibm.com> 2003
+  * Copyright (C) James Peach 2006
+  *
++ * Copyright © Hewlett Packard Enterprise Development LP 2018
++ * Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ * Added support for Hyper-V over SMB 3.
++ *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/lib/util_path.h b/source3/lib/util_path.h
+index f1b4aa5..a2e8c59 100644
+--- a/source3/lib/util_path.h
++++ b/source3/lib/util_path.h
+@@ -7,6 +7,10 @@
+  * Copyright (C) Jim McDonough <jmcd@us.ibm.com> 2003
+  * Copyright (C) James Peach 2006
+  *
++ * Copyright © Hewlett Packard Enterprise Development LP 2018
++ * Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ * Added support for Hyper-V over SMB 3.
++ *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/libnet/libnet_join.c b/source3/libnet/libnet_join.c
+index 5104929..10deeb9 100644
+--- a/source3/libnet/libnet_join.c
++++ b/source3/libnet/libnet_join.c
+@@ -4,6 +4,10 @@
+  *  Copyright (C) Gerald (Jerry) Carter 2006
+  *  Copyright (C) Guenther Deschner 2007-2008
+  *
++ *  Copyright © Hewlett Packard Enterprise Development LP 2018
++ *  Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ *  Added support for Hyper-V over SMB 3.
++ *
+  *  This program is free software; you can redistribute it and/or modify
+  *  it under the terms of the GNU General Public License as published by
+  *  the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/librpc/crypto/gse_krb5.c b/source3/librpc/crypto/gse_krb5.c
+index 1b9bb3c..c7db841 100644
+--- a/source3/librpc/crypto/gse_krb5.c
++++ b/source3/librpc/crypto/gse_krb5.c
+@@ -3,6 +3,10 @@
+  *  Krb5 helpers
+  *  Copyright (C) Simo Sorce 2010.
+  *
++ *  Copyright © Hewlett Packard Enterprise Development LP 2018
++ *  Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ *  Added support for Hyper-V over SMB 3.
++ *
+  *  This program is free software; you can redistribute it and/or modify
+  *  it under the terms of the GNU General Public License as published by
+  *  the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/locking/brlock.c b/source3/locking/brlock.c
+index 32f01d6..d8461d1 100644
+--- a/source3/locking/brlock.c
++++ b/source3/locking/brlock.c
+@@ -6,6 +6,10 @@
+    Copyright (C) Andrew Tridgell 1992-2000
+    Copyright (C) Jeremy Allison 1992-2000
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/locking/leases_db.c b/source3/locking/leases_db.c
+index cec1585..f0898c4 100644
+--- a/source3/locking/leases_db.c
++++ b/source3/locking/leases_db.c
+@@ -3,6 +3,10 @@
+    Map lease keys to file ids
+    Copyright (C) Volker Lendecke 2013
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/locking/leases_db.h b/source3/locking/leases_db.h
+index cba7c52..63396cc 100644
+--- a/source3/locking/leases_db.h
++++ b/source3/locking/leases_db.h
+@@ -4,6 +4,10 @@
+  *
+  *  Copyright (C) Volker Lendecke 2014
+  *
++ *  Copyright © Hewlett Packard Enterprise Development LP 2018
++ *  Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ *  Added support for Hyper-V over SMB 3.
++ *
+  *  This program is free software; you can redistribute it and/or modify
+  *  it under the terms of the GNU General Public License as published by
+  *  the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/locking/locking.c b/source3/locking/locking.c
+index 9fa9ddd..356b010 100644
+--- a/source3/locking/locking.c
++++ b/source3/locking/locking.c
+@@ -33,6 +33,10 @@
+ 
+    Added POSIX locking support. Jeremy Allison (jeremy@valinux.com), Apr. 2000.
+    Added Unix Extensions POSIX locking support. Jeremy Allison Mar 2006.
++
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+ */
+ 
+ #include "includes.h"
+diff --git a/source3/locking/proto.h b/source3/locking/proto.h
+index 2507b27..91dbeb7 100644
+--- a/source3/locking/proto.h
++++ b/source3/locking/proto.h
+@@ -5,6 +5,10 @@
+  *  Copyright (C) Andrew Tridgell	1992-2000
+  *  Copyright (C) Jeremy Allison	1992-2006
+  *  Copyright (C) Volker Lendecke	2005
++ *  
++ *  Copyright © Hewlett Packard Enterprise Development LP 2018
++ *  Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ *  Added support for Hyper-V over SMB 3.
+  *
+  *  This program is free software; you can redistribute it and/or modify
+  *  it under the terms of the GNU General Public License as published by
+diff --git a/source3/locking/share_mode_lock.c b/source3/locking/share_mode_lock.c
+index 7a32e81..e1934b2 100644
+--- a/source3/locking/share_mode_lock.c
++++ b/source3/locking/share_mode_lock.c
+@@ -33,6 +33,10 @@
+ 
+    Added POSIX locking support. Jeremy Allison (jeremy@valinux.com), Apr. 2000.
+    Added Unix Extensions POSIX locking support. Jeremy Allison Mar 2006.
++
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+ */
+ 
+ #include "includes.h"
+@@ -194,7 +198,7 @@ static bool locking_init_internal(bool read_only)
+ 		}
+ 
+ 		if ( read_only == false ) {
+-			/* Ashok: traverse the db and only get rid of entries not belonging to a persistent open */
++			/* traverse the db and only get rid of entries not belonging to a persistent open */
+ 			status = dbwrap_traverse(get_lock_db(), sml_traverse_persist_fn, NULL, NULL);
+ 
+ 			if ( ! NT_STATUS_IS_OK(status) ) {
+diff --git a/source3/modules/vfs_default.c b/source3/modules/vfs_default.c
+index e213b22..1dd9c63 100644
+--- a/source3/modules/vfs_default.c
++++ b/source3/modules/vfs_default.c
+@@ -4,6 +4,10 @@
+    Copyright (C) Tim Potter 1998
+    Copyright (C) Jeremy Allison 2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/param/loadparm.c b/source3/param/loadparm.c
+index 35a513c..13ddc40 100644
+--- a/source3/param/loadparm.c
++++ b/source3/param/loadparm.c
+@@ -13,6 +13,10 @@
+    Copyright (C) Jelmer Vernooij <jelmer@samba.org> 2007
+    Copyright (C) Andrew Bartlett 2011
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/printing/printer_list.c b/source3/printing/printer_list.c
+index 9b20dc1..0b93904 100644
+--- a/source3/printing/printer_list.c
++++ b/source3/printing/printer_list.c
+@@ -3,6 +3,10 @@
+    Share Database of available printers.
+    Copyright (C) Simo Sorce 2010
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/aio.c b/source3/smbd/aio.c
+index fc2bf61..8616e4d 100644
+--- a/source3/smbd/aio.c
++++ b/source3/smbd/aio.c
+@@ -4,6 +4,10 @@
+    async_io read handling using POSIX async io.
+    Copyright (C) Jeremy Allison 2005.
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/close.c b/source3/smbd/close.c
+index 4dd374c..1d5afc8 100644
+--- a/source3/smbd/close.c
++++ b/source3/smbd/close.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Jeremy Allison 1992-2007.
+    Copyright (C) Volker Lendecke 2005
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/durable.c b/source3/smbd/durable.c
+index bf2f597..feefa15 100644
+--- a/source3/smbd/durable.c
++++ b/source3/smbd/durable.c
+@@ -6,6 +6,10 @@
+    Copyright (C) Michael Adam 2012
+    Copyright (C) Volker Lendecke 2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/files.c b/source3/smbd/files.c
+index 93c292a..e9bb7ff 100644
+--- a/source3/smbd/files.c
++++ b/source3/smbd/files.c
+@@ -2,6 +2,10 @@
+    Unix SMB/CIFS implementation.
+    Files[] structure handling
+    Copyright (C) Andrew Tridgell 1998
++  
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+ 
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+diff --git a/source3/smbd/globals.h b/source3/smbd/globals.h
+index 63d9e76..35ba8bf 100644
+--- a/source3/smbd/globals.h
++++ b/source3/smbd/globals.h
+@@ -4,6 +4,10 @@
+    Copyright (C) Stefan Metzmacher 2009
+    Copyright (C) Jeremy Allison 2010
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/open.c b/source3/smbd/open.c
+index 3af315a..536b263 100644
+--- a/source3/smbd/open.c
++++ b/source3/smbd/open.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Jeremy Allison 2001-2004
+    Copyright (C) Volker Lendecke 2005
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/oplock.c b/source3/smbd/oplock.c
+index 7fd8140..57a490d 100644
+--- a/source3/smbd/oplock.c
++++ b/source3/smbd/oplock.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Jeremy Allison 1998 - 2001
+    Copyright (C) Volker Lendecke 2005
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/process.c b/source3/smbd/process.c
+index 0805e53..ebfa3b2 100644
+--- a/source3/smbd/process.c
++++ b/source3/smbd/process.c
+@@ -4,6 +4,10 @@
+    Copyright (C) Andrew Tridgell 1992-1998
+    Copyright (C) Volker Lendecke 2005-2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+@@ -4012,7 +4016,7 @@ void smbd_process(struct tevent_context *ev_ctx,
+ 		remaddr = "0.0.0.0";
+ 	}
+ 
+-	/* Ashok: Set the svtfs_lockdir_index based on the locaddr */
++	/* Set the svtfs_lockdir_index based on the locaddr */
+ 	svtfs_set_index_for_ip (locaddr);
+ 
+ 	/* this is needed so that we get decent entries
+diff --git a/source3/smbd/proto.h b/source3/smbd/proto.h
+index c9c734c..a44d4d3 100644
+--- a/source3/smbd/proto.h
++++ b/source3/smbd/proto.h
+@@ -29,6 +29,10 @@
+  *  Copyright (C) Tim Prouty				2009
+  *  Copyright (C) Gregor Beck				2011
+  *
++ *  Copyright © Hewlett Packard Enterprise Development LP 2018
++ *  Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++ *  Added support for Hyper-V over SMB 3.
++ *
+  *  This program is free software; you can redistribute it and/or modify
+  *  it under the terms of the GNU General Public License as published by
+  *  the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/reply.c b/source3/smbd/reply.c
+index 5888434..02d485c 100644
+--- a/source3/smbd/reply.c
++++ b/source3/smbd/reply.c
+@@ -6,6 +6,10 @@
+    Copyright (C) Jeremy Allison 1992-2007.
+    Copyright (C) Volker Lendecke 2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/scavenger.c b/source3/smbd/scavenger.c
+index 3e41ba3..b96ce81 100644
+--- a/source3/smbd/scavenger.c
++++ b/source3/smbd/scavenger.c
+@@ -4,6 +4,10 @@
+ 
+    Copyright (C) Gregor Beck                    2013
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/scavenger.h b/source3/smbd/scavenger.h
+index c92aa7f..a7824d6 100644
+--- a/source3/smbd/scavenger.h
++++ b/source3/smbd/scavenger.h
+@@ -4,6 +4,10 @@
+ 
+    Copyright (C) Gregor Beck                    2013
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/server.c b/source3/smbd/server.c
+index 4e09a8e..ae01692 100644
+--- a/source3/smbd/server.c
++++ b/source3/smbd/server.c
+@@ -7,6 +7,10 @@
+    Copyright (C) Volker Lendecke		1993-2007
+    Copyright (C) Jeremy Allison			1993-2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/server_exit.c b/source3/smbd/server_exit.c
+index ffbb1b1..26799ba 100644
+--- a/source3/smbd/server_exit.c
++++ b/source3/smbd/server_exit.c
+@@ -8,6 +8,10 @@
+    Copyright (C) Jeremy Allison			1993-2007
+    Copyright (C) Andrew Bartlett                2010
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/server_reload.c b/source3/smbd/server_reload.c
+index ba24674..516e18d 100644
+--- a/source3/smbd/server_reload.c
++++ b/source3/smbd/server_reload.c
+@@ -7,6 +7,10 @@
+    Copyright (C) Volker Lendecke		1993-2007
+    Copyright (C) Jeremy Allison			1993-2007
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smb2_break.c b/source3/smbd/smb2_break.c
+index a88d693..6fe4b2b 100644
+--- a/source3/smbd/smb2_break.c
++++ b/source3/smbd/smb2_break.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Stefan Metzmacher 2009
+    Copyright (C) Jeremy Allison 2010
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smb2_create.c b/source3/smbd/smb2_create.c
+index c6af3ab..1898b15 100644
+--- a/source3/smbd/smb2_create.c
++++ b/source3/smbd/smb2_create.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Stefan Metzmacher 2009
+    Copyright (C) Jeremy Allison 2010
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+@@ -1303,7 +1307,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
+ 		{
+ 			update_open = true;
+                         /*
+-                         * Ashok:  earlier, we use op->global->durable (or resilient)
++                         *         earlier, we use op->global->durable (or resilient)
+                          *         when we're doing a durable reconnect, so I think
+                          *         'durable' is already appropriately set in that case.
+                          *         Therefore, I'm thinking we only want to set
+diff --git a/source3/smbd/smb2_ioctl.c b/source3/smbd/smb2_ioctl.c
+index f93b5fe..cf5d972 100644
+--- a/source3/smbd/smb2_ioctl.c
++++ b/source3/smbd/smb2_ioctl.c
+@@ -4,6 +4,10 @@
+ 
+    Copyright (C) Stefan Metzmacher 2009
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smb2_ioctl_filesys.c b/source3/smbd/smb2_ioctl_filesys.c
+index 47a9b9c..4a01d0b 100644
+--- a/source3/smbd/smb2_ioctl_filesys.c
++++ b/source3/smbd/smb2_ioctl_filesys.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Stefan Metzmacher 2009
+    Copyright (C) David Disseldorp 2013-2015
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+@@ -474,7 +478,7 @@ struct tevent_req *smb2_ioctl_filesys(uint32_t ctl_code,
+ 		return tevent_req_post(req, ev);
+ 		break;
+         case FSCTL_SET_INTEGRITY_INFORMATION:
+-                /* Ashok: Cheat and return success */
++                /* Cheat and return success */
+                 tevent_req_done(req);
+                 return tevent_req_post(req, ev);
+                 break;
+diff --git a/source3/smbd/smb2_ioctl_network_fs.c b/source3/smbd/smb2_ioctl_network_fs.c
+index 2f75eea..77f4955 100644
+--- a/source3/smbd/smb2_ioctl_network_fs.c
++++ b/source3/smbd/smb2_ioctl_network_fs.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Stefan Metzmacher 2009
+    Copyright (C) David Disseldorp 2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smb2_negprot.c b/source3/smbd/smb2_negprot.c
+index a3df555..b17df81 100644
+--- a/source3/smbd/smb2_negprot.c
++++ b/source3/smbd/smb2_negprot.c
+@@ -4,6 +4,10 @@
+ 
+    Copyright (C) Stefan Metzmacher 2009
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+@@ -325,11 +329,11 @@ NTSTATUS smbd_smb2_request_process_negprot(struct smbd_smb2_request *req)
+ 		capabilities |= SMB2_CAP_ENCRYPTION;
+ 	}
+ 
+-        /* Ashok: Advertise persistent handles capability */
++        /* Advertise persistent handles capability */
+         if (protocol >= PROTOCOL_SMB3_00) {
+                if (in_capabilities & SMB2_CAP_PERSISTENT_HANDLES) {
+                        capabilities |= SMB2_CAP_PERSISTENT_HANDLES;
+-		/*Ashok: Add setting connection datastructure flag for PH */
++		/*Add setting connection datastructure flag for PH */
+                }
+         }
+ 
+diff --git a/source3/smbd/smb2_server.c b/source3/smbd/smb2_server.c
+index d8c91a0..cd92e27 100644
+--- a/source3/smbd/smb2_server.c
++++ b/source3/smbd/smb2_server.c
+@@ -5,6 +5,10 @@
+    Copyright (C) Stefan Metzmacher 2009
+    Copyright (C) Jeremy Allison 2010
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smb2_tcon.c b/source3/smbd/smb2_tcon.c
+index 58f7cf5..17f1da5 100644
+--- a/source3/smbd/smb2_tcon.c
++++ b/source3/smbd/smb2_tcon.c
+@@ -4,6 +4,10 @@
+ 
+    Copyright (C) Stefan Metzmacher 2009
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smbXsrv_client.c b/source3/smbd/smbXsrv_client.c
+index c92ad44..8223642 100644
+--- a/source3/smbd/smbXsrv_client.c
++++ b/source3/smbd/smbXsrv_client.c
+@@ -3,6 +3,10 @@
+ 
+    Copyright (C) Stefan Metzmacher 2014
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index 467175f..1c9aa3e 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -4,6 +4,10 @@
+    Copyright (C) Stefan Metzmacher 2012
+    Copyright (C) Michael Adam 2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smbXsrv_session.c b/source3/smbd/smbXsrv_session.c
+index 1f07238..9a74bb0 100644
+--- a/source3/smbd/smbXsrv_session.c
++++ b/source3/smbd/smbXsrv_session.c
+@@ -4,6 +4,10 @@
+    Copyright (C) Stefan Metzmacher 2011-2012
+    Copyright (C) Michael Adam 2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/smbd/smbXsrv_tcon.c b/source3/smbd/smbXsrv_tcon.c
+index ebc5417..32ad6ed 100644
+--- a/source3/smbd/smbXsrv_tcon.c
++++ b/source3/smbd/smbXsrv_tcon.c
+@@ -3,6 +3,10 @@
+ 
+    Copyright (C) Stefan Metzmacher 2011-2012
+    Copyright (C) Michael Adam 2012
++ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+ 
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+diff --git a/source3/smbd/smbXsrv_version.c b/source3/smbd/smbXsrv_version.c
+index fefe49b..a00b71f 100644
+--- a/source3/smbd/smbXsrv_version.c
++++ b/source3/smbd/smbXsrv_version.c
+@@ -3,6 +3,10 @@
+ 
+    Copyright (C) Stefan Metzmacher 2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source3/utils/status.c b/source3/utils/status.c
+index d8b9f16..e096df6 100644
+--- a/source3/utils/status.c
++++ b/source3/utils/status.c
+@@ -24,6 +24,10 @@
+    21-Jul-1998: rsharpe@ns.aus.com (Richard Sharpe)
+    Added -L (locks only) -S (shares only) flags and code
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+ */
+ 
+ /*
+diff --git a/source4/torture/smb2/durable_v2_open.c b/source4/torture/smb2/durable_v2_open.c
+index 6b122b0..a8471cc 100644
+--- a/source4/torture/smb2/durable_v2_open.c
++++ b/source4/torture/smb2/durable_v2_open.c
+@@ -5,6 +5,10 @@
+ 
+    Copyright (C) Michael Adam 2012
+ 
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
++
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+diff --git a/source4/torture/smbtorture.c b/source4/torture/smbtorture.c
+index c85a874..be2b875 100644
+--- a/source4/torture/smbtorture.c
++++ b/source4/torture/smbtorture.c
+@@ -3,6 +3,10 @@
+    SMB torture tester
+    Copyright (C) Andrew Tridgell 1997-2003
+    Copyright (C) Jelmer Vernooij 2006-2008
++
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++   Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
++   Added support for Hyper-V over SMB 3.
+    
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
