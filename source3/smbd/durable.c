@@ -569,7 +569,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	struct files_struct *fsp = NULL;
 	NTSTATUS status;
 	bool ok;
-	int ret,i;
+	int ret = 0,i = 0;
 	int flags = 0;
 	struct file_id file_id;
 	struct smb_filename *smb_fname = NULL;
@@ -625,14 +625,24 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 		return NT_STATUS_NO_MEMORY;
 	}
 
-	ret = SMB_VFS_LSTAT(conn, smb_fname);
-	if (ret == -1) {
-		status = map_nt_error_from_unix_common(errno);
-		DEBUG(1, ("Unable to lstat stream: %s => %s\n",
-			  smb_fname_str_dbg(smb_fname),
-			  nt_errstr(status)));
-		return status;
+	/* SVT-HPE: Add a retry loop here. In case it takes time to activate hive */
+	for (i=0; i < 5; i++)
+	{
+		ret = SMB_VFS_LSTAT(conn, smb_fname);
+		if (ret == -1) {
+			status = map_nt_error_from_unix_common(errno);
+			DEBUG(1, ("Unable to lstat stream: %s => %s\n",
+			  	smb_fname_str_dbg(smb_fname),
+			  	nt_errstr(status)));
+			if (!(NT_STATUS_EQUAL(status,NT_STATUS_IO_TIMEOUT) || NT_STATUS_EQUAL(status,STATUS_MORE_ENTRIES))) {
+				/* Only retry if return code is EAGAIN or ETIMEDOUT */
+				break;
+			}
+		} else {
+			break;
+		}
 	}
+	if (ret == -1 ) return status;
 
 	if (!S_ISREG(smb_fname->st.st_ex_mode)) {
 		DEBUG(10,("smb_fname->st.st_ex_mode incorrect\n"));
