@@ -69,3 +69,4 @@
 0069-HYP-5651-Do-not-call-init-from-leases_db_add-del-par.patch
 0070-HYP-5860-Wait-for-all-children-to-exit-before-exitin.patch
 0071-HYP-5425-Changes-for-OSRB-approval.patch
+0072-HYP5814-Better-logging-for-password-mismatch.patch
