@@ -3,6 +3,10 @@
  * (Royal Institute of Technology, Stockholm, Sweden).
  * All rights reserved.
  *
+ * Copyright © Hewlett Packard Enterprise Development LP 2018
+ * Contributor - Sridevi Arvindekar (HPE).
+ * Added support for Hyper-V over SMB 3.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -429,7 +433,14 @@ gsskrb5_acceptor_start(OM_uint32 * minor_status,
 				    server, &indata, output_token);
 	} else if (kret) {
 	    *minor_status = kret;
-	    return GSS_S_FAILURE;
+	    /*
+	     * KRB5KRB_AP_ERR_BAD_INTEGRITY is returned for password mismatch.
+	     * For better logging, we map this error to GSS_S_DEFECTIVE_CREDENTIAL.
+	     */
+	    if (kret == KRB5KRB_AP_ERR_BAD_INTEGRITY) {
+	        return GSS_S_DEFECTIVE_CREDENTIAL;
+	    } else
+	        return GSS_S_FAILURE;
 	}
 
 	/*
