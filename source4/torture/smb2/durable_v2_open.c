@@ -2577,8 +2577,9 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
        TALLOC_FREE(tree);
 
        if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
-                torture_warning(tctx, "couldn't reconnect, bailing\n");
+                torture_fail(tctx, "couldn't reconnect, bailing\n");
                 ret = false;
+                h1 = NULL;
                 goto done;
        }
 
@@ -2616,7 +2617,7 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
        TALLOC_FREE(tree);
 
        if (!torture_smb2_connection_ext(tctx, 0, &options, &tree)) {
-               torture_warning(tctx, "couldn't reconnect, bailing\n");
+               torture_fail(tctx, "couldn't reconnect, bailing\n");
                ret = false;
                h1 = NULL;
                goto done;
@@ -2627,13 +2628,13 @@ bool test_persistent_samba_kill(struct torture_context *tctx,
        h1 = NULL;
 
 done:
-       if (h1 != NULL) {
-              smb2_util_close(tree, *h1);
+       if (tree != NULL) {
+               if (h1 != NULL) {
+                       smb2_util_close(tree, *h1);
+               }
+               smb2_util_close(tree, io.out.file.handle);
+               smb2_util_unlink(tree, fname);
        }
-       smb2_util_close(tree, io.out.file.handle);
-
-       smb2_util_unlink(tree, fname);
-
        talloc_free(mem_ctx);
        return ret;
 }
