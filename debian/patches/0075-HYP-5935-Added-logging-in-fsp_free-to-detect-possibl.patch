@@ -1,0 +1,23 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Fri, 16 Feb 2018 09:50:25 -0500
+Subject: HYP-5935: Added logging in fsp_free to detect possible race
+ condition.
+
+---
+ source3/smbd/files.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/source3/smbd/files.c b/source3/smbd/files.c
+index e9bb7ff..d3fa68c 100644
+--- a/source3/smbd/files.c
++++ b/source3/smbd/files.c
+@@ -489,6 +489,9 @@ void fsp_free(files_struct *fsp)
+                 return;
+         }
+ 
++        DEBUG(1, ("fsp_free: fsp=%p, name=%s, fh->ref_count=%d\n",
++                   fsp, (fsp->fsp_name)?fsp->fsp_name->base_name:NULL, (fsp->fh)?fsp->fh->ref_count:0));
++
+         /* If fsp has already been zeroed out, it has been freed. move on.*/
+         for (i = 0; i < sizeof(*fsp); i++)
+         {
