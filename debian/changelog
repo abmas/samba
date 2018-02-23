@@ -1,3 +1,16 @@
+samba (2:4.4.5+dfsg-2+svt15) trusty; urgency=medium
+
+  [ Sridevi Arvindekar ]
+  * HYP5814
+
+  [ Vinayapriya Balakumar ]
+  * Code changes for HYP-5994
+
+  [ Ashok Ramakrishnan ]
+  * Patches for HYP-5935 (debug only) and HYP_6004 (fix)
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Fri, 23 Feb 2018 10:29:58 -0500
+
 samba (2:4.4.5+dfsg-2+svt14) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
