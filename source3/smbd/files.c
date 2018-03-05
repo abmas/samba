@@ -489,9 +489,6 @@ void fsp_free(files_struct *fsp)
                 return;
         }
 
-        DEBUG(1, ("fsp_free: fsp=%p, name=%s, fh->ref_count=%d\n",
-                   fsp, (fsp->fsp_name)?fsp->fsp_name->base_name:NULL, (fsp->fh)?fsp->fh->ref_count:0));
-
         /* If fsp has already been zeroed out, it has been freed. move on.*/
         for (i = 0; i < sizeof(*fsp); i++)
         {
