@@ -94,11 +94,18 @@ static void exit_server_common(enum server_exit_reason how,
 	struct smbXsrv_connection *xconn = NULL;
 	struct smbd_server_connection *sconn = NULL;
 	struct messaging_context *msg_ctx = server_messaging_context();
-	pid_t wpid;
-	int status;
+	pid_t wpid = 0;
+	int status = 0;
 
 	/* First wait for all children to exit */
-	while (am_parent && ((wpid = wait(&status)) > 0));
+	if (am_parent) {
+		while ((wpid = wait(&status)) > 0);
+		if (errno == ECHILD) {
+			DEBUG(0,("All child processes exited\n"));
+		} else {
+			DEBUG(0,("Error waiting for child processes, proceeding with exit\n"));
+		}
+	}
 
 	if (client != NULL) {
 		sconn = client->sconn;

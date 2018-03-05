@@ -7,6 +7,8 @@
    Copyright (C) Andrew Tridgell 2002
    Copyright (C) Jelmer Vernooij 2003
    Copyright (C) Volker Lendecke 2004
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+     Added support for Hyper-V over SMB 3.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -227,7 +229,17 @@ static void flush_caches_noinit(void)
 
 static void terminate(bool is_parent)
 {
+	pid_t wpid = 0;
+	int status = 0;
 	if (is_parent) {
+		/* First wait for all child processes to terminate */
+		while ((wpid = wait(&status)) > 0);
+		if (errno == ECHILD) {
+			DEBUG(0,("All child processes exited\n"));
+		} else {
+			DEBUG(0,("Error waiting for child processes, proceeding with exit\n"));
+		}
+
 		/* When parent goes away we should
 		 * remove the socket file. Not so
 		 * when children terminate.
