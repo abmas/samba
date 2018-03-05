@@ -73,3 +73,4 @@
 0073-Code-changes-for-HYP-5994.patch
 0074-HYP-6004-Retry-if-we-get-EAGAIN-or-ETIMEDOUT-while-r.patch
 0075-HYP-5935-Added-logging-in-fsp_free-to-detect-possibl.patch
+0076-HYP-5935-Fix-for-double-free-https-attachments.samba.patch
