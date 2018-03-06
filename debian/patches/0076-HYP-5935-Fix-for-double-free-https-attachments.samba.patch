@@ -1,0 +1,36 @@
+From: priyap <pm.priya@hpe.com>
+Date: Mon, 5 Mar 2018 04:37:34 -0500
+Subject: HYP-5935: Fix for double free,
+ https://attachments.samba.org/attachment.cgi?id=11610.
+
+---
+ source3/smbd/files.c       | 3 ---
+ source3/smbd/server_exit.c | 1 -
+ 2 files changed, 4 deletions(-)
+
+diff --git a/source3/smbd/files.c b/source3/smbd/files.c
+index d3fa68c..e9bb7ff 100644
+--- a/source3/smbd/files.c
++++ b/source3/smbd/files.c
+@@ -489,9 +489,6 @@ void fsp_free(files_struct *fsp)
+                 return;
+         }
+ 
+-        DEBUG(1, ("fsp_free: fsp=%p, name=%s, fh->ref_count=%d\n",
+-                   fsp, (fsp->fsp_name)?fsp->fsp_name->base_name:NULL, (fsp->fh)?fsp->fh->ref_count:0));
+-
+         /* If fsp has already been zeroed out, it has been freed. move on.*/
+         for (i = 0; i < sizeof(*fsp); i++)
+         {
+diff --git a/source3/smbd/server_exit.c b/source3/smbd/server_exit.c
+index 26799ba..eb75bdd 100644
+--- a/source3/smbd/server_exit.c
++++ b/source3/smbd/server_exit.c
+@@ -230,7 +230,6 @@ static void exit_server_common(enum server_exit_reason how,
+ 			talloc_free(xconn);
+ 			DO_PROFILE_INC(disconnect);
+ 		}
+-		TALLOC_FREE(client->sconn);
+ 	}
+ 	sconn = NULL;
+ 	xconn = NULL;
