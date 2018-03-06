@@ -1,3 +1,13 @@
+samba (2:4.4.5+dfsg-2+svt16) trusty; urgency=medium
+
+  [ priyap ]
+  * HYP-5935: Fix for double free, https://attachments.samba.org/attachment.cgi?id=11610.           Removed the debug only log added.
+
+  [ Ashok Ramakrishnan ]
+  * Patch for HYP-6173
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Tue, 06 Mar 2018 13:07:35 -0500
+
 samba (2:4.4.5+dfsg-2+svt15) trusty; urgency=medium
 
   [ Sridevi Arvindekar ]
