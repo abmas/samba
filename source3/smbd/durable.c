@@ -597,24 +597,27 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 			(ndr_pull_flags_fn_t)ndr_pull_vfs_default_durable_cookie);
 	if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
 		status = ndr_map_error2ntstatus(ndr_err);
+		DEBUG(1,("ndr_pull_struct_blob error. returning %s\n", nt_errstr(status)));
 		return status;
 	}
 
 	if (strcmp(cookie.magic, VFS_DEFAULT_DURABLE_COOKIE_MAGIC) != 0) {
+		DEBUG(1,("cookie.magic error. returning NT_STATUS_INVALID_PARAMETER\n"));
 		return NT_STATUS_INVALID_PARAMETER;
 	}
 
 	if (cookie.version != VFS_DEFAULT_DURABLE_COOKIE_VERSION) {
+		DEBUG(1,("cookie.version error. returning NT_STATUS_INVALID_PARAMETER\n"));
 		return NT_STATUS_INVALID_PARAMETER;
 	}
 
 	if (!cookie.allow_reconnect) {
-		DEBUG(10,("cookie.allow_reconnect not set. returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
+		DEBUG(1,("cookie.allow_reconnect not set. returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
 	if (strcmp(cookie.servicepath, conn->connectpath) != 0) {
-		DEBUG(10,("cookie.servicepath doesn't match. returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
+		DEBUG(1,("cookie.servicepath doesn't match. returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
@@ -622,6 +625,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	smb_fname = synthetic_smb_fname(talloc_tos(), cookie.base_name,
 					NULL, NULL);
 	if (smb_fname == NULL) {
+		DEBUG(1,("smb_fname NULL, returning NT_STATUS_NO_MEMORY\n"));
 		return NT_STATUS_NO_MEMORY;
 	}
 
@@ -645,13 +649,13 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	if (ret == -1 ) return status;
 
 	if (!S_ISREG(smb_fname->st.st_ex_mode)) {
-		DEBUG(10,("smb_fname->st.st_ex_mode incorrect\n"));
+		DEBUG(1,("smb_fname->st.st_ex_mode incorrect\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
 	file_id = vfs_file_id_from_sbuf(conn, &smb_fname->st);
 	if (!file_id_equal(&cookie.id, &file_id)) {
-		DEBUG(10,("file id mismatch cookie = %llu, stat = %llu\n",(unsigned long long)cookie.id.devid, (unsigned long long)file_id.devid));
+		DEBUG(1,("file id mismatch cookie = %llu, stat = %llu\n",(unsigned long long)cookie.id.devid, (unsigned long long)file_id.devid));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
@@ -720,7 +724,7 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 PROCEEDOPEN:
 	status = fsp_new(conn, conn, &fsp);
 	if (!NT_STATUS_IS_OK(status)) {
-		DEBUG(0, ("vfs_default_durable_reconnect: failed to create "
+		DEBUG(1, ("vfs_default_durable_reconnect: failed to create "
 			  "new fsp: %s\n", nt_errstr(status)));
 		if (lck) TALLOC_FREE(lck);
 		return status;
@@ -772,6 +776,7 @@ PROCEEDOPEN:
 		if (fsp->lease == NULL) {
 			if (lck) TALLOC_FREE(lck);
 			fsp_free(fsp);
+			DEBUG(1,("find_fsp_lease returned NULL, failing with NT_STATUS_NO_MEMORY\n"));
 			return NT_STATUS_NO_MEMORY;
 		}
 
@@ -783,6 +788,7 @@ PROCEEDOPEN:
 				&l->client_guid)) {
 			if (lck) TALLOC_FREE(lck);
 			fsp_free(fsp);
+			DEBUG(1,("GUID_equal returned false, failing with NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
 			return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 		}
 	}
@@ -798,7 +804,7 @@ PROCEEDOPEN:
 	if (!NT_STATUS_IS_OK(status)) {
 		if (lck) TALLOC_FREE(lck);
 		fsp_free(fsp);
-		DEBUG(0, ("vfs_default_durable_reconnect: "
+		DEBUG(1, ("vfs_default_durable_reconnect: "
 			  "fsp_set_smb_fname failed: %s\n",
 			  nt_errstr(status)));
 		return status;
@@ -863,7 +869,7 @@ PROCEEDOPEN:
 			  nt_errstr(status)));
 		ret = SMB_VFS_CLOSE(fsp);
 		if (ret == -1) {
-			DEBUG(0, ("vfs_default_durable_reconnect: "
+			DEBUG(1, ("vfs_default_durable_reconnect: "
 				  "SMB_VFS_CLOSE failed (%s) - leaking file "
 				  "descriptor\n", strerror(errno)));
 		}
@@ -874,9 +880,10 @@ PROCEEDOPEN:
 	}
 
 	if (!S_ISREG(fsp->fsp_name->st.st_ex_mode)) {
+		DEBUG(1, ("S_ISREG check failed, returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
 		ret = SMB_VFS_CLOSE(fsp);
 		if (ret == -1) {
-			DEBUG(0, ("vfs_default_durable_reconnect: "
+			DEBUG(1, ("vfs_default_durable_reconnect: "
 				  "SMB_VFS_CLOSE failed (%s) - leaking file "
 				  "descriptor\n", strerror(errno)));
 		}
@@ -888,6 +895,7 @@ PROCEEDOPEN:
 
 	file_id = vfs_file_id_from_sbuf(conn, &fsp->fsp_name->st);
 	if (!file_id_equal(&cookie.id, &file_id)) {
+		DEBUG(1, ("file_id_equal check failed, returning NT_STATUS_OBJECT_NAME_NOT_FOUND\n"));
 		ret = SMB_VFS_CLOSE(fsp);
 		if (ret == -1) {
 			DEBUG(0, ("vfs_default_durable_reconnect: "

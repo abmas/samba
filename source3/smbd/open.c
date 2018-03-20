@@ -1635,7 +1635,7 @@ static NTSTATUS grant_fsp_lease(struct files_struct *fsp,
 		 */
 		do_upgrade &= !l->breaking;
 
-		DEBUG(10, ("existing=%"PRIu32", requested=%"PRIu32", "
+		DEBUG((granted<requested)?1:10, ("existing=%"PRIu32", requested=%"PRIu32", "
 			   "granted=%"PRIu32", do_upgrade=%d\n",
 			   existing, requested, granted, (int)do_upgrade));
 
@@ -1776,7 +1776,7 @@ static NTSTATUS grant_fsp_oplock_type(struct smb_request *req,
 	}
 
 	if (lp_locking(fsp->conn->params) && file_has_brlocks(fsp)) {
-		DEBUG(10,("grant_fsp_oplock_type: file %s has byte range locks\n",
+		DEBUG(1,("grant_fsp_oplock_type: file %s has byte range locks. granting only SMB2_LEASE_READ\n",
 			fsp_str_dbg(fsp)));
 		granted &= ~SMB2_LEASE_READ;
 	}
