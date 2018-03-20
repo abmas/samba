@@ -346,6 +346,7 @@ fail:
 NTSTATUS smbXsrv_open_global_init(void)
 {
         char *global_path = NULL;
+        char *global_path_tmp = NULL;
         const char *tmp_path="/etc/samba/smbxsrv_open_global.tdb";
         struct db_context *db_ctx = NULL;
         NTSTATUS status = NT_STATUS_OK;
@@ -377,8 +378,16 @@ NTSTATUS smbXsrv_open_global_init(void)
                         status = NT_STATUS_NO_MEMORY;
                         break;
                 }
+
+                global_path_tmp = svtfs_lock_path("smbxsrv_open_global.tdb");
+                if (global_path_tmp == NULL) {
+                        status = NT_STATUS_NO_MEMORY;
+                        break;
+                }
+
                 /* Delete any old file */
                 unlink(tmp_path);
+                unlink(global_path_tmp);
                 /* Copy the file to work with */
                 if (true != file_copy(global_path, tmp_path)) {
                         DEBUG(1, ("Unable to copy %s to %s for initialization.\n",global_path,tmp_path));
@@ -396,7 +405,6 @@ NTSTATUS smbXsrv_open_global_init(void)
                         DEBUG(1, ("Null context on open_global\n"));
                         status = map_nt_error_from_unix_common(errno);
                         rename(tmp_path, global_path);
-                        TALLOC_FREE(global_path);
                         break;
                 }
 
@@ -406,11 +414,20 @@ NTSTATUS smbXsrv_open_global_init(void)
 		closedb(db_ctx);
                 TALLOC_FREE(db_ctx);
 
-                /* Bulk of work has been done with tdb file in /var/tmp for performance. Now copy back*/
-                if (true != file_copy(tmp_path, global_path)) {
-                        DEBUG(1, ("Unable to copy %s back to original location.\n",global_path));
-                        status = map_nt_error_from_unix_common(errno);
-                        break;
+                /* Bulk of work has been done with tdb file in /etc/samba for performance. Now copy back to same location with 
+                   different filename /etc/samba/smbxsrv_open_global.tdb => /mnt/svtfs/0/.smb/hive/smbxsrv_open_global.tdb */
+                if (true != file_copy(tmp_path, global_path_tmp)) {
+                        DEBUG(1, ("Unable to copy %s back to original location.\n",global_path_tmp));
+                        goto cont;
+                } else {
+                        /* Copy is done, move it back to original location file global_path */
+                        if (rename(global_path_tmp, global_path) != 0) {
+                            /* rename failed. log it */
+                            DEBUG(1,("Rename [%s] -> [%s] is failed : errno = %d\n",
+                                global_path_tmp, global_path, errno));
+                            status = map_nt_error_from_unix_common(errno);
+                            break;
+                        }
                 }
 cont:
                 db_ctx = db_open(NULL, global_path,
@@ -421,12 +438,20 @@ cont:
                                 DBWRAP_LOCK_ORDER_1,
                                 DBWRAP_FLAG_NONE);
 
-                TALLOC_FREE(global_path);
                 if (db_ctx == NULL) {
                         DEBUG(1, ("Null context on open_global\n"));
                         status = map_nt_error_from_unix_common(errno);
                         break;
                 }
+
+                if (global_path != NULL) {
+			TALLOC_FREE(global_path);
+			global_path = NULL;
+		}
+		if (global_path_tmp != NULL) {
+			TALLOC_FREE(global_path_tmp);
+			global_path_tmp = NULL;
+		}
 
                 set_smbXsrv_open_global_db_ctx(db_ctx);
                 scavenge_setup[index] = true;
@@ -441,6 +466,9 @@ nextIndex:
                 DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index of %i\n", index));
                 svtfs_set_lockdir_index(index);
         } /* end while(1) */
+
+	if (global_path != NULL) TALLOC_FREE(global_path);
+	if (global_path_tmp != NULL) TALLOC_FREE(global_path_tmp);
 
         DEBUG(5, ("smbXsrv_session_open_init: setting lockdir_index back to %d\n", saved_index));
         svtfs_set_lockdir_index(saved_index);
