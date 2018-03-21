@@ -75,3 +75,5 @@
 0075-HYP-5935-Added-logging-in-fsp_free-to-detect-possibl.patch
 0076-HYP-5935-Fix-for-double-free-https-attachments.samba.patch
 0077-HYP-6173-Wait-for-child-winbind-processes-to-exit-be.patch
+0078-HYP-3653-Enable-vfs_default_durable_reconnect-log-me.patch
+0079-HYP-6299-copy-processed-file-to-hive-and-rename.patch
