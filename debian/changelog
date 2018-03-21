@@ -1,3 +1,12 @@
+samba (2:4.4.5+dfsg-2+svt17) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * Patch for HYP-6173
+  * Changelog for svt16
+  * svt17 patches.
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Wed, 21 Mar 2018 11:12:43 -0400
+
 samba (2:4.4.5+dfsg-2+svt16) trusty; urgency=medium
 
   [ priyap ]
