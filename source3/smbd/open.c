@@ -1776,7 +1776,7 @@ static NTSTATUS grant_fsp_oplock_type(struct smb_request *req,
 	}
 
 	if (lp_locking(fsp->conn->params) && file_has_brlocks(fsp)) {
-		DEBUG(1,("grant_fsp_oplock_type: file %s has byte range locks. granting only SMB2_LEASE_READ\n",
+		DEBUG(1,("grant_fsp_oplock_type: file %s has byte range locks. Clearing read lease\n",
 			fsp_str_dbg(fsp)));
 		granted &= ~SMB2_LEASE_READ;
 	}
@@ -1793,6 +1793,7 @@ static NTSTATUS grant_fsp_oplock_type(struct smb_request *req,
 			/*
 			 * Can grant only one writer
 			 */
+			DEBUG(1,("grant_fsp_oplock_type: Write lease exists, cannot grant. Clearing.\n"));
 			granted &= ~SMB2_LEASE_WRITE;
 		}
 
@@ -1813,6 +1814,7 @@ static NTSTATUS grant_fsp_oplock_type(struct smb_request *req,
 			lp_level2_oplocks(SNUM(fsp->conn));
 
 		if (!allow_level2) {
+			DEBUG(1,("grant_fsp_oplock_type: Client capability prevents lease. Granting no lease\n"));
 			granted = SMB2_LEASE_NONE;
 		}
 	}

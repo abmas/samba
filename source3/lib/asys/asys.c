@@ -1,6 +1,9 @@
 /*
  * Async syscalls
  * Copyright (C) Volker Lendecke 2012
+ *  Copyright © Hewlett Packard Enterprise Development LP 2018
+ *  Contributors - Ashok Ramakrishnan (HPE) and Paul Cerqua (HPE)
+ *  Added support for Hyper-V over SMB 3.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -188,8 +191,13 @@ static void asys_pwrite_do(void *private_data)
 {
 	struct asys_job *job = (struct asys_job *)private_data;
 	struct asys_pwrite_args *args = &job->args.pwrite_args;
-
-	job->ret = pwrite(args->fildes, args->buf, args->nbyte, args->offset);
+	int i;
+	/* retry the write x times, with 1 second sleep if there is any error */
+	for (i=0; i<5; i++) {
+		job->ret = pwrite(args->fildes, args->buf, args->nbyte, args->offset);
+		if (job->ret >= 0) break;
+		sleep(1);
+	}
 	if (job->ret == -1) {
 		job->err = errno;
 	}
@@ -230,8 +238,13 @@ static void asys_pread_do(void *private_data)
 {
 	struct asys_job *job = (struct asys_job *)private_data;
 	struct asys_pread_args *args = &job->args.pread_args;
-
-	job->ret = pread(args->fildes, args->buf, args->nbyte, args->offset);
+	int i;
+	/* Try the read x times, with 1 second sleep before giving up. */
+	for (i = 0; i < 5; i++) {
+		job->ret = pread(args->fildes, args->buf, args->nbyte, args->offset);
+		if (job->ret >= 0 ) break;
+		sleep(1);
+	}
 	if (job->ret == -1) {
 		job->err = errno;
 	}
