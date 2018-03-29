@@ -1,3 +1,10 @@
+samba (2:4.4.5+dfsg-2+svt18) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * Patch for HYP-6431
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Thu, 29 Mar 2018 08:21:57 -0400
+
 samba (2:4.4.5+dfsg-2+svt17) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
