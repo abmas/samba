@@ -77,3 +77,4 @@
 0077-HYP-6173-Wait-for-child-winbind-processes-to-exit-be.patch
 0078-HYP-3653-Enable-vfs_default_durable_reconnect-log-me.patch
 0079-HYP-6299-copy-processed-file-to-hive-and-rename.patch
+0080-HYP-6431-Retry-pread-and-pwrite-5-times-before-givin.patch
