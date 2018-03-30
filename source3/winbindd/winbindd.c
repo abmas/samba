@@ -1336,6 +1336,9 @@ static void winbindd_register_handlers(struct messaging_context *msg_ctx,
 				       bool foreground)
 {
 	NTSTATUS status;
+	int index;
+	bool register_success = false;
+
 	/* Setup signal handlers */
 
 	if (!winbindd_setup_sig_term_handler(true))
@@ -1360,11 +1363,19 @@ static void winbindd_register_handlers(struct messaging_context *msg_ctx,
 	}
 
 	/* get broadcast messages */
+	/* In case the underlying file system isn't ready for access, add some retries */
 
-	if (!serverid_register(messaging_server_id(msg_ctx),
-			       FLAG_MSG_GENERAL |
-			       FLAG_MSG_WINBIND |
-			       FLAG_MSG_DBWRAP)) {
+	for (index=0; index<5; index++) {
+		register_success = serverid_register(messaging_server_id(msg_ctx),
+			FLAG_MSG_GENERAL |
+			FLAG_MSG_WINBIND |
+			FLAG_MSG_DBWRAP);
+
+		if (register_success) break;
+		sleep(1);
+	}
+
+	if (!register_success) {
 		DEBUG(1, ("Could not register myself in serverid.tdb\n"));
 		exit(1);
 	}

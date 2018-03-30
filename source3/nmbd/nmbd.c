@@ -4,6 +4,8 @@
    Copyright (C) Andrew Tridgell 1994-1998
    Copyright (C) Jeremy Allison 1997-2002
    Copyright (C) Jelmer Vernooij 2002,2003 (Conversion to popt)
+   Copyright © Hewlett Packard Enterprise Development LP 2018
+     Added support for Hyper-V over SMB 3.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -781,6 +783,8 @@ static bool open_sockets(bool isdaemon, int port)
 	poptContext pc;
 	char *p_lmhosts = NULL;
 	int opt;
+	int index;
+	bool register_success = false;
 	struct messaging_context *msg;
 	enum {
 		OPT_DAEMON = 1000,
@@ -1016,13 +1020,18 @@ static bool open_sockets(bool isdaemon, int port)
 	}
 
 	/* get broadcast messages */
-
-	if (!serverid_register(messaging_server_id(msg),
+	/* In case the underlying file system isn't ready for access, add some retries */
+	for (index=0; index<5; index++) {
+		register_success = serverid_register(messaging_server_id(msg),
 				FLAG_MSG_GENERAL |
 				FLAG_MSG_NMBD |
-				FLAG_MSG_DBWRAP)) {
-		exit_daemon("Could not register NMBD process in serverid.tdb", EACCES);
+				FLAG_MSG_DBWRAP);
+		if (register_success) break;
+		sleep(1);
 	}
+
+	if (!register_success)
+		exit_daemon("Could not register NMBD process in serverid.tdb", EACCES);
 
 	messaging_register(msg, NULL, MSG_FORCE_ELECTION,
 			   nmbd_message_election);
