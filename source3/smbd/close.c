@@ -668,9 +668,11 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
 		is_durable = fsp->op->global->durable || fsp->op->global->resilient || fsp->op->global->persistent;
 	}
 
+#ifdef SVT_NO_HYPERV /* Hyper-V wants to reconnect to a file even after closing it normally*/
 	if (close_type != SHUTDOWN_CLOSE) {
 		is_durable = false;
 	}
+#endif
 
 #ifdef STRICT_RESILIENT_CHECKING
 	if ( fsp->op->global->resilient && !lp_smb2_leases() ) {

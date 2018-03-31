@@ -103,14 +103,25 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
 			break;
 		}
 
-		db_ctx = db_open(NULL, global_path,
-				 0, /* hash_size */
-				 TDB_DEFAULT |
-				 TDB_CLEAR_IF_FIRST |
-				 TDB_INCOMPATIBLE_HASH,
-				 O_RDWR | O_CREAT, 0600,
-				 DBWRAP_LOCK_ORDER_1,
-				 DBWRAP_FLAG_NONE);
+		/* retry open a few times before giving up*/
+		for (i=0; i < 5; i++) {
+			if (i>0) sleep(1);
+			db_ctx = db_open(NULL, global_path,
+					0, /* hash_size */
+					TDB_DEFAULT |
+					TDB_CLEAR_IF_FIRST |
+					TDB_INCOMPATIBLE_HASH,
+					O_RDWR | O_CREAT, 0600,
+					DBWRAP_LOCK_ORDER_1,
+					DBWRAP_FLAG_NONE);
+			if (db_ctx != NULL) {
+				break;
+			}
+			status = map_nt_error_from_unix_common(errno);
+			DEBUG(1,("smbXsrv_version_global_init: "
+				 "failed to open[%s] - %s, retrying..\n",
+				 global_path, nt_errstr(status)));
+		}
 		if (db_ctx == NULL) {
 			status = map_nt_error_from_unix_common(errno);
 			DEBUG(0,("smbXsrv_version_global_init: "

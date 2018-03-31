@@ -476,12 +476,14 @@ void scavenger_schedule_disconnected(struct files_struct *fsp)
 	struct scavenger_message msg;
 	DATA_BLOB msg_blob;
 	struct server_id_buf tmp;
+	int svt_hyperv_factor = 600;
 
 	if (fsp->op == NULL) {
 		return;
 	}
+	/* SVT: Under heavy load, the reconnect comes in much later */
 	nttime_to_timeval(&disconnect_time, fsp->op->global->disconnect_time);
-	timeout_usec = 1000 * fsp->op->global->durable_timeout_msec;
+	timeout_usec = svt_hyperv_factor * 1000 * fsp->op->global->durable_timeout_msec;
 	until = timeval_add(&disconnect_time,
 			    timeout_usec / 1000000,
 			    timeout_usec % 1000000);
@@ -491,13 +493,13 @@ void scavenger_schedule_disconnected(struct files_struct *fsp)
 	msg.open_persistent_id = fsp->op->global->open_persistent_id;
 	msg.until = timeval_to_nttime(&until);
 
-	DEBUG(10, ("smbd: %s mark file %s as disconnected at %s with timeout "
+	DEBUG(1, ("smbd: %s mark file %s as disconnected at %s with timeout "
 		   "at %s in %fs\n",
 		   server_id_str_buf(self, &tmp),
 		   file_id_string_tos(&fsp->file_id),
 		   timeval_string(talloc_tos(), &disconnect_time, true),
 		   timeval_string(talloc_tos(), &until, true),
-		   fsp->op->global->durable_timeout_msec/1000.0));
+		   fsp->op->global->durable_timeout_msec*svt_hyperv_factor/1000.0));
 
 	SMB_ASSERT(server_id_is_disconnected(&fsp->op->global->server_id));
 	SMB_ASSERT(!server_id_equal(&self, &smbd_scavenger_state->parent_id));

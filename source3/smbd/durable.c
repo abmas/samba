@@ -704,8 +704,16 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
 	        break;
         }
         if ( e == NULL ) {
-                DEBUG(1, ("vfs_default_durable_reconnect: Error : no share mode entries available to reconnect, Ignoring...\n"));
-                goto PROCEEDOPEN;
+                /* SVT: If there is only one share mode lock and only disagreement is share_file_id, just set it and move on.*/
+                if (lck->data->num_share_modes == 1) {
+                        lck->data->share_modes[0].share_file_id = op->global->open_persistent_id;
+                        lck->data->share_modes[0].open_persistent_id = op->global->open_persistent_id;
+                        DEBUG(1, ("vfs_default_durable_reconnect: share_file_id did not match...allowing anyways\n"));
+                        e = &lck->data->share_modes[0];
+                } else {
+                        DEBUG(1, ("vfs_default_durable_reconnect: Error : no share mode entries available to reconnect, Ignoring...\n"));
+                        goto PROCEEDOPEN;
+                }
         }
 
 	if ((e->access_mask & (FILE_WRITE_DATA|FILE_APPEND_DATA)) &&

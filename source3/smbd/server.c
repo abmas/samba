@@ -116,47 +116,74 @@ extern void start_fssd(struct tevent_context *ev_ctx,
 extern void start_mdssd(struct tevent_context *ev_ctx,
 			struct messaging_context *msg_ctx);
 
+/****************************************************************************
+  Send a SIGTERM to our process group.
+*****************************************************************************/
+
+static void  killkids(void)
+{
+	if(am_parent) kill(0,SIGTERM);
+}
+
 /* svt specific. init of specific tdbs on reload (performed during failover/failback*/
 static void reinit_svtfs_tdbs_on_reload(struct messaging_context *msg_ctx, struct tevent_context *ev_ctx)
 {
 	NTSTATUS status;
 	struct server_id server_id;
+	char * err_string = NULL;
 
        if (!serverid_parent_init(ev_ctx)) {
-                exit_daemon("Samba cannot reinit server id", EACCES);
+                err_string = "Samba cannot reinit server id";
+                goto exit_with_eaccess;
         }
 
         server_id = messaging_server_id(msg_ctx);
         status = smbXsrv_version_global_init(&server_id);
         if (!NT_STATUS_IS_OK(status)) {
-                exit_daemon("Samba cannot reinit server context", EACCES);
+                err_string = "Samba cannot reinit server context";
+                goto exit_with_eaccess;
         }
 
         status = smbXsrv_session_global_init();
         if (!NT_STATUS_IS_OK(status)) {
-                exit_daemon("Samba cannot reinit session context", EACCES);
+                err_string = "Samba cannot reinit session context";
+                goto exit_with_eaccess;
         }
 
         status = smbXsrv_tcon_global_init();
         if (!NT_STATUS_IS_OK(status)) {
-                exit_daemon("Samba cannot reinit tcon context", EACCES);
+                err_string = "Samba cannot reinit tcon context";
+                goto exit_with_eaccess;
         }
         status = smbXsrv_open_global_init();
         if (!NT_STATUS_IS_OK(status)) {
-                exit_daemon("Samba cannot reinit global open", map_errno_from_nt_status(status));
+                err_string = "Samba cannot reinit global open";
+                goto exit_with_status;
         }
 
         if (!leases_db_init(false)) {
-                exit_daemon("Samba cannot reinit leases", EACCES);
+                err_string = "Samba cannot reinit leases";
+                goto exit_with_eaccess;
         }
 
-        if (!locking_init())
-                exit_daemon("Samba cannot reinit locking", EACCES);
+        if (!locking_init()) {
+                err_string = "Samba cannot reinit locking";
+                goto exit_with_eaccess;
+        }
 
         status = smbXsrv_open_global_scavenger_setup();
         if (!NT_STATUS_IS_OK(status)) {
                 DEBUG(0,("reinit_svtfs_tdbs_on_reload: Unable to setup scavenge timer for Persistent Handles.\n"));
         }
+        return;
+exit_with_eaccess:
+        killkids();
+        exit_daemon(err_string, EACCES);
+        return;
+exit_with_status:
+        killkids();
+        exit_daemon(err_string, map_errno_from_nt_status(status));
+        return;
 }
 
 /*******************************************************************
@@ -193,15 +220,6 @@ static void smb_stat_cache_delete(struct messaging_context *msg,
 	const char *name = (const char *)data->data;
 	DEBUG(10,("smb_stat_cache_delete: delete name %s\n", name));
 	stat_cache_delete(name);
-}
-
-/****************************************************************************
-  Send a SIGTERM to our process group.
-*****************************************************************************/
-
-static void  killkids(void)
-{
-	if(am_parent) kill(0,SIGTERM);
 }
 
 static void msg_exit_server(struct messaging_context *msg,
