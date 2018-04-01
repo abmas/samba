@@ -1,0 +1,93 @@
+From: Paul Cerqua <paul.cerqua@simplivity.com>
+Date: Thu, 29 Mar 2018 20:30:30 -0400
+Subject: HYP-6454: Make samba processes more resilient to hive failures
+
+---
+ source3/nmbd/nmbd.c         | 17 +++++++++++++----
+ source3/winbindd/winbindd.c | 19 +++++++++++++++----
+ 2 files changed, 28 insertions(+), 8 deletions(-)
+
+diff --git a/source3/nmbd/nmbd.c b/source3/nmbd/nmbd.c
+index 14eaef6..4561968 100644
+--- a/source3/nmbd/nmbd.c
++++ b/source3/nmbd/nmbd.c
+@@ -4,6 +4,8 @@
+    Copyright (C) Andrew Tridgell 1994-1998
+    Copyright (C) Jeremy Allison 1997-2002
+    Copyright (C) Jelmer Vernooij 2002,2003 (Conversion to popt)
++   Copyright © Hewlett Packard Enterprise Development LP 2018
++     Added support for Hyper-V over SMB 3.
+ 
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+@@ -781,6 +783,8 @@ static bool open_sockets(bool isdaemon, int port)
+ 	poptContext pc;
+ 	char *p_lmhosts = NULL;
+ 	int opt;
++	int index;
++	bool register_success = false;
+ 	struct messaging_context *msg;
+ 	enum {
+ 		OPT_DAEMON = 1000,
+@@ -1016,14 +1020,19 @@ static bool open_sockets(bool isdaemon, int port)
+ 	}
+ 
+ 	/* get broadcast messages */
+-
+-	if (!serverid_register(messaging_server_id(msg),
++	/* In case the underlying file system isn't ready for access, add some retries */
++	for (index=0; index<5; index++) {
++		register_success = serverid_register(messaging_server_id(msg),
+ 				FLAG_MSG_GENERAL |
+ 				FLAG_MSG_NMBD |
+-				FLAG_MSG_DBWRAP)) {
+-		exit_daemon("Could not register NMBD process in serverid.tdb", EACCES);
++				FLAG_MSG_DBWRAP);
++		if (register_success) break;
++		sleep(1);
+ 	}
+ 
++	if (!register_success)
++		exit_daemon("Could not register NMBD process in serverid.tdb", EACCES);
++
+ 	messaging_register(msg, NULL, MSG_FORCE_ELECTION,
+ 			   nmbd_message_election);
+ #if 0
+diff --git a/source3/winbindd/winbindd.c b/source3/winbindd/winbindd.c
+index 91140b0..af35b33 100644
+--- a/source3/winbindd/winbindd.c
++++ b/source3/winbindd/winbindd.c
+@@ -1336,6 +1336,9 @@ static void winbindd_register_handlers(struct messaging_context *msg_ctx,
+ 				       bool foreground)
+ {
+ 	NTSTATUS status;
++	int index;
++	bool register_success = false;
++
+ 	/* Setup signal handlers */
+ 
+ 	if (!winbindd_setup_sig_term_handler(true))
+@@ -1360,11 +1363,19 @@ static void winbindd_register_handlers(struct messaging_context *msg_ctx,
+ 	}
+ 
+ 	/* get broadcast messages */
++	/* In case the underlying file system isn't ready for access, add some retries */
++
++	for (index=0; index<5; index++) {
++		register_success = serverid_register(messaging_server_id(msg_ctx),
++			FLAG_MSG_GENERAL |
++			FLAG_MSG_WINBIND |
++			FLAG_MSG_DBWRAP);
++
++		if (register_success) break;
++		sleep(1);
++	}
+ 
+-	if (!serverid_register(messaging_server_id(msg_ctx),
+-			       FLAG_MSG_GENERAL |
+-			       FLAG_MSG_WINBIND |
+-			       FLAG_MSG_DBWRAP)) {
++	if (!register_success) {
+ 		DEBUG(1, ("Could not register myself in serverid.tdb\n"));
+ 		exit(1);
+ 	}
