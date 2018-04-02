@@ -1200,6 +1200,12 @@ static NTSTATUS open_mode_check(connection_struct *conn,
 				uint32_t share_access)
 {
 	int i;
+	struct server_id self;
+	memset(&self, 0, sizeof(struct server_id));
+
+	if (conn && conn->sconn) {
+		self = messaging_server_id(conn->sconn->msg_ctx);
+	}
 
 	if(lck->data->num_share_modes == 0) {
 		return NT_STATUS_OK;
@@ -1226,6 +1232,12 @@ static NTSTATUS open_mode_check(connection_struct *conn,
 	for(i = 0; i < lck->data->num_share_modes; i++) {
 
 		if (!is_valid_share_mode_entry(&lck->data->share_modes[i])) {
+			continue;
+		}
+
+		/* SVT: If we are in the same smbd process as the entry's server_id, skip these checks */
+		if (serverid_equal(&self, &(lck->data->share_modes[i].pid))) {
+			DEBUG(10,("share_conflict: skipping checks since server_id same\n"));
 			continue;
 		}
 
