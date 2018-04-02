@@ -1,3 +1,11 @@
+samba (2:4.4.5+dfsg-2+svt19) trusty; urgency=medium
+
+  [ Paul Cerqua ]
+  * HYP-6454: Make samba processes more resilient to hive failures
+  * HYP-3653: Don't check for certain share access conflicts
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Mon, 02 Apr 2018 09:30:22 -0400
+
 samba (2:4.4.5+dfsg-2+svt18) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
