@@ -1,0 +1,38 @@
+From: Paul Cerqua <paul.cerqua@simplivity.com>
+Date: Mon, 2 Apr 2018 00:04:39 -0400
+Subject: HYP-3653: Don't check for certain share access conflicts
+
+---
+ source3/smbd/open.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/source3/smbd/open.c b/source3/smbd/open.c
+index eb950da..c6ed8de 100644
+--- a/source3/smbd/open.c
++++ b/source3/smbd/open.c
+@@ -1200,6 +1200,12 @@ static NTSTATUS open_mode_check(connection_struct *conn,
+ 				uint32_t share_access)
+ {
+ 	int i;
++	struct server_id self;
++	memset(&self, 0, sizeof(struct server_id));
++
++	if (conn && conn->sconn) {
++		self = messaging_server_id(conn->sconn->msg_ctx);
++	}
+ 
+ 	if(lck->data->num_share_modes == 0) {
+ 		return NT_STATUS_OK;
+@@ -1229,6 +1235,12 @@ static NTSTATUS open_mode_check(connection_struct *conn,
+ 			continue;
+ 		}
+ 
++		/* SVT: If we are in the same smbd process as the entry's server_id, skip these checks */
++		if (serverid_equal(&self, &(lck->data->share_modes[i].pid))) {
++			DEBUG(10,("share_conflict: skipping checks since server_id same\n"));
++			continue;
++		}
++
+ 		/* someone else has a share lock on it, check to see if we can
+ 		 * too */
+ 		if (share_conflict(&lck->data->share_modes[i],
