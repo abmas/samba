@@ -1,0 +1,229 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Sat, 31 Mar 2018 11:59:10 -0400
+Subject: HYP-6143-6487: Allow reconnects in certain exception cases. Add
+ resilince to IO failure during failover.
+
+---
+ source3/smbd/close.c           |  2 ++
+ source3/smbd/durable.c         | 12 ++++++++--
+ source3/smbd/scavenger.c       |  8 ++++---
+ source3/smbd/server.c          | 52 ++++++++++++++++++++++++++++--------------
+ source3/smbd/smbXsrv_version.c | 27 +++++++++++++++-------
+ 5 files changed, 71 insertions(+), 30 deletions(-)
+
+diff --git a/source3/smbd/close.c b/source3/smbd/close.c
+index 1d5afc8..8dcfbd1 100644
+--- a/source3/smbd/close.c
++++ b/source3/smbd/close.c
+@@ -668,9 +668,11 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
+ 		is_durable = fsp->op->global->durable || fsp->op->global->resilient || fsp->op->global->persistent;
+ 	}
+ 
++#ifdef SVT_NO_HYPERV /* Hyper-V wants to reconnect to a file even after closing it normally*/
+ 	if (close_type != SHUTDOWN_CLOSE) {
+ 		is_durable = false;
+ 	}
++#endif
+ 
+ #ifdef STRICT_RESILIENT_CHECKING
+ 	if ( fsp->op->global->resilient && !lp_smb2_leases() ) {
+diff --git a/source3/smbd/durable.c b/source3/smbd/durable.c
+index 11cd518..1977a6e 100644
+--- a/source3/smbd/durable.c
++++ b/source3/smbd/durable.c
+@@ -704,8 +704,16 @@ NTSTATUS vfs_default_durable_reconnect(struct connection_struct *conn,
+ 	        break;
+         }
+         if ( e == NULL ) {
+-                DEBUG(1, ("vfs_default_durable_reconnect: Error : no share mode entries available to reconnect, Ignoring...\n"));
+-                goto PROCEEDOPEN;
++                /* SVT: If there is only one share mode lock and only disagreement is share_file_id, just set it and move on.*/
++                if (lck->data->num_share_modes == 1) {
++                        lck->data->share_modes[0].share_file_id = op->global->open_persistent_id;
++                        lck->data->share_modes[0].open_persistent_id = op->global->open_persistent_id;
++                        DEBUG(1, ("vfs_default_durable_reconnect: share_file_id did not match...allowing anyways\n"));
++                        e = &lck->data->share_modes[0];
++                } else {
++                        DEBUG(1, ("vfs_default_durable_reconnect: Error : no share mode entries available to reconnect, Ignoring...\n"));
++                        goto PROCEEDOPEN;
++                }
+         }
+ 
+ 	if ((e->access_mask & (FILE_WRITE_DATA|FILE_APPEND_DATA)) &&
+diff --git a/source3/smbd/scavenger.c b/source3/smbd/scavenger.c
+index b96ce81..a6b3c47 100644
+--- a/source3/smbd/scavenger.c
++++ b/source3/smbd/scavenger.c
+@@ -476,12 +476,14 @@ void scavenger_schedule_disconnected(struct files_struct *fsp)
+ 	struct scavenger_message msg;
+ 	DATA_BLOB msg_blob;
+ 	struct server_id_buf tmp;
++	int svt_hyperv_factor = 600;
+ 
+ 	if (fsp->op == NULL) {
+ 		return;
+ 	}
++	/* SVT: Under heavy load, the reconnect comes in much later */
+ 	nttime_to_timeval(&disconnect_time, fsp->op->global->disconnect_time);
+-	timeout_usec = 1000 * fsp->op->global->durable_timeout_msec;
++	timeout_usec = svt_hyperv_factor * 1000 * fsp->op->global->durable_timeout_msec;
+ 	until = timeval_add(&disconnect_time,
+ 			    timeout_usec / 1000000,
+ 			    timeout_usec % 1000000);
+@@ -491,13 +493,13 @@ void scavenger_schedule_disconnected(struct files_struct *fsp)
+ 	msg.open_persistent_id = fsp->op->global->open_persistent_id;
+ 	msg.until = timeval_to_nttime(&until);
+ 
+-	DEBUG(10, ("smbd: %s mark file %s as disconnected at %s with timeout "
++	DEBUG(1, ("smbd: %s mark file %s as disconnected at %s with timeout "
+ 		   "at %s in %fs\n",
+ 		   server_id_str_buf(self, &tmp),
+ 		   file_id_string_tos(&fsp->file_id),
+ 		   timeval_string(talloc_tos(), &disconnect_time, true),
+ 		   timeval_string(talloc_tos(), &until, true),
+-		   fsp->op->global->durable_timeout_msec/1000.0));
++		   fsp->op->global->durable_timeout_msec*svt_hyperv_factor/1000.0));
+ 
+ 	SMB_ASSERT(server_id_is_disconnected(&fsp->op->global->server_id));
+ 	SMB_ASSERT(!server_id_equal(&self, &smbd_scavenger_state->parent_id));
+diff --git a/source3/smbd/server.c b/source3/smbd/server.c
+index ae01692..108400b 100644
+--- a/source3/smbd/server.c
++++ b/source3/smbd/server.c
+@@ -116,47 +116,74 @@ extern void start_fssd(struct tevent_context *ev_ctx,
+ extern void start_mdssd(struct tevent_context *ev_ctx,
+ 			struct messaging_context *msg_ctx);
+ 
++/****************************************************************************
++  Send a SIGTERM to our process group.
++*****************************************************************************/
++
++static void  killkids(void)
++{
++	if(am_parent) kill(0,SIGTERM);
++}
++
+ /* svt specific. init of specific tdbs on reload (performed during failover/failback*/
+ static void reinit_svtfs_tdbs_on_reload(struct messaging_context *msg_ctx, struct tevent_context *ev_ctx)
+ {
+ 	NTSTATUS status;
+ 	struct server_id server_id;
++	char * err_string = NULL;
+ 
+        if (!serverid_parent_init(ev_ctx)) {
+-                exit_daemon("Samba cannot reinit server id", EACCES);
++                err_string = "Samba cannot reinit server id";
++                goto exit_with_eaccess;
+         }
+ 
+         server_id = messaging_server_id(msg_ctx);
+         status = smbXsrv_version_global_init(&server_id);
+         if (!NT_STATUS_IS_OK(status)) {
+-                exit_daemon("Samba cannot reinit server context", EACCES);
++                err_string = "Samba cannot reinit server context";
++                goto exit_with_eaccess;
+         }
+ 
+         status = smbXsrv_session_global_init();
+         if (!NT_STATUS_IS_OK(status)) {
+-                exit_daemon("Samba cannot reinit session context", EACCES);
++                err_string = "Samba cannot reinit session context";
++                goto exit_with_eaccess;
+         }
+ 
+         status = smbXsrv_tcon_global_init();
+         if (!NT_STATUS_IS_OK(status)) {
+-                exit_daemon("Samba cannot reinit tcon context", EACCES);
++                err_string = "Samba cannot reinit tcon context";
++                goto exit_with_eaccess;
+         }
+         status = smbXsrv_open_global_init();
+         if (!NT_STATUS_IS_OK(status)) {
+-                exit_daemon("Samba cannot reinit global open", map_errno_from_nt_status(status));
++                err_string = "Samba cannot reinit global open";
++                goto exit_with_status;
+         }
+ 
+         if (!leases_db_init(false)) {
+-                exit_daemon("Samba cannot reinit leases", EACCES);
++                err_string = "Samba cannot reinit leases";
++                goto exit_with_eaccess;
+         }
+ 
+-        if (!locking_init())
+-                exit_daemon("Samba cannot reinit locking", EACCES);
++        if (!locking_init()) {
++                err_string = "Samba cannot reinit locking";
++                goto exit_with_eaccess;
++        }
+ 
+         status = smbXsrv_open_global_scavenger_setup();
+         if (!NT_STATUS_IS_OK(status)) {
+                 DEBUG(0,("reinit_svtfs_tdbs_on_reload: Unable to setup scavenge timer for Persistent Handles.\n"));
+         }
++        return;
++exit_with_eaccess:
++        killkids();
++        exit_daemon(err_string, EACCES);
++        return;
++exit_with_status:
++        killkids();
++        exit_daemon(err_string, map_errno_from_nt_status(status));
++        return;
+ }
+ 
+ /*******************************************************************
+@@ -195,15 +222,6 @@ static void smb_stat_cache_delete(struct messaging_context *msg,
+ 	stat_cache_delete(name);
+ }
+ 
+-/****************************************************************************
+-  Send a SIGTERM to our process group.
+-*****************************************************************************/
+-
+-static void  killkids(void)
+-{
+-	if(am_parent) kill(0,SIGTERM);
+-}
+-
+ static void msg_exit_server(struct messaging_context *msg,
+ 			    void *private_data,
+ 			    uint32_t msg_type,
+diff --git a/source3/smbd/smbXsrv_version.c b/source3/smbd/smbXsrv_version.c
+index a00b71f..04be6c8 100644
+--- a/source3/smbd/smbXsrv_version.c
++++ b/source3/smbd/smbXsrv_version.c
+@@ -103,14 +103,25 @@ NTSTATUS smbXsrv_version_global_init(const struct server_id *server_id)
+ 			break;
+ 		}
+ 
+-		db_ctx = db_open(NULL, global_path,
+-				 0, /* hash_size */
+-				 TDB_DEFAULT |
+-				 TDB_CLEAR_IF_FIRST |
+-				 TDB_INCOMPATIBLE_HASH,
+-				 O_RDWR | O_CREAT, 0600,
+-				 DBWRAP_LOCK_ORDER_1,
+-				 DBWRAP_FLAG_NONE);
++		/* retry open a few times before giving up*/
++		for (i=0; i < 5; i++) {
++			if (i>0) sleep(1);
++			db_ctx = db_open(NULL, global_path,
++					0, /* hash_size */
++					TDB_DEFAULT |
++					TDB_CLEAR_IF_FIRST |
++					TDB_INCOMPATIBLE_HASH,
++					O_RDWR | O_CREAT, 0600,
++					DBWRAP_LOCK_ORDER_1,
++					DBWRAP_FLAG_NONE);
++			if (db_ctx != NULL) {
++				break;
++			}
++			status = map_nt_error_from_unix_common(errno);
++			DEBUG(1,("smbXsrv_version_global_init: "
++				 "failed to open[%s] - %s, retrying..\n",
++				 global_path, nt_errstr(status)));
++		}
+ 		if (db_ctx == NULL) {
+ 			status = map_nt_error_from_unix_common(errno);
+ 			DEBUG(0,("smbXsrv_version_global_init: "
