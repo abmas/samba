@@ -80,3 +80,4 @@
 0080-HYP-6431-Retry-pread-and-pwrite-5-times-before-givin.patch
 0081-HYP-6454-Make-samba-processes-more-resilient-to-hive.patch
 0082-HYP-3653-Don-t-check-for-certain-share-access-confli.patch
+0083-HYP-6143-6487-Allow-reconnects-in-certain-exception-.patch
