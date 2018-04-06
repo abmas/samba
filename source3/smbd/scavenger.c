@@ -476,7 +476,7 @@ void scavenger_schedule_disconnected(struct files_struct *fsp)
 	struct scavenger_message msg;
 	DATA_BLOB msg_blob;
 	struct server_id_buf tmp;
-	int svt_hyperv_factor = 600;
+	uint64_t svt_hyperv_factor = 600;
 
 	if (fsp->op == NULL) {
 		return;
