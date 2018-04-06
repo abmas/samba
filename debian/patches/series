@@ -82,3 +82,4 @@
 0082-HYP-3653-Don-t-check-for-certain-share-access-confli.patch
 0083-HYP-6143-6487-Allow-reconnects-in-certain-exception-.patch
 0084-HYP-6143-Change-svt_hyperv-timeout-to-uint64_t.patch
+0085-HYP-6004-Change-default-max-credits-to-512.patch
