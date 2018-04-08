@@ -134,6 +134,7 @@ void svtfs_set_index_for_ip (const char * ipv4addr)
 	int index;
 	DEBUG(3,("Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
 	index = 0;
+	svtfs_lockdir_index = index;
 	while (svtfs_storage_ip[index] != NULL) {
 		if ( 0 == strcmp(svtfs_storage_ip[index],ipv4addr)) {
 			svtfs_lockdir_index = index;
