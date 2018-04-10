@@ -422,13 +422,15 @@ void scavenger_schedule_persistent_disconnected(struct smbXsrv_open_global0 *glo
 	struct scavenger_message msg;
 	DATA_BLOB msg_blob;
 	struct server_id_buf tmp;
+	/* Give sva some time to catch */
+	uint64_t svt_sva_factor = 5;
 
 	if (global == NULL) {
 		return;
 	}
 	disconnect_time = timeval_current();
 
-	timeout_usec = 1000 * global->durable_timeout_msec;
+	timeout_usec = svt_sva_factor * 1000 * global->durable_timeout_msec;
 	until = timeval_add(&disconnect_time,
 			    timeout_usec / 1000000,
 			    timeout_usec % 1000000);
@@ -438,13 +440,13 @@ void scavenger_schedule_persistent_disconnected(struct smbXsrv_open_global0 *glo
 	msg.open_persistent_id = global->open_persistent_id;
 	msg.until = timeval_to_nttime(&until);
 
-	DEBUG(10, ("smbd: %s mark file %s as disconnected at %s with timeout "
+	DEBUG(1, ("smbd: %s mark file %s as disconnected at %s with timeout "
 		   "at %s in %fs\n",
 		   server_id_str_buf(self, &tmp),
 		   file_id_string_tos(&file_id),
 		   timeval_string(talloc_tos(), &disconnect_time, true),
 		   timeval_string(talloc_tos(), &until, true),
-		   global->durable_timeout_msec/1000.0));
+		   global->durable_timeout_msec*svt_sva_factor/1000.0));
 
 	SMB_ASSERT(server_id_is_disconnected(&global->server_id));
 	SMB_ASSERT(!smbd_scavenger_state->am_scavenger);
@@ -458,7 +460,7 @@ void scavenger_schedule_persistent_disconnected(struct smbXsrv_open_global0 *glo
 				&msg_blob);
 	if (!NT_STATUS_IS_OK(status)) {
 		struct server_id_buf tmp1, tmp2;
-		DEBUG(2, ("Failed to send message to parent smbd %s "
+		DEBUG(1, ("Failed to send message to parent smbd %s "
 			  "from %s: %s\n",
 			  server_id_str_buf(smbd_scavenger_state->parent_id,
 					    &tmp1),
