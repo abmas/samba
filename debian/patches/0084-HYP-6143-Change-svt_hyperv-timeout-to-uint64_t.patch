@@ -1,0 +1,21 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Fri, 6 Apr 2018 14:22:55 -0400
+Subject: HYP-6143: Change svt_hyperv timeout to uint64_t
+
+---
+ source3/smbd/scavenger.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/source3/smbd/scavenger.c b/source3/smbd/scavenger.c
+index a6b3c47..785d687 100644
+--- a/source3/smbd/scavenger.c
++++ b/source3/smbd/scavenger.c
+@@ -476,7 +476,7 @@ void scavenger_schedule_disconnected(struct files_struct *fsp)
+ 	struct scavenger_message msg;
+ 	DATA_BLOB msg_blob;
+ 	struct server_id_buf tmp;
+-	int svt_hyperv_factor = 600;
++	uint64_t svt_hyperv_factor = 600;
+ 
+ 	if (fsp->op == NULL) {
+ 		return;

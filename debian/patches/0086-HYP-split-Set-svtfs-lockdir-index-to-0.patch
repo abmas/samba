@@ -1,0 +1,20 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Sun, 8 Apr 2018 15:20:19 -0400
+Subject: HYP-split: Set svtfs lockdir index to 0
+
+---
+ source3/param/loadparm.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/source3/param/loadparm.c b/source3/param/loadparm.c
+index 13ddc40..3b31606 100644
+--- a/source3/param/loadparm.c
++++ b/source3/param/loadparm.c
+@@ -134,6 +134,7 @@ void svtfs_set_index_for_ip (const char * ipv4addr)
+ 	int index;
+ 	DEBUG(3,("Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
+ 	index = 0;
++	svtfs_lockdir_index = index;
+ 	while (svtfs_storage_ip[index] != NULL) {
+ 		if ( 0 == strcmp(svtfs_storage_ip[index],ipv4addr)) {
+ 			svtfs_lockdir_index = index;

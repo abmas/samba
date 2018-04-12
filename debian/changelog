@@ -1,3 +1,13 @@
+samba (2:4.4.5+dfsg-2+svt21) trusty; urgency=medium
+
+  [ Ashok Ramakrishnan ]
+  * Patch for HYP-6143
+  * Patch for HYP-6004 setting default max credits.
+  * patch for resetting svtfs_lockdir_index to 0 for new connections.
+  * Additional patches for HYP-6004
+
+ -- Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>  Thu, 12 Apr 2018 10:07:51 -0400
+
 samba (2:4.4.5+dfsg-2+svt20) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
