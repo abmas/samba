@@ -1,0 +1,140 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Wed, 25 Apr 2018 14:56:40 -0400
+Subject: HYP-6004: Use a cached copy of smbXsrv_open_global.tdb file for
+ scavenger setup.
+
+---
+ source3/smbd/smbXsrv_open.c | 91 ++++++++++++++++++++++++++-------------------
+ 1 file changed, 52 insertions(+), 39 deletions(-)
+
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index a9f459b..686d775 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -257,10 +257,31 @@ struct file_id smbXsrv_get_persistent_file_id_map(uint64_t  persistent_id)
+         return EmptyFileId;
+ }
+ 
++static bool file_copy (const char * source, const char * dest)
++{
++	int in_fd = open(source, O_RDONLY);
++	int out_fd = open(dest, O_WRONLY|O_CREAT|O_TRUNC, 0600);
++	char buf[8192];
++	if ( in_fd < 0 || out_fd < 0) goto fail;
++
++	while (1) {
++    		ssize_t result = read(in_fd, &buf[0], sizeof(buf));
++    		if (!result) break;
++    		if (result <= 0) goto fail;
++    		if (write(out_fd, &buf[0], result) != result) goto fail;
++	}
++	return true;
++fail:
++	if (in_fd > 0) close(in_fd);
++	if (out_fd > 0) close(out_fd);
++	return false;
++}
++
+ 
+ NTSTATUS smbXsrv_open_global_scavenger_setup(void)
+ {
+-	char *global_path = NULL;
++        char *global_path = NULL;
++        const char *tmp_path="/etc/samba/smbxsrv_open_global.tdb";
+ 	struct db_context *db_ctx = NULL;
+ 	NTSTATUS status = NT_STATUS_OK;
+ 	int index,saved_index;
+@@ -284,28 +305,41 @@ NTSTATUS smbXsrv_open_global_scavenger_setup(void)
+ 			break;
+ 		}
+ 
+-		db_ctx = db_open(NULL, global_path,
+-				 0, /* hash_size */
+-				 TDB_DEFAULT | TDB_TRIM_SIZE |
+-				 TDB_INCOMPATIBLE_HASH,
+-				 O_RDWR | O_CREAT, 0600,
+-				 DBWRAP_LOCK_ORDER_1,
+-				 DBWRAP_FLAG_NONE);
+-		TALLOC_FREE(global_path);
+-		if (db_ctx == NULL) {
+-			DEBUG(1, ("Null context on open_global\n"));
+-			status = map_nt_error_from_unix_common(errno);
+-			scavenge_setup[index] = false;
+-			break;
+-		}
++                /* Delete any old file */
++                unlink(tmp_path);
++                /* Copy the file to work with */
++                if (true != file_copy(global_path, tmp_path)) {
++                        DEBUG(1, ("Unable to copy %s to %s for initialization.\n",global_path,tmp_path));
++                        goto nextIndex;
++                }
+ 
+-		set_smbXsrv_open_global_db_ctx(db_ctx);
+-		status = dbwrap_traverse(get_smbXsrv_open_global_db_ctx(),
++                db_ctx = db_open(NULL, tmp_path,
++                                0, /* hash_size */
++                                TDB_DEFAULT | TDB_TRIM_SIZE |
++                                TDB_INCOMPATIBLE_HASH,
++                                O_RDWR | O_CREAT, 0600,
++                                DBWRAP_LOCK_ORDER_1,
++                                DBWRAP_FLAG_NONE);
++                if (db_ctx == NULL) {
++                        DEBUG(1, ("Null context on open_global\n"));
++                        status = map_nt_error_from_unix_common(errno);
++                        scavenge_setup[index] = false;
++                        goto nextIndex;
++                }
++		status = dbwrap_traverse(db_ctx,
+ 					 smbXsrv_open_global_traverse_scavenger_fn,
+ 					 NULL, NULL);
+ 
+-		scavenge_setup[index] = false;
++                closedb(db_ctx);
++                TALLOC_FREE(db_ctx);
++
+ nextIndex:
++                if (global_path != NULL) {
++                        TALLOC_FREE(global_path);
++                        global_path = NULL;
++                }
++
++		scavenge_setup[index] = false;
+ 		index++;
+ 		if ( ( svtfs_storage_ip[index] == NULL) || ( index >= MAX_OPEN_GLOBAL_DB_CONTEXTS ) )  {
+ 			DEBUG(5, ("smbXsrv_open_global_scavenger_setup: breaking with lockdir_index of %i\n", index));
+@@ -323,26 +357,6 @@ nextIndex:
+ 	return status;
+ }
+ 
+-static bool file_copy (const char * source, const char * dest)
+-{
+-	int in_fd = open(source, O_RDONLY);
+-	int out_fd = open(dest, O_WRONLY|O_CREAT|O_TRUNC, 0600);
+-	char buf[8192];
+-	if ( in_fd < 0 || out_fd < 0) goto fail;
+-
+-	while (1) {
+-    		ssize_t result = read(in_fd, &buf[0], sizeof(buf));
+-    		if (!result) break;
+-    		if (result <= 0) goto fail;
+-    		if (write(out_fd, &buf[0], result) != result) goto fail;
+-	}
+-	return true;
+-fail:
+-	if (in_fd > 0) close(in_fd);
+-	if (out_fd > 0) close(out_fd);
+-	return false;
+-}
+-
+ NTSTATUS smbXsrv_open_global_init(void)
+ {
+         char *global_path = NULL;
+@@ -404,7 +418,6 @@ NTSTATUS smbXsrv_open_global_init(void)
+                 if (db_ctx == NULL) {
+                         DEBUG(1, ("Null context on open_global\n"));
+                         status = map_nt_error_from_unix_common(errno);
+-                        rename(tmp_path, global_path);
+                         break;
+                 }
+ 

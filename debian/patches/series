@@ -85,3 +85,4 @@
 0085-HYP-6004-Change-default-max-credits-to-512.patch
 0086-HYP-split-Set-svtfs-lockdir-index-to-0.patch
 0087-HYP-6004-When-SVA-is-slow-to-start-we-need-extra-tim.patch
+0088-HYP-6004-Use-a-cached-copy-of-smbXsrv_open_global.td.patch
