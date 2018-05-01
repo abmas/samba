@@ -767,6 +767,9 @@ bool share_mode_stale_pid(struct share_mode_data *d, uint32_t idx)
 		   server_id_str_buf(e->pid, &tmp), idx,
 		   (unsigned)d->num_share_modes));
 
+/* SVT: With Persistent handle support, the startup code takes care of cleaning up*/
+/* stale share mode entries */
+#if 0
 	e->stale = true;
 
 	if (d->num_delete_tokens != 0) {
@@ -797,6 +800,7 @@ bool share_mode_stale_pid(struct share_mode_data *d, uint32_t idx)
 	remove_share_mode_lease(d, e);
 
 	d->modified = true;
+#endif
 	return true;
 }
 
