@@ -1,0 +1,30 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Tue, 1 May 2018 12:29:47 -0400
+Subject: HYP-6143: Let startup code do the stale share mode entru cleanup.
+
+---
+ source3/locking/locking.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/source3/locking/locking.c b/source3/locking/locking.c
+index 356b010..78c1e14 100644
+--- a/source3/locking/locking.c
++++ b/source3/locking/locking.c
+@@ -767,6 +767,9 @@ bool share_mode_stale_pid(struct share_mode_data *d, uint32_t idx)
+ 		   server_id_str_buf(e->pid, &tmp), idx,
+ 		   (unsigned)d->num_share_modes));
+ 
++/* SVT: With Persistent handle support, the startup code takes care of cleaning up*/
++/* stale share mode entries */
++#if 0
+ 	e->stale = true;
+ 
+ 	if (d->num_delete_tokens != 0) {
+@@ -797,6 +800,7 @@ bool share_mode_stale_pid(struct share_mode_data *d, uint32_t idx)
+ 	remove_share_mode_lease(d, e);
+ 
+ 	d->modified = true;
++#endif
+ 	return true;
+ }
+ 

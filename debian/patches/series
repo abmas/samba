@@ -86,3 +86,4 @@
 0086-HYP-split-Set-svtfs-lockdir-index-to-0.patch
 0087-HYP-6004-When-SVA-is-slow-to-start-we-need-extra-tim.patch
 0088-HYP-6004-Use-a-cached-copy-of-smbXsrv_open_global.td.patch
+0089-HYP-6143-Let-startup-code-do-the-stale-share-mode-en.patch
