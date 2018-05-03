@@ -424,6 +424,22 @@ NTSTATUS smbXsrv_open_global_init(void)
                 status = dbwrap_traverse(db_ctx,
                                 smbXsrv_open_global_traverse_persist_fn,
                                 NULL, NULL);
+                if ( !NT_STATUS_IS_OK(status) ) {
+                     DEBUG(1, ("Error traversing %s, clearing it...\n",tmp_path));
+                     closedb(db_ctx);
+                     TALLOC_FREE(db_ctx);
+                     db_ctx = db_open(NULL, tmp_path,
+                                     0, /* hash_size */
+                                     TDB_DEFAULT | TDB_TRIM_SIZE | TDB_CLEAR_IF_FIRST |
+                                     TDB_INCOMPATIBLE_HASH, O_RDWR | O_CREAT, 0600,
+                                     DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
+                     if (db_ctx == NULL) {
+                            DEBUG(1, ("Null context on open_global\n"));
+                            status = map_nt_error_from_unix_common(errno);
+                            break;
+                     }
+                     status = NT_STATUS_OK;
+                }
 		closedb(db_ctx);
                 TALLOC_FREE(db_ctx);
 

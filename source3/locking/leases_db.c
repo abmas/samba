@@ -206,14 +206,14 @@ bool leases_db_init(bool read_only)
 					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
 					DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
 				if (!get_leases_db()) {
-		            TALLOC_FREE(db_path);
+					TALLOC_FREE(db_path);
 					DEBUG(0,("ERROR: Failed to initialise lease database\n"));
 					return_bool = False;
 					break;
 				}
 			}
 		}
-        TALLOC_FREE(db_path);
+		TALLOC_FREE(db_path);
 
 nextIndex:
 		index++;
