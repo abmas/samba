@@ -1069,6 +1069,8 @@ static void smb2srv_session_close_previous_check(struct tevent_req *req)
 	struct tevent_req *subreq = NULL;
 	NTSTATUS status;
 	bool is_free = false;
+	int index;
+	int MAX_PROCESS_STOP_TIMEOUT = 6;
 
 	smbXsrv_session_global_verify_record(state->db_rec,
 					     &is_free,
@@ -1135,6 +1137,37 @@ static void smb2srv_session_close_previous_check(struct tevent_req *req)
 	TALLOC_FREE(state->db_rec);
 	if (tevent_req_nterror(req, status)) {
 		return;
+	}
+
+	/*
+	 * Keep checking to see if the old process has gone away.  If it's
+	 * still there after a maximum number of iterations, then try the
+	 * brute force SIGKILL.  In either case, log whether or not the
+	 * old process has been removed.
+	*/
+
+	if (global->channels[0].server_id.pid != getpid()) {
+		for (index = 0; index < MAX_PROCESS_STOP_TIMEOUT; index++) {
+			if (!serverid_exists(&(global->channels[0].server_id))) {
+				break;
+			}
+
+			if (index == (MAX_PROCESS_STOP_TIMEOUT - 1)) {
+				kill(global->channels[0].server_id.pid, SIGKILL);
+			}
+
+			sleep(1);
+		}
+
+		if (!serverid_exists(&(global->channels[0].server_id))) {
+			DEBUG(1,("smb2srv_session_close_previous_check: "
+				"previous smbd process with PID %i successfully stopped\n",
+				(int) global->channels[0].server_id.pid));
+		} else {
+			DEBUG(1,("smb2srv_session_close_previous_check: "
+				"previous smbd process with PID %i NOT successfully stopped; continuing...\n",
+				(int) global->channels[0].server_id.pid));
+		}
 	}
 
 	TALLOC_FREE(global);

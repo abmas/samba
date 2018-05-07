@@ -36,6 +36,39 @@
 #include "lib/param/loadparm.h"
 #include "../lib/tsocket/tsocket.h"
 
+struct smbd_open_socket;
+struct smbd_child_pid;
+
+struct smbd_parent_context {
+        bool interactive;
+
+        struct tevent_context *ev_ctx;
+        struct messaging_context *msg_ctx;
+
+        /* the list of listening sockets */
+        struct smbd_open_socket *sockets;
+
+        /* the list of current child processes */
+        struct smbd_child_pid *children;
+        size_t num_children;
+
+        struct server_id cleanupd;
+
+        struct tevent_timer *cleanup_te;
+};
+
+struct smbd_open_socket {
+        struct smbd_open_socket *prev, *next;
+        struct smbd_parent_context *parent;
+        int fd;
+        struct tevent_fd *fde;
+};
+
+struct smbd_child_pid {
+        struct smbd_child_pid *prev, *next;
+        pid_t pid;
+};
+
 /*
  * The persistent pcap cache is populated by the background print process. Per
  * client smbds should only reload their printer share inventories if this
@@ -186,11 +219,17 @@ extern struct db_context * brlock_db[], * leases_db[], * lock_db[], * smbXsrv_cl
 extern char * svtfs_storage_ip[];
 extern char * svtfs_lockdir_path[];
 
-void closedbs_not_owned(struct smbd_server_connection * sconn)
+void close_socket(char *storage_ip_address, struct smbd_parent_context *parent);
+
+void closedbs_not_owned(struct smbd_server_connection * sconn,
+                        struct smbd_parent_context * parent)
 {
         int indexArray[MAX_LOCKDIRS], i, j;
         char * storip = NULL;
+
+        DEBUG(1, ("closedbs_not_owned: entering\n"));
         if (sconn) {
+                DEBUG(1, ("closedbs_not_owned: we have an sconn\n"));
                 if (tsocket_address_is_inet(sconn->local_address, "ip")) {
                         storip = tsocket_address_inet_addr_string( sconn->local_address, talloc_tos());
                         DEBUG(1, ("closedbs_not_owned: storage_ip for this connection = %s\n", storip));
@@ -203,10 +242,13 @@ void closedbs_not_owned(struct smbd_server_connection * sconn)
         {
                 j = indexArray[i];
                 if (j == -1) continue;
+                DEBUG(1, ("closedbs_not_owned: in loop, working on index %s\n", svtfs_storage_ip[j]));
                 if (storip) {
                         DEBUG(1, ("closedbs_not_owned: storage_ip for this connection = %s, storeip for index = %s\n", storip,svtfs_storage_ip[j]));
                         /*exit_server_cleanly("svtfs: Exiting because the storage IP is gone!");*/
-                        if (strcmp(svtfs_storage_ip[j],storip) == 0) exit(0);
+                        if (strcmp(svtfs_storage_ip[j],storip) == 0) {
+                             exit(0);
+                        }
                 }
                 closedb_for_index (brlock_db, j);
                 closedb_for_index (leases_db, j);
@@ -220,6 +262,66 @@ void closedbs_not_owned(struct smbd_server_connection * sconn)
                         talloc_free(svtfs_lockdir_path[j]);
                         svtfs_lockdir_path[j]=NULL;
                 }
-                if (svtfs_storage_ip[j] != NULL) {talloc_free(svtfs_storage_ip[j]); svtfs_storage_ip[j]=NULL;}
+                if (svtfs_storage_ip[j] != NULL) {
+                        DEBUG(1, ("closedbs_not_owned: in loop, removing %s\n", svtfs_storage_ip[j]));
+                        if (parent) {
+                              DEBUG(1, ("closedbs_not_owned: in loop, closing socket %s\n", svtfs_storage_ip[j]));
+                              close_socket(svtfs_storage_ip[j], parent);
+                        }
+                        talloc_free(svtfs_storage_ip[j]);
+                        svtfs_storage_ip[j]=NULL;
+                }
         }
 }
+
+void close_socket(char *storage_ip_address, struct smbd_parent_context *parent)
+{
+        struct tsocket_address *local_address = NULL;
+        struct sockaddr_storage ss_srv;
+        void *sp_srv = (void *)&ss_srv;
+        struct sockaddr *sa_srv = (struct sockaddr *)sp_srv;
+        struct smbd_open_socket *socket, *next_socket;
+        socklen_t sa_socklen = sizeof(ss_srv);
+        int ret;
+
+        /*
+         *  Find the socket associated with this storage IP address
+         */
+        DEBUG(1, ("close_socket: closing socket %s\n", storage_ip_address));
+        socket = parent->sockets;
+
+        while ( socket != NULL ) {
+
+                next_socket = socket->next;
+
+                ret = getsockname(socket->fd, sa_srv, &sa_socklen);
+                if (ret != 0) {
+                        int saved_errno = errno;
+                        int level = (errno == ENOTCONN)?2:0;
+                        DEBUG(level,("getsockname() failed - %s\n",
+                              strerror(saved_errno)));
+                        return;
+                }
+                ret = tsocket_address_bsd_from_sockaddr(parent,
+                                                sa_srv, sa_socklen,
+                                                &local_address);
+                if (ret != 0) {
+                        int saved_errno = errno;
+                        DEBUG(0,("%s: tsocket_address_bsd_from_sockaddr remote failed - %s\n",
+                                __location__, strerror(saved_errno)));
+                        return;
+                }
+
+                DEBUG(1, ("close_socket: compare to %s\n", tsocket_address_string(local_address, talloc_tos())));
+                if ( strcmp(storage_ip_address, tsocket_address_inet_addr_string(local_address, talloc_tos())) == 0 ) {
+                        DEBUG(1, ("close_socket: closing fd for address %s\n", storage_ip_address));
+                        talloc_free(socket->fde);
+                        DLIST_REMOVE(parent->sockets, socket);
+                        close(socket->fd);
+                        talloc_free(socket);
+                }
+
+                socket = next_socket;
+        }
+}
+

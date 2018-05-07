@@ -990,7 +990,8 @@ void smbd_setup_sig_term_handler(struct smbd_server_connection *sconn)
 	}
 }
 
-extern void closedbs_not_owned(struct smbd_server_connection *);
+extern void closedbs_not_owned(struct smbd_server_connection *,
+				  struct smbd_parent_context *);
 
 static void smbd_sig_hup_handler(struct tevent_context *ev,
 				  struct tevent_signal *se,
@@ -1007,7 +1008,7 @@ static void smbd_sig_hup_handler(struct tevent_context *ev,
 	DEBUG(1,("Reloading services after SIGHUP\n"));
 
 	reload_services(sconn, conn_snum_used, false);
-	closedbs_not_owned(sconn);
+	closedbs_not_owned(sconn, NULL);
 }
 
 void smbd_setup_sig_hup_handler(struct smbd_server_connection *sconn)

@@ -34,6 +34,7 @@
 #include "libcli/auth/schannel.h"
 #include "secrets.h"
 #include "../lib/util/memcache.h"
+#include "../lib/tsocket/tsocket.h"
 #include "ctdbd_conn.h"
 #include "util_cluster.h"
 #include "printing/queue_process.h"
@@ -1276,6 +1277,7 @@ static void smbd_parent_sig_hup_handler(struct tevent_context *ev,
 		talloc_get_type_abort(private_data,
 		struct smbd_parent_context);
         int no_svtfs = 0, yes_svtfs = 0;
+        struct smbd_open_socket *socket, *next_socket;
 
 	DEBUG(3,("smbd_parent_sighup_handler: Got message saying smb.conf was "
 		  "updated. Reloading. svtfs index = %d\n", svtfs_get_lockdir_index()));
@@ -1289,7 +1291,8 @@ static void smbd_parent_sig_hup_handler(struct tevent_context *ev,
 
 	DEBUG(1,("parent: Reloading services after SIGHUP\n"));
 	reload_services(NULL, NULL, false);
-        closedbs_not_owned(NULL);
+        closedbs_not_owned(NULL, parent);
+
         if (svtfs_lockdir_path[svtfs_get_lockdir_index()] != NULL && strstr(svtfs_lockdir_path[svtfs_get_lockdir_index()],"svtfs"))
         {
                /* new lockdir path within svtfs specified */
