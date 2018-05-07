@@ -1,0 +1,58 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 3 May 2018 14:11:14 -0400
+Subject: HYP-6437: If there are errors traversing open global tdb,
+ just clear it and move on.
+
+---
+ source3/locking/leases_db.c |  4 ++--
+ source3/smbd/smbXsrv_open.c | 16 ++++++++++++++++
+ 2 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/source3/locking/leases_db.c b/source3/locking/leases_db.c
+index f0898c4..43b09ad 100644
+--- a/source3/locking/leases_db.c
++++ b/source3/locking/leases_db.c
+@@ -206,14 +206,14 @@ bool leases_db_init(bool read_only)
+ 					read_only?O_RDONLY:O_RDWR|O_CREAT, 0644,
+ 					DBWRAP_LOCK_ORDER_2, DBWRAP_FLAG_NONE));
+ 				if (!get_leases_db()) {
+-		            TALLOC_FREE(db_path);
++					TALLOC_FREE(db_path);
+ 					DEBUG(0,("ERROR: Failed to initialise lease database\n"));
+ 					return_bool = False;
+ 					break;
+ 				}
+ 			}
+ 		}
+-        TALLOC_FREE(db_path);
++		TALLOC_FREE(db_path);
+ 
+ nextIndex:
+ 		index++;
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index 686d775..6cc4ba1 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -424,6 +424,22 @@ NTSTATUS smbXsrv_open_global_init(void)
+                 status = dbwrap_traverse(db_ctx,
+                                 smbXsrv_open_global_traverse_persist_fn,
+                                 NULL, NULL);
++                if ( !NT_STATUS_IS_OK(status) ) {
++                     DEBUG(1, ("Error traversing %s, clearing it...\n",tmp_path));
++                     closedb(db_ctx);
++                     TALLOC_FREE(db_ctx);
++                     db_ctx = db_open(NULL, tmp_path,
++                                     0, /* hash_size */
++                                     TDB_DEFAULT | TDB_TRIM_SIZE | TDB_CLEAR_IF_FIRST |
++                                     TDB_INCOMPATIBLE_HASH, O_RDWR | O_CREAT, 0600,
++                                     DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
++                     if (db_ctx == NULL) {
++                            DEBUG(1, ("Null context on open_global\n"));
++                            status = map_nt_error_from_unix_common(errno);
++                            break;
++                     }
++                     status = NT_STATUS_OK;
++                }
+ 		closedb(db_ctx);
+                 TALLOC_FREE(db_ctx);
+ 
