@@ -317,11 +317,11 @@ static void set_sec_ctx_internal(uid_t uid, gid_t gid,
 
 	/* Set the security context */
 
-	DEBUG(4, ("setting sec ctx (%u, %u) - sec_ctx_stack_ndx = %d\n", 
+	DEBUG(10, ("setting sec ctx (%u, %u) - sec_ctx_stack_ndx = %d\n", 
 		(unsigned int)uid, (unsigned int)gid, sec_ctx_stack_ndx));
 
-	security_token_debug(DBGC_CLASS, 5, token);
-	debug_unix_user_token(DBGC_CLASS, 5, uid, gid, ngroups, groups);
+	security_token_debug(DBGC_CLASS, 10, token);
+	debug_unix_user_token(DBGC_CLASS, 10, uid, gid, ngroups, groups);
 
 	/* Change uid, gid and supplementary group list. */
 	set_unix_security_ctx(uid, gid, ngroups, groups);

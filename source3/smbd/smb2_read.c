@@ -405,7 +405,7 @@ NTSTATUS smb2_read_complete(struct tevent_req *req, ssize_t nread, int err)
 		return NT_STATUS_END_OF_FILE;
 	}
 
-	DEBUG(3,("smbd_smb2_read: %s, file %s, length=%lu offset=%lu read=%lu\n",
+	DEBUG(10,("smbd_smb2_read: %s, file %s, length=%lu offset=%lu read=%lu\n",
 		fsp_fnum_dbg(fsp),
 		fsp_str_dbg(fsp),
 		(unsigned long)state->in_length,

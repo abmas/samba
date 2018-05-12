@@ -203,7 +203,7 @@ static NTSTATUS smb2_write_complete_internal(struct tevent_req *req,
 		return status;
 	}
 
-	DEBUG(3,("smb2: %s, file %s, "
+	DEBUG(10,("smb2: %s, file %s, "
 		"length=%lu offset=%lu wrote=%lu\n",
 		fsp_fnum_dbg(fsp),
 		fsp_str_dbg(fsp),

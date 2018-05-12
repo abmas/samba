@@ -1042,7 +1042,7 @@ static void smbXsrv_open_global_verify_record(struct db_record *db_rec,
 
 	val = dbwrap_record_get_value(db_rec);
 	if (val.dsize == 0) {
-		DEBUG(10, ("%s: empty value\n", __func__));
+		DEBUG(5, ("%s: empty value\n", __func__));
 		TALLOC_FREE(frame);
 		*is_free = true;
 		if (was_free) {
@@ -1065,8 +1065,8 @@ static void smbXsrv_open_global_verify_record(struct db_record *db_rec,
 		return;
 	}
 
-	DEBUG(10,("smbXsrv_open_global_verify_record\n"));
-	if (CHECK_DEBUGLVL(10)) {
+	DEBUG(5,("smbXsrv_open_global_verify_record\n"));
+	if (CHECK_DEBUGLVL(5)) {
 		NDR_PRINT_DEBUG(smbXsrv_open_globalB, &global_blob);
 	}
 
@@ -1204,7 +1204,7 @@ static NTSTATUS smbXsrv_open_global_lookup(struct smbXsrv_open_table *table,
 					  mem_ctx,
 					  _global);
 	if (is_free) {
-		DEBUG(10, ("%s: is_free=true\n", __func__));
+		DEBUG(5, ("%s: is_free=true\n", __func__));
 		talloc_free(global_rec);
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
@@ -1866,18 +1866,18 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 	struct security_token *current_token = NULL;
 
 	if (session_info == NULL) {
-		DEBUG(10, ("session_info=NULL\n"));
+		DEBUG(5, ("session_info=NULL\n"));
 		return NT_STATUS_INVALID_HANDLE;
 	}
 	current_token = session_info->security_token;
 
 	if (current_token == NULL) {
-		DEBUG(10, ("current_token=NULL\n"));
+		DEBUG(5, ("current_token=NULL\n"));
 		return NT_STATUS_INVALID_HANDLE;
 	}
 
 	if (global_zeros != 0) {
-		DEBUG(10, ("global_zeros!=0\n"));
+		DEBUG(5, ("global_zeros!=0\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
@@ -1890,7 +1890,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 	status = smbXsrv_open_global_lookup(table, global_id, op, &op->global);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(op);
-		DEBUG(10, ("smbXsrv_open_global_lookup returned %s\n",
+		DEBUG(5, ("smbXsrv_open_global_lookup returned %s\n",
 			   nt_errstr(status)));
 		return status;
 	}
@@ -1905,21 +1905,25 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 	    !GUID_equal(&op->global->create_guid, create_guid))
 	{
 		TALLOC_FREE(op);
+		DEBUG(5, ("op->global->create_guid != create_guid\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
 	if (!security_token_is_sid(current_token, &op->global->open_owner)) {
 		TALLOC_FREE(op);
+		DEBUG(5, ("current_token and op->global->open_owner are different\n"));
 		return NT_STATUS_ACCESS_DENIED;
 	}
 
         if (!((op->global->durable) || (op->global->resilient) || (op->global->persistent))) {
 		TALLOC_FREE(op);
+		DEBUG(5, ("op does not have durable/resilient/persistent\n"));
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
 	if (table->local.num_opens >= table->local.max_opens) {
 		TALLOC_FREE(op);
+		DEBUG(5, ("table->local.num_opens >= table->local.max_opens\n"));
 		return NT_STATUS_INSUFFICIENT_RESOURCES;
 	}
 
@@ -1931,6 +1935,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 						&op->local_id);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(op);
+		DEBUG(5, ("Unable to smbXsrv_open_local_allocate_id\n"));
 		return status;
 	}
 
@@ -1946,6 +1951,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 	TALLOC_FREE(local_rec);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(op);
+		DEBUG(5, ("dbwrap_record_store failed\n"));
 		return status;
 	}
 	table->local.num_opens += 1;
@@ -1955,17 +1961,18 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
 	status = smbXsrv_open_global_store(op->global);
 	if (!NT_STATUS_IS_OK(status)) {
 		TALLOC_FREE(op);
+		DEBUG(5, ("smbXsrv_open_global_store failed\n"));
 		return status;
 	}
 
-	if (CHECK_DEBUGLVL(10)) {
+	if (CHECK_DEBUGLVL(5)) {
 		struct smbXsrv_openB open_blob;
 
 		ZERO_STRUCT(open_blob);
 		open_blob.version = 0;
 		open_blob.info.info0 = op;
 
-		DEBUG(10,("smbXsrv_open_recreate: global_id (0x%08x) stored\n",
+		DEBUG(5,("smbXsrv_open_recreate: global_id (0x%08x) stored\n",
 			 op->global->open_global_id));
 		NDR_PRINT_DEBUG(smbXsrv_openB, &open_blob);
 	}

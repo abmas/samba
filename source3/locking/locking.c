@@ -127,14 +127,14 @@ bool strict_lock_default(files_struct *fsp, struct lock_struct *plock)
         if ((lease_type & SMB2_LEASE_READ) &&
             (plock->lock_type == READ_LOCK))
         {
-            DEBUG(5,("optimisation - read oplock/lease on file %s\n",
+            DEBUG(10,("optimisation - read oplock/lease on file %s\n",
             fsp_str_dbg(fsp)));
             return true;
         }
         if ((lease_type & SMB2_LEASE_WRITE) &&
             (plock->lock_type == WRITE_LOCK))
         {
-            DEBUG(5,("optimisation - write oplock/lease on file %s\n",
+            DEBUG(10,("optimisation - write oplock/lease on file %s\n",
             fsp_str_dbg(fsp)));
             return true;
         }

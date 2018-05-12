@@ -526,7 +526,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 		}
 		state->smb1req = smb1req;
 		smb2req->subreq = req;
-		DEBUG(10,("smbd_smb2_create: name[%s]\n",
+		DEBUG(5,("smbd_smb2_create: name[%s]\n",
 			in_name));
 	} else {
 		/* Re-entrant create call. */
@@ -535,7 +535,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 				struct smbd_smb2_create_state);
 		smb1req = state->smb1req;
 		TALLOC_FREE(state->out_context_blobs);
-		DEBUG(10,("smbd_smb2_create_send: reentrant for file %s\n",
+		DEBUG(5,("smbd_smb2_create_send: reentrant for file %s\n",
 			in_name ));
 	}
 
@@ -629,6 +629,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 
 		if (in_context_blobs.num_blobs != num_blobs_allowed) {
 			tevent_req_nterror(req, NT_STATUS_OBJECT_NAME_NOT_FOUND);
+			DEBUG(5,("smbd_smb2_create_send: in_context_blobs.num_blobs != num_blobs_allowed for file %s\n", in_name ));
 			return tevent_req_post(req, ev);
 		}
 	}

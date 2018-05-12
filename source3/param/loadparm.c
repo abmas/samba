@@ -120,25 +120,25 @@ extern volatile int svtfs_lockdir_index;
 void svtfs_set_lockdir_index (int index)
 {
 	svtfs_lockdir_index = index;
-	DEBUG(3,("svtfs_set_lockdir_index: setting lockdir index to %d\n",svtfs_lockdir_index));
+	DEBUG(10,("svtfs_set_lockdir_index: setting lockdir index to %d\n",svtfs_lockdir_index));
 }
 
 int svtfs_get_lockdir_index (void)
 {
-	DEBUG(3,("svtfs_get_lockdir_index: returning lockdir index of %d\n",svtfs_lockdir_index));
+	DEBUG(10,("svtfs_get_lockdir_index: returning lockdir index of %d\n",svtfs_lockdir_index));
 	return svtfs_lockdir_index;
 }
 
 void svtfs_set_index_for_ip (const char * ipv4addr)
 {
 	int index;
-	DEBUG(3,("Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
+	DEBUG(10,("Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
 	index = 0;
 	svtfs_lockdir_index = index;
 	while (svtfs_storage_ip[index] != NULL) {
 		if ( 0 == strcmp(svtfs_storage_ip[index],ipv4addr)) {
 			svtfs_lockdir_index = index;
-			DEBUG(3,("svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
+			DEBUG(10,("svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
 			return;
 		}
 		index++;

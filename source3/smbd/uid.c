@@ -356,7 +356,7 @@ static bool change_to_user_internal(connection_struct *conn,
 	current_user.conn = conn;
 	current_user.vuid = vuid;
 
-	DEBUG(5, ("Impersonated user: uid=(%d,%d), gid=(%d,%d)\n",
+	DEBUG(6, ("Impersonated user: uid=(%d,%d), gid=(%d,%d)\n",
 		 (int)getuid(),
 		 (int)geteuid(),
 		 (int)getgid(),
@@ -380,7 +380,7 @@ bool change_to_user(connection_struct *conn, uint64_t vuid)
 	if ((current_user.conn == conn) &&
 		   (vuser != NULL) && (current_user.vuid == vuid) &&
 		   (current_user.ut.uid == vuser->session_info->unix_token->uid)) {
-		DEBUG(4,("Skipping user change - already "
+		DEBUG(10,("Skipping user change - already "
 			 "user\n"));
 		return(True);
 	}
