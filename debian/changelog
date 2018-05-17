@@ -1,3 +1,10 @@
+samba (2:4.4.5+dfsg-2+svt24) trusty; urgency=medium
+
+  [ Paul Cerqua ]
+  * Patch for HYP-6469
+
+ -- Paul Cerqua <pcerqua@dvm6>  Thu, 17 May 2018 10:23:47 -0400
+
 samba (2:4.4.5+dfsg-2+svt23) trusty; urgency=medium
 
   [ Ashok Ramakrishnan ]
