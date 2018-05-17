@@ -2101,10 +2101,10 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 
 	val = dbwrap_record_get_value(rec);
 	if (val.dsize == 0) {
-		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
-			  "empty record in %s, skipping...\n",
+		DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
+			  "empty record in %s, deleting...\n",
 			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx())));
-		goto done;
+		goto delete_record;
 	}
 
 	status = smbXsrv_open_global_parse_record(talloc_tos(), rec, &op);
@@ -2112,7 +2112,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
 			  "failed to read record: %s\n",
 			  global_id, nt_errstr(status)));
-		goto done;
+		goto delete_record;
 	}
 
 	if (server_id_is_disconnected(&op->server_id)) {
@@ -2123,7 +2123,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 		tdiff = usec_time_diff(&now, &disconnect_time);
 		delete_open = (tdiff >= 1000*op->durable_timeout_msec);
 
-		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
+		DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
 			   "disconnected at [%s] %us ago with "
 			   "timeout of %us -%s reached\n",
 			   global_id,
@@ -2133,7 +2133,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 			   delete_open ? "" : " not"));
 	} else if (!serverid_exists(&op->server_id)) {
 		struct server_id_buf idbuf;
-		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
+		DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
 			   "server[%s] does not exist\n",
 			   global_id,
 			   server_id_str_buf(op->server_id, &idbuf)));
@@ -2144,6 +2144,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 		goto done;
 	}
 
+delete_record:
 	status = dbwrap_record_delete(rec);
 	if (!NT_STATUS_IS_OK(status)) {
 		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
@@ -2154,7 +2155,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
 		goto done;
 	}
 
-	DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
+	DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
 		   "delete record from %s\n",
 		   global_id,
 		   dbwrap_name(get_smbXsrv_open_global_db_ctx())));

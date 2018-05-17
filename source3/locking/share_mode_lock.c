@@ -945,7 +945,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 	unsigned n;
 	struct share_mode_data *data;
 	struct share_mode_lock *lck;
-	bool ok;
+	bool ok, donot_cleanup = false;
 
 	lck = get_existing_share_mode_lock(frame, fid);
 	if (lck == NULL) {
@@ -959,23 +959,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 	for (n=0; n < data->num_share_modes; n++) {
 		struct share_mode_entry *entry = &data->share_modes[n];
 
-		if (!server_id_is_disconnected(&entry->pid)) {
-			struct server_id_buf tmp;
-			DEBUG(5, ("share_mode_cleanup_disconnected: "
-				  "file (file-id='%s', servicepath='%s', "
-				  "base_name='%s%s%s') "
-				  "is used by server %s ==> do not cleanup\n",
-				  file_id_string(frame, &fid),
-				  data->servicepath,
-				  data->base_name,
-				  (data->stream_name == NULL)
-				  ? "" : "', stream_name='",
-				  (data->stream_name == NULL)
-				  ? "" : data->stream_name,
-				  server_id_str_buf(entry->pid, &tmp)));
-			/* Cannot cleanup share mode lock as a valid entry exists. */
-			goto done;
-		}
+		if (entry->stale) continue;
 		if (open_persistent_id != entry->share_file_id) {
 			DEBUG(5, ("share_mode_cleanup_disconnected: "
 				  "entry for file "
@@ -993,10 +977,33 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 				  (unsigned long long)entry->share_file_id,
 				  (unsigned long long)open_persistent_id));
 			/* Cannot cleanup share mode lock as a valid entry exists. */
-			goto done;
+			donot_cleanup = true;
+			continue;
 		}
+		if (!server_id_is_disconnected(&entry->pid)) {
+			struct server_id_buf tmp;
+			DEBUG(5, ("share_mode_cleanup_disconnected: "
+				  "file (file-id='%s', servicepath='%s', "
+				  "base_name='%s%s%s') "
+				  "is used by server %s ==> do not cleanup\n",
+				  file_id_string(frame, &fid),
+				  data->servicepath,
+				  data->base_name,
+				  (data->stream_name == NULL)
+				  ? "" : "', stream_name='",
+				  (data->stream_name == NULL)
+				  ? "" : data->stream_name,
+				  server_id_str_buf(entry->pid, &tmp)));
+			/* Cannot cleanup share mode lock as we do not know if this is a valid entry*/
+			/* Only when smbd restarts, will this be marked disconnected */
+			donot_cleanup = true;
+			continue;
+		}
+		entry->stale = true;
+		data->modified = true;
 	}
 
+	if (donot_cleanup) goto done;
 	for (n=0; n < data->num_leases; n++) {
 		struct share_mode_lease *l = &data->leases[n];
 		NTSTATUS status;
@@ -1006,7 +1013,6 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
 		DEBUG(10, ("%s: leases_db_del returned %s\n", __func__,
 			   nt_errstr(status)));
 	}
-
 	ok = brl_cleanup_disconnected(fid, open_persistent_id);
 	if (!ok) {
 		DEBUG(10, ("share_mode_cleanup_disconnected: "
