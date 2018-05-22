@@ -1,0 +1,315 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Sat, 12 May 2018 12:36:25 -0400
+Subject: HYP-6671: Close normal file if there is no durable cookie + Change
+ IO related logging to log level 10 to avoid clutter.
+
+HYP-6671: Set durable to false if there is no durable cookie to persist.
+---
+ source3/locking/locking.c   |  4 ++--
+ source3/param/loadparm.c    |  8 ++++----
+ source3/smbd/close.c        |  5 ++---
+ source3/smbd/sec_ctx.c      |  6 +++---
+ source3/smbd/smb2_create.c  |  5 +++--
+ source3/smbd/smb2_read.c    |  2 +-
+ source3/smbd/smb2_write.c   |  2 +-
+ source3/smbd/smbXsrv_open.c | 27 +++++++++++++++++----------
+ source3/smbd/uid.c          |  4 ++--
+ 9 files changed, 35 insertions(+), 28 deletions(-)
+
+diff --git a/source3/locking/locking.c b/source3/locking/locking.c
+index 78c1e14..1e64b9a 100644
+--- a/source3/locking/locking.c
++++ b/source3/locking/locking.c
+@@ -127,14 +127,14 @@ bool strict_lock_default(files_struct *fsp, struct lock_struct *plock)
+         if ((lease_type & SMB2_LEASE_READ) &&
+             (plock->lock_type == READ_LOCK))
+         {
+-            DEBUG(5,("optimisation - read oplock/lease on file %s\n",
++            DEBUG(10,("optimisation - read oplock/lease on file %s\n",
+             fsp_str_dbg(fsp)));
+             return true;
+         }
+         if ((lease_type & SMB2_LEASE_WRITE) &&
+             (plock->lock_type == WRITE_LOCK))
+         {
+-            DEBUG(5,("optimisation - write oplock/lease on file %s\n",
++            DEBUG(10,("optimisation - write oplock/lease on file %s\n",
+             fsp_str_dbg(fsp)));
+             return true;
+         }
+diff --git a/source3/param/loadparm.c b/source3/param/loadparm.c
+index 3b31606..8fc1697 100644
+--- a/source3/param/loadparm.c
++++ b/source3/param/loadparm.c
+@@ -120,25 +120,25 @@ extern volatile int svtfs_lockdir_index;
+ void svtfs_set_lockdir_index (int index)
+ {
+ 	svtfs_lockdir_index = index;
+-	DEBUG(3,("svtfs_set_lockdir_index: setting lockdir index to %d\n",svtfs_lockdir_index));
++	DEBUG(10,("svtfs_set_lockdir_index: setting lockdir index to %d\n",svtfs_lockdir_index));
+ }
+ 
+ int svtfs_get_lockdir_index (void)
+ {
+-	DEBUG(3,("svtfs_get_lockdir_index: returning lockdir index of %d\n",svtfs_lockdir_index));
++	DEBUG(10,("svtfs_get_lockdir_index: returning lockdir index of %d\n",svtfs_lockdir_index));
+ 	return svtfs_lockdir_index;
+ }
+ 
+ void svtfs_set_index_for_ip (const char * ipv4addr)
+ {
+ 	int index;
+-	DEBUG(3,("Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
++	DEBUG(10,("Entering svtfs_set_index_for_ip with addr %s\n",ipv4addr));
+ 	index = 0;
+ 	svtfs_lockdir_index = index;
+ 	while (svtfs_storage_ip[index] != NULL) {
+ 		if ( 0 == strcmp(svtfs_storage_ip[index],ipv4addr)) {
+ 			svtfs_lockdir_index = index;
+-			DEBUG(3,("svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
++			DEBUG(10,("svtfs_set_index_for_ip Setting Globals.svtfs_lockdir_index to %d\n",index));
+ 			return;
+ 		}
+ 		index++;
+diff --git a/source3/smbd/close.c b/source3/smbd/close.c
+index 8dcfbd1..a67e803 100644
+--- a/source3/smbd/close.c
++++ b/source3/smbd/close.c
+@@ -668,11 +668,10 @@ static NTSTATUS close_normal_file(struct smb_request *req, files_struct *fsp,
+ 		is_durable = fsp->op->global->durable || fsp->op->global->resilient || fsp->op->global->persistent;
+ 	}
+ 
+-#ifdef SVT_NO_HYPERV /* Hyper-V wants to reconnect to a file even after closing it normally*/
+-	if (close_type != SHUTDOWN_CLOSE) {
++	/* If there is no backed cookie, there is nothing to save*/
++	if ( close_type != SHUTDOWN_CLOSE && !data_blob_cmp(&fsp->op->global->backend_cookie,&data_blob_null) ) {
+ 		is_durable = false;
+ 	}
+-#endif
+ 
+ #ifdef STRICT_RESILIENT_CHECKING
+ 	if ( fsp->op->global->resilient && !lp_smb2_leases() ) {
+diff --git a/source3/smbd/sec_ctx.c b/source3/smbd/sec_ctx.c
+index 33d987f..ce77834 100644
+--- a/source3/smbd/sec_ctx.c
++++ b/source3/smbd/sec_ctx.c
+@@ -317,11 +317,11 @@ static void set_sec_ctx_internal(uid_t uid, gid_t gid,
+ 
+ 	/* Set the security context */
+ 
+-	DEBUG(4, ("setting sec ctx (%u, %u) - sec_ctx_stack_ndx = %d\n", 
++	DEBUG(10, ("setting sec ctx (%u, %u) - sec_ctx_stack_ndx = %d\n", 
+ 		(unsigned int)uid, (unsigned int)gid, sec_ctx_stack_ndx));
+ 
+-	security_token_debug(DBGC_CLASS, 5, token);
+-	debug_unix_user_token(DBGC_CLASS, 5, uid, gid, ngroups, groups);
++	security_token_debug(DBGC_CLASS, 10, token);
++	debug_unix_user_token(DBGC_CLASS, 10, uid, gid, ngroups, groups);
+ 
+ 	/* Change uid, gid and supplementary group list. */
+ 	set_unix_security_ctx(uid, gid, ngroups, groups);
+diff --git a/source3/smbd/smb2_create.c b/source3/smbd/smb2_create.c
+index 1898b15..0fa99d2 100644
+--- a/source3/smbd/smb2_create.c
++++ b/source3/smbd/smb2_create.c
+@@ -526,7 +526,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
+ 		}
+ 		state->smb1req = smb1req;
+ 		smb2req->subreq = req;
+-		DEBUG(10,("smbd_smb2_create: name[%s]\n",
++		DEBUG(5,("smbd_smb2_create: name[%s]\n",
+ 			in_name));
+ 	} else {
+ 		/* Re-entrant create call. */
+@@ -535,7 +535,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
+ 				struct smbd_smb2_create_state);
+ 		smb1req = state->smb1req;
+ 		TALLOC_FREE(state->out_context_blobs);
+-		DEBUG(10,("smbd_smb2_create_send: reentrant for file %s\n",
++		DEBUG(5,("smbd_smb2_create_send: reentrant for file %s\n",
+ 			in_name ));
+ 	}
+ 
+@@ -629,6 +629,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
+ 
+ 		if (in_context_blobs.num_blobs != num_blobs_allowed) {
+ 			tevent_req_nterror(req, NT_STATUS_OBJECT_NAME_NOT_FOUND);
++			DEBUG(5,("smbd_smb2_create_send: in_context_blobs.num_blobs != num_blobs_allowed for file %s\n", in_name ));
+ 			return tevent_req_post(req, ev);
+ 		}
+ 	}
+diff --git a/source3/smbd/smb2_read.c b/source3/smbd/smb2_read.c
+index 89527f3..e670f93 100644
+--- a/source3/smbd/smb2_read.c
++++ b/source3/smbd/smb2_read.c
+@@ -405,7 +405,7 @@ NTSTATUS smb2_read_complete(struct tevent_req *req, ssize_t nread, int err)
+ 		return NT_STATUS_END_OF_FILE;
+ 	}
+ 
+-	DEBUG(3,("smbd_smb2_read: %s, file %s, length=%lu offset=%lu read=%lu\n",
++	DEBUG(10,("smbd_smb2_read: %s, file %s, length=%lu offset=%lu read=%lu\n",
+ 		fsp_fnum_dbg(fsp),
+ 		fsp_str_dbg(fsp),
+ 		(unsigned long)state->in_length,
+diff --git a/source3/smbd/smb2_write.c b/source3/smbd/smb2_write.c
+index da583c9..da23583 100644
+--- a/source3/smbd/smb2_write.c
++++ b/source3/smbd/smb2_write.c
+@@ -203,7 +203,7 @@ static NTSTATUS smb2_write_complete_internal(struct tevent_req *req,
+ 		return status;
+ 	}
+ 
+-	DEBUG(3,("smb2: %s, file %s, "
++	DEBUG(10,("smb2: %s, file %s, "
+ 		"length=%lu offset=%lu wrote=%lu\n",
+ 		fsp_fnum_dbg(fsp),
+ 		fsp_str_dbg(fsp),
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index 6cc4ba1..35ac6c7 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -1042,7 +1042,7 @@ static void smbXsrv_open_global_verify_record(struct db_record *db_rec,
+ 
+ 	val = dbwrap_record_get_value(db_rec);
+ 	if (val.dsize == 0) {
+-		DEBUG(10, ("%s: empty value\n", __func__));
++		DEBUG(5, ("%s: empty value\n", __func__));
+ 		TALLOC_FREE(frame);
+ 		*is_free = true;
+ 		if (was_free) {
+@@ -1065,8 +1065,8 @@ static void smbXsrv_open_global_verify_record(struct db_record *db_rec,
+ 		return;
+ 	}
+ 
+-	DEBUG(10,("smbXsrv_open_global_verify_record\n"));
+-	if (CHECK_DEBUGLVL(10)) {
++	DEBUG(5,("smbXsrv_open_global_verify_record\n"));
++	if (CHECK_DEBUGLVL(5)) {
+ 		NDR_PRINT_DEBUG(smbXsrv_open_globalB, &global_blob);
+ 	}
+ 
+@@ -1204,7 +1204,7 @@ static NTSTATUS smbXsrv_open_global_lookup(struct smbXsrv_open_table *table,
+ 					  mem_ctx,
+ 					  _global);
+ 	if (is_free) {
+-		DEBUG(10, ("%s: is_free=true\n", __func__));
++		DEBUG(5, ("%s: is_free=true\n", __func__));
+ 		talloc_free(global_rec);
+ 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+ 	}
+@@ -1866,18 +1866,18 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
+ 	struct security_token *current_token = NULL;
+ 
+ 	if (session_info == NULL) {
+-		DEBUG(10, ("session_info=NULL\n"));
++		DEBUG(5, ("session_info=NULL\n"));
+ 		return NT_STATUS_INVALID_HANDLE;
+ 	}
+ 	current_token = session_info->security_token;
+ 
+ 	if (current_token == NULL) {
+-		DEBUG(10, ("current_token=NULL\n"));
++		DEBUG(5, ("current_token=NULL\n"));
+ 		return NT_STATUS_INVALID_HANDLE;
+ 	}
+ 
+ 	if (global_zeros != 0) {
+-		DEBUG(10, ("global_zeros!=0\n"));
++		DEBUG(5, ("global_zeros!=0\n"));
+ 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+ 	}
+ 
+@@ -1890,7 +1890,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
+ 	status = smbXsrv_open_global_lookup(table, global_id, op, &op->global);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		TALLOC_FREE(op);
+-		DEBUG(10, ("smbXsrv_open_global_lookup returned %s\n",
++		DEBUG(5, ("smbXsrv_open_global_lookup returned %s\n",
+ 			   nt_errstr(status)));
+ 		return status;
+ 	}
+@@ -1905,21 +1905,25 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
+ 	    !GUID_equal(&op->global->create_guid, create_guid))
+ 	{
+ 		TALLOC_FREE(op);
++		DEBUG(5, ("op->global->create_guid != create_guid\n"));
+ 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+ 	}
+ 
+ 	if (!security_token_is_sid(current_token, &op->global->open_owner)) {
+ 		TALLOC_FREE(op);
++		DEBUG(5, ("current_token and op->global->open_owner are different\n"));
+ 		return NT_STATUS_ACCESS_DENIED;
+ 	}
+ 
+         if (!((op->global->durable) || (op->global->resilient) || (op->global->persistent))) {
+ 		TALLOC_FREE(op);
++		DEBUG(5, ("op does not have durable/resilient/persistent\n"));
+ 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+ 	}
+ 
+ 	if (table->local.num_opens >= table->local.max_opens) {
+ 		TALLOC_FREE(op);
++		DEBUG(5, ("table->local.num_opens >= table->local.max_opens\n"));
+ 		return NT_STATUS_INSUFFICIENT_RESOURCES;
+ 	}
+ 
+@@ -1931,6 +1935,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
+ 						&op->local_id);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		TALLOC_FREE(op);
++		DEBUG(5, ("Unable to smbXsrv_open_local_allocate_id\n"));
+ 		return status;
+ 	}
+ 
+@@ -1946,6 +1951,7 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
+ 	TALLOC_FREE(local_rec);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		TALLOC_FREE(op);
++		DEBUG(5, ("dbwrap_record_store failed\n"));
+ 		return status;
+ 	}
+ 	table->local.num_opens += 1;
+@@ -1955,17 +1961,18 @@ NTSTATUS smb2srv_open_recreate(struct smbXsrv_connection *conn,
+ 	status = smbXsrv_open_global_store(op->global);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		TALLOC_FREE(op);
++		DEBUG(5, ("smbXsrv_open_global_store failed\n"));
+ 		return status;
+ 	}
+ 
+-	if (CHECK_DEBUGLVL(10)) {
++	if (CHECK_DEBUGLVL(5)) {
+ 		struct smbXsrv_openB open_blob;
+ 
+ 		ZERO_STRUCT(open_blob);
+ 		open_blob.version = 0;
+ 		open_blob.info.info0 = op;
+ 
+-		DEBUG(10,("smbXsrv_open_recreate: global_id (0x%08x) stored\n",
++		DEBUG(5,("smbXsrv_open_recreate: global_id (0x%08x) stored\n",
+ 			 op->global->open_global_id));
+ 		NDR_PRINT_DEBUG(smbXsrv_openB, &open_blob);
+ 	}
+diff --git a/source3/smbd/uid.c b/source3/smbd/uid.c
+index 6eb5392..eb0a4fd 100644
+--- a/source3/smbd/uid.c
++++ b/source3/smbd/uid.c
+@@ -356,7 +356,7 @@ static bool change_to_user_internal(connection_struct *conn,
+ 	current_user.conn = conn;
+ 	current_user.vuid = vuid;
+ 
+-	DEBUG(5, ("Impersonated user: uid=(%d,%d), gid=(%d,%d)\n",
++	DEBUG(6, ("Impersonated user: uid=(%d,%d), gid=(%d,%d)\n",
+ 		 (int)getuid(),
+ 		 (int)geteuid(),
+ 		 (int)getgid(),
+@@ -380,7 +380,7 @@ bool change_to_user(connection_struct *conn, uint64_t vuid)
+ 	if ((current_user.conn == conn) &&
+ 		   (vuser != NULL) && (current_user.vuid == vuid) &&
+ 		   (current_user.ut.uid == vuser->session_info->unix_token->uid)) {
+-		DEBUG(4,("Skipping user change - already "
++		DEBUG(10,("Skipping user change - already "
+ 			 "user\n"));
+ 		return(True);
+ 	}

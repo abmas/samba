@@ -1,0 +1,160 @@
+From: Ashok Ramakrishnan <ashok.ramakrishnan@simplivity.com>
+Date: Thu, 17 May 2018 11:02:16 -0400
+Subject: HYP-6143: Cleanup bad open records,
+ and better handling of share mode entries.
+
+---
+ source3/locking/share_mode_lock.c | 40 ++++++++++++++++++++++-----------------
+ source3/smbd/smbXsrv_open.c       | 15 ++++++++-------
+ 2 files changed, 31 insertions(+), 24 deletions(-)
+
+diff --git a/source3/locking/share_mode_lock.c b/source3/locking/share_mode_lock.c
+index e1934b2..0f103ae 100644
+--- a/source3/locking/share_mode_lock.c
++++ b/source3/locking/share_mode_lock.c
+@@ -945,7 +945,7 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
+ 	unsigned n;
+ 	struct share_mode_data *data;
+ 	struct share_mode_lock *lck;
+-	bool ok;
++	bool ok, donot_cleanup = false;
+ 
+ 	lck = get_existing_share_mode_lock(frame, fid);
+ 	if (lck == NULL) {
+@@ -959,12 +959,14 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
+ 	for (n=0; n < data->num_share_modes; n++) {
+ 		struct share_mode_entry *entry = &data->share_modes[n];
+ 
+-		if (!server_id_is_disconnected(&entry->pid)) {
+-			struct server_id_buf tmp;
++		if (entry->stale) continue;
++		if (open_persistent_id != entry->share_file_id) {
+ 			DEBUG(5, ("share_mode_cleanup_disconnected: "
+-				  "file (file-id='%s', servicepath='%s', "
++				  "entry for file "
++				  "(file-id='%s', servicepath='%s', "
+ 				  "base_name='%s%s%s') "
+-				  "is used by server %s ==> do not cleanup\n",
++				  "has share_file_id %llu but expected %llu"
++				  "==> do not cleanup\n",
+ 				  file_id_string(frame, &fid),
+ 				  data->servicepath,
+ 				  data->base_name,
+@@ -972,17 +974,18 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
+ 				  ? "" : "', stream_name='",
+ 				  (data->stream_name == NULL)
+ 				  ? "" : data->stream_name,
+-				  server_id_str_buf(entry->pid, &tmp)));
++				  (unsigned long long)entry->share_file_id,
++				  (unsigned long long)open_persistent_id));
+ 			/* Cannot cleanup share mode lock as a valid entry exists. */
+-			goto done;
++			donot_cleanup = true;
++			continue;
+ 		}
+-		if (open_persistent_id != entry->share_file_id) {
++		if (!server_id_is_disconnected(&entry->pid)) {
++			struct server_id_buf tmp;
+ 			DEBUG(5, ("share_mode_cleanup_disconnected: "
+-				  "entry for file "
+-				  "(file-id='%s', servicepath='%s', "
++				  "file (file-id='%s', servicepath='%s', "
+ 				  "base_name='%s%s%s') "
+-				  "has share_file_id %llu but expected %llu"
+-				  "==> do not cleanup\n",
++				  "is used by server %s ==> do not cleanup\n",
+ 				  file_id_string(frame, &fid),
+ 				  data->servicepath,
+ 				  data->base_name,
+@@ -990,13 +993,17 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
+ 				  ? "" : "', stream_name='",
+ 				  (data->stream_name == NULL)
+ 				  ? "" : data->stream_name,
+-				  (unsigned long long)entry->share_file_id,
+-				  (unsigned long long)open_persistent_id));
+-			/* Cannot cleanup share mode lock as a valid entry exists. */
+-			goto done;
++				  server_id_str_buf(entry->pid, &tmp)));
++			/* Cannot cleanup share mode lock as we do not know if this is a valid entry*/
++			/* Only when smbd restarts, will this be marked disconnected */
++			donot_cleanup = true;
++			continue;
+ 		}
++		entry->stale = true;
++		data->modified = true;
+ 	}
+ 
++	if (donot_cleanup) goto done;
+ 	for (n=0; n < data->num_leases; n++) {
+ 		struct share_mode_lease *l = &data->leases[n];
+ 		NTSTATUS status;
+@@ -1006,7 +1013,6 @@ bool share_mode_cleanup_disconnected(struct file_id fid,
+ 		DEBUG(10, ("%s: leases_db_del returned %s\n", __func__,
+ 			   nt_errstr(status)));
+ 	}
+-
+ 	ok = brl_cleanup_disconnected(fid, open_persistent_id);
+ 	if (!ok) {
+ 		DEBUG(10, ("share_mode_cleanup_disconnected: "
+diff --git a/source3/smbd/smbXsrv_open.c b/source3/smbd/smbXsrv_open.c
+index 35ac6c7..ba416ef 100644
+--- a/source3/smbd/smbXsrv_open.c
++++ b/source3/smbd/smbXsrv_open.c
+@@ -2101,10 +2101,10 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 
+ 	val = dbwrap_record_get_value(rec);
+ 	if (val.dsize == 0) {
+-		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
+-			  "empty record in %s, skipping...\n",
++		DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
++			  "empty record in %s, deleting...\n",
+ 			   global_id, dbwrap_name(get_smbXsrv_open_global_db_ctx())));
+-		goto done;
++		goto delete_record;
+ 	}
+ 
+ 	status = smbXsrv_open_global_parse_record(talloc_tos(), rec, &op);
+@@ -2112,7 +2112,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
+ 			  "failed to read record: %s\n",
+ 			  global_id, nt_errstr(status)));
+-		goto done;
++		goto delete_record;
+ 	}
+ 
+ 	if (server_id_is_disconnected(&op->server_id)) {
+@@ -2123,7 +2123,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 		tdiff = usec_time_diff(&now, &disconnect_time);
+ 		delete_open = (tdiff >= 1000*op->durable_timeout_msec);
+ 
+-		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
++		DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
+ 			   "disconnected at [%s] %us ago with "
+ 			   "timeout of %us -%s reached\n",
+ 			   global_id,
+@@ -2133,7 +2133,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 			   delete_open ? "" : " not"));
+ 	} else if (!serverid_exists(&op->server_id)) {
+ 		struct server_id_buf idbuf;
+-		DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
++		DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
+ 			   "server[%s] does not exist\n",
+ 			   global_id,
+ 			   server_id_str_buf(op->server_id, &idbuf)));
+@@ -2144,6 +2144,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 		goto done;
+ 	}
+ 
++delete_record:
+ 	status = dbwrap_record_delete(rec);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		DEBUG(1, ("smbXsrv_open_cleanup[global: 0x%08x] "
+@@ -2154,7 +2155,7 @@ NTSTATUS smbXsrv_open_cleanup(uint64_t persistent_id)
+ 		goto done;
+ 	}
+ 
+-	DEBUG(10, ("smbXsrv_open_cleanup[global: 0x%08x] "
++	DEBUG(5, ("smbXsrv_open_cleanup[global: 0x%08x] "
+ 		   "delete record from %s\n",
+ 		   global_id,
+ 		   dbwrap_name(get_smbXsrv_open_global_db_ctx())));
