@@ -89,3 +89,5 @@
 0089-HYP-6143-Let-startup-code-do-the-stale-share-mode-en.patch
 0090-HYP-6437-If-there-are-errors-traversing-open-global-.patch
 0091-HYP-6469-Split-brain-changes.patch
+0092-HYP-6671-Close-normal-file-if-there-is-no-durable-co.patch
+0093-HYP-6143-Cleanup-bad-open-records-and-better-handlin.patch
