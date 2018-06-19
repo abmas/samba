@@ -559,9 +559,10 @@ static void scavenger_timer(struct tevent_context *ev,
 	/* The previous function returns an error if it sees other share mode entries */
 	if (!ok) {
 		DEBUG(2, ("Failed to cleanup share modes and byte range locks "
-			  "for file %s open %llu, proceeding with open cleanup\n",
+			  "for file %s open %llu, skipping open cleanup\n",
 			  file_id_string_tos(&ctx->msg.file_id),
 			  (unsigned long long)ctx->msg.open_persistent_id));
+		return;
 	}
 
 	status = smbXsrv_open_cleanup(ctx->msg.open_persistent_id);
