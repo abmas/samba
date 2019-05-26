@@ -8,7 +8,6 @@ setup ()
 
 	export FAKE_CTDB_TUNABLES_OK="
 	       MonitorInterval
-	       TDBMutexEnabled
 	       DatabaseHashSize
 	       "
 	export FAKE_CTDB_TUNABLES_OBSOLETE="
@@ -25,7 +24,6 @@ result_filter ()
 {
 	_date="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"
 	_time="[0-9][0-9][0-9][0-9][0-9][0-9]"
-	_nanos="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"
-	_date_time="${_date}\.${_time}\.${_nanos}"
+	_date_time="${_date}\.${_time}"
 	sed -e "s|\.${_date_time}\.|.DATE.TIME.|"
 }

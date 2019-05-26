@@ -30,6 +30,7 @@
 #include "lib/util/sys_rw.h"
 #include "lib/util/time.h"
 #include "lib/util/tevent_unix.h"
+#include "lib/util/util.h"
 
 #include "protocol/protocol.h"
 #include "protocol/protocol_api.h"
@@ -2571,22 +2572,28 @@ static void recovery_db_recovery_done(struct tevent_req *subreq)
 
 		/* If pulling database fails multiple times */
 		if (max_credits >= NUM_RETRIES) {
-			struct ctdb_req_message message;
+			struct ctdb_ban_state ban_state = {
+				.pnn = max_pnn,
+				.time = state->tun_list->recovery_ban_period,
+			};
 
-			D_ERR("Assigning banning credits to node %u\n",
-			      max_pnn);
+			D_ERR("Banning node %u for %u seconds\n",
+			      ban_state.pnn,
+			      ban_state.time);
 
-			message.srvid = CTDB_SRVID_BANNING;
-			message.data.pnn = max_pnn;
-
-			subreq = ctdb_client_message_send(
-					state, state->ev, state->client,
-					ctdb_client_pnn(state->client),
-					&message);
+			ctdb_req_control_set_ban_state(&request,
+						       &ban_state);
+			subreq = ctdb_client_control_send(state,
+							  state->ev,
+							  state->client,
+							  ban_state.pnn,
+							  TIMEOUT(),
+							  &request);
 			if (tevent_req_nomem(subreq, req)) {
 				return;
 			}
-			tevent_req_set_callback(subreq, recovery_failed_done,
+			tevent_req_set_callback(subreq,
+						recovery_failed_done,
 						req);
 		} else {
 			tevent_req_error(req, EIO);
@@ -2609,15 +2616,25 @@ static void recovery_failed_done(struct tevent_req *subreq)
 {
 	struct tevent_req *req = tevent_req_callback_data(
 		subreq, struct tevent_req);
+	struct recovery_state *state = tevent_req_data(
+		req, struct recovery_state);
+	struct ctdb_reply_control *reply;
 	int ret;
 	bool status;
 
-	status = ctdb_client_message_recv(subreq, &ret);
+	status = ctdb_client_control_recv(subreq, &ret, state, &reply);
 	TALLOC_FREE(subreq);
 	if (! status) {
-		D_ERR("failed to assign banning credits, ret=%d\n", ret);
+		D_ERR("failed to ban node, ret=%d\n", ret);
+		goto done;
 	}
 
+	ret = ctdb_reply_control_set_ban_state(reply);
+	if (ret != 0) {
+		D_ERR("control SET_BAN_STATE failed, ret=%d\n", ret);
+	}
+
+done:
 	tevent_req_error(req, EIO);
 }
 
@@ -2720,10 +2737,10 @@ int main(int argc, char *argv[])
 {
 	int write_fd;
 	const char *sockpath;
-	TALLOC_CTX *mem_ctx;
+	TALLOC_CTX *mem_ctx = NULL;
 	struct tevent_context *ev;
 	struct ctdb_client_context *client;
-	int ret;
+	int ret = 0;
 	struct tevent_req *req;
 	uint32_t generation;
 
@@ -2734,7 +2751,11 @@ int main(int argc, char *argv[])
 
 	write_fd = atoi(argv[1]);
 	sockpath = argv[2];
-	generation = (uint32_t)strtoul(argv[3], NULL, 0);
+	generation = (uint32_t)strtoul_err(argv[3], NULL, 0, &ret);
+	if (ret != 0) {
+		fprintf(stderr, "recovery: unable to initialize generation\n");
+		goto failed;
+	}
 
 	mem_ctx = talloc_new(NULL);
 	if (mem_ctx == NULL) {

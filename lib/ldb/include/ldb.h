@@ -376,7 +376,10 @@ typedef int (*ldb_attr_operator_t)(struct ldb_context *, enum ldb_parse_op opera
   ldif_read_fn		-> convert from ldif to binary format
   ldif_write_fn		-> convert from binary to ldif format
   canonicalise_fn	-> canonicalise a value, for use by indexing and dn construction
+  index_form_fn		-> get lexicographically sorted format for index
   comparison_fn		-> compare two values
+  operator_fn		-> override function for optimizing out unnecessary
+				calls to canonicalise_fn and comparison_fn
 */
 
 struct ldb_schema_syntax {
@@ -384,6 +387,7 @@ struct ldb_schema_syntax {
 	ldb_attr_handler_t ldif_read_fn;
 	ldb_attr_handler_t ldif_write_fn;
 	ldb_attr_handler_t canonicalise_fn;
+	ldb_attr_handler_t index_format_fn;
 	ldb_attr_comparison_t comparison_fn;
 	ldb_attr_operator_t operator_fn;
 };
@@ -442,7 +446,7 @@ const struct ldb_dn_extended_syntax *ldb_dn_extended_syntax_by_name(struct ldb_c
 #define LDB_ATTR_FLAG_FROM_DB      (1<<6)
 
 /*
- * The attribute was loaded from a DB, rather than via the C API
+ * The attribute is indexed
  */
 #define LDB_ATTR_FLAG_INDEXED      (1<<7)
 
@@ -472,6 +476,12 @@ const struct ldb_dn_extended_syntax *ldb_dn_extended_syntax_by_name(struct ldb_c
   See <a href="http://www.ietf.org/rfc/rfc2252.txt">RFC 2252</a>, Section 4.3.2
 */
 #define LDB_SYNTAX_INTEGER              "1.3.6.1.4.1.1466.115.121.1.27"
+
+/**
+  Custom attribute syntax for an integer whose index is lexicographically
+  ordered by attribute value in the database.
+*/
+#define LDB_SYNTAX_ORDERED_INTEGER      "LDB_SYNTAX_ORDERED_INTEGER"
 
 /**
   LDAP attribute syntax for a boolean
@@ -1529,7 +1539,7 @@ int ldb_transaction_cancel_noerr(struct ldb_context *ldb);
 const char *ldb_errstring(struct ldb_context *ldb);
 
 /**
-  return a string explaining what a ldb error constant meancs
+  return a string explaining what a ldb error constant means
 */
 const char *ldb_strerror(int ldb_err);
 
@@ -1882,6 +1892,9 @@ bool ldb_dn_add_child(struct ldb_dn *dn, struct ldb_dn *child);
 bool ldb_dn_add_child_fmt(struct ldb_dn *dn, const char *child_fmt, ...) PRINTF_ATTRIBUTE(2,3);
 bool ldb_dn_remove_base_components(struct ldb_dn *dn, unsigned int num);
 bool ldb_dn_remove_child_components(struct ldb_dn *dn, unsigned int num);
+bool ldb_dn_add_child_val(struct ldb_dn *dn,
+			  const char *rdn,
+			  struct ldb_val value);
 
 struct ldb_dn *ldb_dn_copy(TALLOC_CTX *mem_ctx, struct ldb_dn *dn);
 struct ldb_dn *ldb_dn_get_parent(TALLOC_CTX *mem_ctx, struct ldb_dn *dn);

@@ -33,12 +33,16 @@ struct ctdb_config {
 	const char *dbdir_persistent;
 	const char *dbdir_state;
 	const char *lock_debug_script;
+	bool tdb_mutexes;
 
 	/* Event */
 	const char *event_debug_script;
 
+	/* Failover */
+	bool failover_disabled;
+
 	/* Legacy */
-	bool no_realtime;
+	bool realtime_scheduling;
 	bool recmaster_capability;
 	bool lmaster_capability;
 	bool start_as_stopped;

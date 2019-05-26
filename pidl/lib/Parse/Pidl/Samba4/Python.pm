@@ -279,7 +279,7 @@ sub PythonStruct($$$$$$)
 	# If the struct is not public there ndr_pull/ndr_push functions will
 	# be static so not callable from here
 	if (has_property($d, "public")) {
-		$self->pidl("static PyObject *py_$name\_ndr_pack(PyObject *py_obj)");
+		$self->pidl("static PyObject *py_$name\_ndr_pack(PyObject *py_obj,  PyObject *Py_UNUSED(ignored))");
 		$self->pidl("{");
 		$self->indent;
 		$self->pidl("$cname *object = ($cname *)pytalloc_get_ptr(py_obj);");
@@ -313,7 +313,7 @@ sub PythonStruct($$$$$$)
 		$self->pidl("{");
 		$self->indent;
 		$self->pidl("$cname *object = ($cname *)pytalloc_get_ptr(py_obj);");
-		$self->pidl("DATA_BLOB blob;");
+		$self->pidl("DATA_BLOB blob = {.data = NULL, .length = 0};");
 		$self->pidl("Py_ssize_t blob_length = 0;");
 		$self->pidl("enum ndr_err_code err;");
 		$self->pidl("const char * const kwnames[] = { \"data_blob\", \"allow_remaining\", NULL };");
@@ -359,7 +359,7 @@ sub PythonStruct($$$$$$)
 		$self->pidl("}");
 		$self->pidl("");
 
-		$self->pidl("static PyObject *py_$name\_ndr_print(PyObject *py_obj)");
+		$self->pidl("static PyObject *py_$name\_ndr_print(PyObject *py_obj, PyObject *Py_UNUSED(ignored))");
 		$self->pidl("{");
 		$self->indent;
 		$self->pidl("$cname *object = ($cname *)pytalloc_get_ptr(py_obj);");
@@ -379,7 +379,7 @@ sub PythonStruct($$$$$$)
 		$self->pidl("static PyMethodDef $py_methods\[] = {");
 		$self->indent;
 		$self->pidl("{ \"__ndr_pack__\", (PyCFunction)py_$name\_ndr_pack, METH_NOARGS, \"S.ndr_pack(object) -> blob\\nNDR pack\" },");
-		$self->pidl("{ \"__ndr_unpack__\", (PyCFunction)py_$name\_ndr_unpack, METH_VARARGS|METH_KEYWORDS, \"S.ndr_unpack(class, blob, allow_remaining=False) -> None\\nNDR unpack\" },");
+		$self->pidl("{ \"__ndr_unpack__\", PY_DISCARD_FUNC_SIG(PyCFunction,py_$name\_ndr_unpack), METH_VARARGS|METH_KEYWORDS, \"S.ndr_unpack(class, blob, allow_remaining=False) -> None\\nNDR unpack\" },");
 		$self->pidl("{ \"__ndr_print__\", (PyCFunction)py_$name\_ndr_print, METH_NOARGS, \"S.ndr_print(object) -> None\\nNDR print\" },");
 		$self->pidl("{ NULL, NULL, 0, NULL }");
 		$self->deindent;
@@ -501,7 +501,7 @@ sub PythonFunctionStruct($$$$)
 	my $ndr_call = "const struct ndr_interface_call *call = NULL;";
 	my $object_ptr = "$cname *object = ($cname *)pytalloc_get_ptr(py_obj);";
 
-	$self->pidl("static PyObject *py_$name\_ndr_opnum(PyTypeObject *type)");
+	$self->pidl("static PyObject *py_$name\_ndr_opnum(PyTypeObject *type, PyObject *Py_UNUSED(ignored))");
 	$self->pidl("{");
 	$self->indent;
 	$self->pidl("");
@@ -817,7 +817,7 @@ sub PythonFunctionStruct($$$$)
 	$self->pidl("}");
 	$self->pidl("");
 
-	$self->pidl("static PyObject *py_$name\_ndr_print_in(PyObject *py_obj)");
+	$self->pidl("static PyObject *py_$name\_ndr_print_in(PyObject *py_obj, PyObject *Py_UNUSED(ignored))");
 	$self->pidl("{");
 	$self->indent;
 	$self->pidl("return py_$name\_ndr_print(py_obj, \"$name\_in\", NDR_IN);");
@@ -825,7 +825,7 @@ sub PythonFunctionStruct($$$$)
 	$self->pidl("}");
 	$self->pidl("");
 
-	$self->pidl("static PyObject *py_$name\_ndr_print_out(PyObject *py_obj)");
+	$self->pidl("static PyObject *py_$name\_ndr_print_out(PyObject *py_obj, PyObject *Py_UNUSED(ignored))");
 	$self->pidl("{");
 	$self->indent;
 	$self->pidl("return py_$name\_ndr_print(py_obj, \"$name\_out\", NDR_OUT);");
@@ -840,19 +840,19 @@ sub PythonFunctionStruct($$$$)
 	$self->indent;
 	$self->pidl("\"$modulename.$prettyname.opnum() -> ".sprintf("%d (0x%02x)", $fn->{OPNUM}, $fn->{OPNUM})." \" },");
 	$self->deindent;
-	$self->pidl("{ \"__ndr_pack_in__\", (PyCFunction)py_$name\_ndr_pack_in, METH_VARARGS|METH_KEYWORDS,");
+	$self->pidl("{ \"__ndr_pack_in__\", PY_DISCARD_FUNC_SIG(PyCFunction,py_$name\_ndr_pack_in), METH_VARARGS|METH_KEYWORDS,");
 	$self->indent;
 	$self->pidl("\"S.ndr_pack_in(object, bigendian=False, ndr64=False) -> blob\\nNDR pack input\" },");
 	$self->deindent;
-	$self->pidl("{ \"__ndr_pack_out__\", (PyCFunction)py_$name\_ndr_pack_out, METH_VARARGS|METH_KEYWORDS,");
+	$self->pidl("{ \"__ndr_pack_out__\", PY_DISCARD_FUNC_SIG(PyCFunction,py_$name\_ndr_pack_out), METH_VARARGS|METH_KEYWORDS,");
 	$self->indent;
 	$self->pidl("\"S.ndr_pack_out(object, bigendian=False, ndr64=False) -> blob\\nNDR pack output\" },");
 	$self->deindent;
-	$self->pidl("{ \"__ndr_unpack_in__\", (PyCFunction)py_$name\_ndr_unpack_in, METH_VARARGS|METH_KEYWORDS,");
+	$self->pidl("{ \"__ndr_unpack_in__\", PY_DISCARD_FUNC_SIG(PyCFunction,py_$name\_ndr_unpack_in), METH_VARARGS|METH_KEYWORDS,");
 	$self->indent;
 	$self->pidl("\"S.ndr_unpack_in(class, blob, bigendian=False, ndr64=False, allow_remaining=False) -> None\\nNDR unpack input\" },");
 	$self->deindent;
-	$self->pidl("{ \"__ndr_unpack_out__\", (PyCFunction)py_$name\_ndr_unpack_out, METH_VARARGS|METH_KEYWORDS,");
+	$self->pidl("{ \"__ndr_unpack_out__\", PY_DISCARD_FUNC_SIG(PyCFunction,py_$name\_ndr_unpack_out), METH_VARARGS|METH_KEYWORDS,");
 	$self->indent;
 	$self->pidl("\"S.ndr_unpack_out(class, blob, bigendian=False, ndr64=False, allow_remaining=False) -> None\\nNDR unpack output\" },");
 	$self->deindent;
@@ -1235,7 +1235,7 @@ sub PythonType($$$$)
 		$self->pidl("PyObject *in = NULL;");
 		$self->pidl("$typename *out = NULL;");
 		$self->pidl("");
-		$self->pidl("if (!PyArg_ParseTupleAndKeywords(args, kwargs, \"OiO:import\",");
+		$self->pidl("if (!PyArg_ParseTupleAndKeywords(args, kwargs, \"OiO:export\",");
 		$self->indent;
 		$self->pidl("discard_const_p(char *, kwnames),");
 		$self->pidl("&mem_ctx_obj,");
@@ -1269,12 +1269,12 @@ sub PythonType($$$$)
 		$py_methods = "py_$d->{NAME}_methods";
 		$self->pidl("static PyMethodDef $py_methods\[] = {");
 		$self->indent;
-		$self->pidl("{ \"__import__\", (PyCFunction)py_$d->{NAME}\_import,");
+		$self->pidl("{ \"__import__\", PY_DISCARD_FUNC_SIG(PyCFunction,py_$d->{NAME}\_import),");
 		$self->indent;
 		$self->pidl("METH_VARARGS|METH_KEYWORDS|METH_CLASS,");
 		$self->pidl("\"T.__import__(mem_ctx, level, in) => ret.\" },");
 		$self->deindent;
-		$self->pidl("{ \"__export__\", (PyCFunction)py_$d->{NAME}\_export,");
+		$self->pidl("{ \"__export__\", PY_DISCARD_FUNC_SIG(PyCFunction,py_$d->{NAME}\_export),");
 		$self->indent;
 		$self->pidl("METH_VARARGS|METH_KEYWORDS|METH_CLASS,");
 		$self->pidl("\"T.__export__(mem_ctx, level, in) => ret.\" },");
@@ -1726,7 +1726,7 @@ sub ConvertObjectFromPythonData($$$$$$;$$)
 		$self->indent;
 		$self->pidl("long test_var;");
 		$self->pidl("test_var = PyInt_AsLong($cvar);");
-		$self->pidl("if (test_var < 0 || test_var > uint_max) {");
+		$self->pidl("if (test_var < 0 || (unsigned long long)test_var > uint_max) {");
 		$self->indent;
 		$self->pidl("PyErr_Format(PyExc_OverflowError, \"Expected type %s or %s within range 0 - %llu, got %ld\",\\");
 		$self->pidl("  PyInt_Type.tp_name, PyLong_Type.tp_name, uint_max, test_var);");
@@ -1902,6 +1902,9 @@ sub ConvertObjectFromPythonLevel($$$$$$$$$)
 	$recurse = $recurse + 1;
 
 	if ($l->{TYPE} eq "POINTER") {
+		my $need_deindent = 0;
+		my $need_deref = 0;
+
 		if ($l->{POINTER_TYPE} ne "ref") {
 			$self->pidl("if ($py_var == Py_None) {");
 			$self->indent;
@@ -1909,10 +1912,13 @@ sub ConvertObjectFromPythonLevel($$$$$$$$$)
 			$self->deindent;
 			$self->pidl("} else {");
 			$self->indent;
+			$need_deindent = 1;
+			if ($nl->{TYPE} eq "POINTER") {
+				$need_deref = 1;
+			}
 		}
-		# if we want to handle more than one level of pointer in python interfaces
-		# then this is where we would need to allocate it
-		if ($l->{POINTER_TYPE} eq "ref") {
+
+		if ($l->{POINTER_TYPE} eq "ref" or $need_deref == 1) {
 			$self->pidl("$var_name = talloc_ptrtype($mem_ctx, $var_name);");
 			$self->pidl("if ($var_name == NULL) {");
 			$self->indent;
@@ -1932,11 +1938,15 @@ sub ConvertObjectFromPythonLevel($$$$$$$$$)
 		} else {
 			$self->pidl("$var_name = NULL;");
 		}
+		if ($need_deref == 1) {
+			my $ndr_pointer_typename = $self->import_type_variable("samba.dcerpc.base", "ndr_pointer");
+			$self->pidl("$py_var = py_dcerpc_ndr_pointer_deref($ndr_pointer_typename, $py_var);");
+		}
 		unless ($nl->{TYPE} eq "DATA" and Parse::Pidl::Typelist::scalar_is_reference($nl->{DATA_TYPE})) {
 			$var_name = get_value_of($var_name);
 		}
 		$self->ConvertObjectFromPythonLevel($env, $mem_ctx, $py_var, $e, $nl, $var_name, $fail, $recurse);
-		if ($l->{POINTER_TYPE} ne "ref") {
+		if ($need_deindent == 1) {
 			$self->deindent;
 			$self->pidl("}");
 		}
@@ -2015,11 +2025,11 @@ sub ConvertScalarToPython($$$$)
 	$ctypename = expandAlias($ctypename);
 
 	if ($ctypename =~ /^(int64|dlong)$/) {
-		return "ndr_PyLong_FromLongLong($cvar)";
+		return "PyLong_FromLongLong($cvar)";
 	}
 
 	if ($ctypename =~ /^(uint64|hyper|NTTIME_hyper|NTTIME|NTTIME_1sec|udlong|udlongr|uid_t|gid_t)$/) {
-		return "ndr_PyLong_FromUnsignedLongLong($cvar)";
+		return "PyLong_FromUnsignedLongLong($cvar)";
 	}
 
 	if ($ctypename =~ /^(char|int|int8|int16|int32|time_t)$/) {
@@ -2031,7 +2041,7 @@ sub ConvertScalarToPython($$$$)
 	# possibly 64 bit unsigned long.  (enums are signed in C,
 	# unsigned in NDR)
 	if ($ctypename =~ /^(uint32|uint3264)$/) {
-		return "ndr_PyLong_FromUnsignedLongLong((uint32_t)$cvar)";
+		return "PyLong_FromUnsignedLongLong((uint32_t)$cvar)";
 	}
 
 	if ($ctypename =~ /^(uint|uint8|uint16|uint1632)$/) {
@@ -2138,6 +2148,10 @@ sub ConvertObjectToPythonLevel($$$$$$$)
 	}
 
 	if ($l->{TYPE} eq "POINTER") {
+		my $need_wrap = 0;
+		if ($l->{POINTER_TYPE} ne "ref" and $nl->{TYPE} eq "POINTER") {
+			$need_wrap = 1;
+		}
 		if ($l->{POINTER_TYPE} ne "ref") {
 			if ($recurse == 0) {
 				$self->pidl("if ($var_name == NULL) {");
@@ -2161,6 +2175,19 @@ sub ConvertObjectToPythonLevel($$$$$$$)
 		}
 		$self->ConvertObjectToPythonLevel($var_name, $env, $e, $nl, $var_name2, $py_var, $fail, $recurse2);
 		if ($l->{POINTER_TYPE} ne "ref") {
+			$self->deindent;
+			$self->pidl("}");
+		}
+		if ($need_wrap) {
+			my $py_var_wrap = undef;
+			$need_wrap = 1;
+			$self->pidl("{");
+			$self->indent;
+			$py_var_wrap = "py_$e->{NAME}_level_$l->{LEVEL_INDEX}";
+			$self->pidl("PyObject *$py_var_wrap = $py_var;");
+			my $ndr_pointer_typename = $self->import_type_variable("samba.dcerpc.base", "ndr_pointer");
+			$self->pidl("$py_var = py_dcerpc_ndr_pointer_wrap($ndr_pointer_typename, $py_var_wrap);");
+			$self->pidl("Py_XDECREF($py_var_wrap);");
 			$self->deindent;
 			$self->pidl("}");
 		}
@@ -2246,6 +2273,7 @@ sub Parse($$$$$)
 #include <Python.h>
 #include \"python/py3compat.h\"
 #include \"includes.h\"
+#include \"python/modules.h\"
 #include <pytalloc.h>
 #include \"librpc/rpc/pyrpc.h\"
 #include \"librpc/rpc/pyrpc_util.h\"
@@ -2289,24 +2317,6 @@ static inline long long ndr_sizeof2intmax(size_t var_size)
 	return 0;
 }
 
-static inline PyObject *ndr_PyLong_FromLongLong(long long v)
-{
-	if (v > LONG_MAX || v < LONG_MIN) {
-		return PyLong_FromLongLong(v);
-	} else {
-		return PyInt_FromLong(v);
-	}
-}
-
-static inline PyObject *ndr_PyLong_FromUnsignedLongLong(unsigned long long v)
-{
-	if (v > LONG_MAX) {
-		return PyLong_FromUnsignedLongLong(v);
-	} else {
-		return PyInt_FromLong(v);
-	}
-}
-
 ");
 
 	foreach my $x (@$ndr) {
@@ -2340,9 +2350,9 @@ static inline PyObject *ndr_PyLong_FromUnsignedLongLong(unsigned long long v)
 	$self->pidl("MODULE_INIT_FUNC($basename)");
 	$self->pidl("{");
 	$self->indent;
-	$self->pidl("PyObject *m;");
+	$self->pidl("PyObject *m = NULL;");
 	foreach my $h (@{$self->{module_imports}}) {
-		$self->pidl("PyObject *$h->{'key'};");
+		$self->pidl("PyObject *$h->{'key'} = NULL;");
 	}
 	$self->pidl("");
 
@@ -2351,7 +2361,7 @@ static inline PyObject *ndr_PyLong_FromUnsignedLongLong(unsigned long long v)
 		my $module_path = $h->{'val'};
 		$self->pidl("$var_name = PyImport_ImportModule(\"$module_path\");");
 		$self->pidl("if ($var_name == NULL)");
-		$self->pidl("\treturn NULL;");
+		$self->pidl("\tgoto out;");
 		$self->pidl("");
 	}
 
@@ -2364,7 +2374,7 @@ static inline PyObject *ndr_PyLong_FromUnsignedLongLong(unsigned long long v)
 		$module_var =~ s/\./_/g;
 		$self->pidl("$type_var = (PyTypeObject *)PyObject_GetAttrString($module_var, \"$pretty_name\");");
 		$self->pidl("if ($type_var == NULL)");
-		$self->pidl("\treturn NULL;");
+		$self->pidl("\tgoto out;");
 		$self->pidl("");
 	}
 
@@ -2372,7 +2382,7 @@ static inline PyObject *ndr_PyLong_FromUnsignedLongLong(unsigned long long v)
 
 	foreach (@{$self->{ready_types}}) {
 		$self->pidl("if (PyType_Ready($_) < 0)");
-		$self->pidl("\treturn NULL;");
+		$self->pidl("\tgoto out;");
 	}
 
 	$self->pidl($_) foreach (@{$self->{postreadycode}});
@@ -2388,14 +2398,14 @@ static inline PyObject *ndr_PyLong_FromUnsignedLongLong(unsigned long long v)
 
 	$self->pidl("m = PyModule_Create(&moduledef);");
 	$self->pidl("if (m == NULL)");
-	$self->pidl("\treturn NULL;");
+	$self->pidl("\tgoto out;");
 	$self->pidl("");
 	foreach my $h (@{$self->{constants}}) {
 		my $pretty_name = PrettifyTypeName($h->{'key'}, $basename);
 		my $py_obj;
 		my ($ctype, $cvar) = @{$h->{'val'}};
 		if ($cvar =~ /^[0-9]+$/ or $cvar =~ /^0x[0-9a-fA-F]+$/) {
-			$py_obj = "ndr_PyLong_FromUnsignedLongLong($cvar)";
+			$py_obj = "PyLong_FromUnsignedLongLong($cvar)";
 		} elsif ($cvar =~ /^".*"$/) {
 			$py_obj = "PyStr_FromString($cvar)";
 		} else {
@@ -2414,7 +2424,11 @@ static inline PyObject *ndr_PyLong_FromUnsignedLongLong(unsigned long long v)
 	$self->pidl("#ifdef PY_MOD_".uc($basename)."_PATCH");
 	$self->pidl("PY_MOD_".uc($basename)."_PATCH(m);");
 	$self->pidl("#endif");
-
+	$self->pidl("out:");
+	foreach my $h (@{$self->{module_imports}}) {
+		my $mod_var = $h->{'key'};
+		$self->pidl("Py_XDECREF($mod_var);");
+	}
 	$self->pidl("return m;");
 	$self->pidl("");
 	$self->deindent;

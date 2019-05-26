@@ -38,9 +38,11 @@
 #include "ctdb_private.h"
 #include "ctdb_client.h"
 
-#include "common/system.h"
+#include "common/system_socket.h"
 #include "common/common.h"
 #include "common/logging.h"
+
+#include "server/ctdb_config.h"
 
 #include "ctdb_cluster_mutex.h"
 
@@ -237,6 +239,8 @@ struct ctdb_banning_state {
 	struct timeval last_reported_time;
 };
 
+struct ctdb_recovery_lock_handle;
+
 /*
   private state of recovery daemon
  */
@@ -258,7 +262,7 @@ struct ctdb_recoverd {
 	uint32_t *force_rebalance_nodes;
 	struct ctdb_node_capabilities *caps;
 	bool frozen_on_inactive;
-	struct ctdb_cluster_mutex_handle *recovery_lock_handle;
+	struct ctdb_recovery_lock_handle *recovery_lock_handle;
 };
 
 #define CONTROL_TIMEOUT() timeval_current_ofs(ctdb->tunable.recover_timeout, 0)
@@ -879,18 +883,30 @@ static bool ctdb_recovery_have_lock(struct ctdb_recoverd *rec)
 	return (rec->recovery_lock_handle != NULL);
 }
 
-struct hold_reclock_state {
+struct ctdb_recovery_lock_handle {
 	bool done;
 	bool locked;
 	double latency;
+	struct ctdb_cluster_mutex_handle *h;
+	struct ctdb_recoverd *rec;
 };
 
 static void take_reclock_handler(char status,
 				 double latency,
 				 void *private_data)
 {
-	struct hold_reclock_state *s =
-		(struct hold_reclock_state *) private_data;
+	struct ctdb_recovery_lock_handle *s =
+		(struct ctdb_recovery_lock_handle *) private_data;
+
+	s->locked = (status == '0') ;
+
+	/*
+	 * If unsuccessful then ensure the process has exited and that
+	 * the file descriptor event handler has been cancelled
+	 */
+	if (! s->locked) {
+		TALLOC_FREE(s->h);
+	}
 
 	switch (status) {
 	case '0':
@@ -898,73 +914,114 @@ static void take_reclock_handler(char status,
 		break;
 
 	case '1':
-		DEBUG(DEBUG_ERR,
-		      ("Unable to take recovery lock - contention\n"));
+		D_ERR("Unable to take recovery lock - contention\n");
+		break;
+
+	case '2':
+		D_ERR("Unable to take recovery lock - timeout\n");
 		break;
 
 	default:
-		DEBUG(DEBUG_ERR, ("ERROR: when taking recovery lock\n"));
+		D_ERR("Unable to take recover lock - unknown error\n");
+
+		{
+			struct ctdb_recoverd *rec = s->rec;
+			struct ctdb_context *ctdb = rec->ctdb;
+			uint32_t pnn = ctdb_get_pnn(ctdb);
+
+			D_ERR("Banning this node\n");
+			ctdb_ban_node(rec,
+				      pnn,
+				      ctdb->tunable.recovery_ban_period);
+		}
 	}
 
 	s->done = true;
-	s->locked = (status == '0') ;
 }
 
-static bool ctdb_recovery_lock(struct ctdb_recoverd *rec);
+static void force_election(struct ctdb_recoverd *rec,
+			   uint32_t pnn,
+			   struct ctdb_node_map_old *nodemap);
 
 static void lost_reclock_handler(void *private_data)
 {
 	struct ctdb_recoverd *rec = talloc_get_type_abort(
 		private_data, struct ctdb_recoverd);
 
-	DEBUG(DEBUG_ERR,
-	      ("Recovery lock helper terminated unexpectedly - "
-	       "trying to retake recovery lock\n"));
+	D_ERR("Recovery lock helper terminated, triggering an election\n");
 	TALLOC_FREE(rec->recovery_lock_handle);
-	if (! ctdb_recovery_lock(rec)) {
-		DEBUG(DEBUG_ERR, ("Failed to take recovery lock\n"));
-	}
+
+	force_election(rec, ctdb_get_pnn(rec->ctdb), rec->nodemap);
 }
 
 static bool ctdb_recovery_lock(struct ctdb_recoverd *rec)
 {
 	struct ctdb_context *ctdb = rec->ctdb;
 	struct ctdb_cluster_mutex_handle *h;
-	struct hold_reclock_state s = {
-		.done = false,
-		.locked = false,
-		.latency = 0,
+	struct ctdb_recovery_lock_handle *s;
+
+	s = talloc_zero(rec, struct ctdb_recovery_lock_handle);
+	if (s == NULL) {
+		DBG_ERR("Memory allocation error\n");
+		return false;
 	};
 
-	h = ctdb_cluster_mutex(rec, ctdb, ctdb->recovery_lock, 0,
-			       take_reclock_handler, &s,
-			       lost_reclock_handler, rec);
+	s->rec = rec;
+
+	h = ctdb_cluster_mutex(s,
+			       ctdb,
+			       ctdb->recovery_lock,
+			       120,
+			       take_reclock_handler,
+			       s,
+			       lost_reclock_handler,
+			       rec);
 	if (h == NULL) {
+		talloc_free(s);
 		return false;
 	}
 
-	while (!s.done) {
+	rec->recovery_lock_handle = s;
+	s->h = h;
+
+	while (! s->done) {
 		tevent_loop_once(ctdb->ev);
 	}
 
-	if (! s.locked) {
-		talloc_free(h);
+	if (! s->locked) {
+		TALLOC_FREE(rec->recovery_lock_handle);
 		return false;
 	}
 
-	rec->recovery_lock_handle = h;
-	ctdb_ctrl_report_recd_lock_latency(ctdb, CONTROL_TIMEOUT(),
-					   s.latency);
+	ctdb_ctrl_report_recd_lock_latency(ctdb,
+					   CONTROL_TIMEOUT(),
+					   s->latency);
 
 	return true;
 }
 
 static void ctdb_recovery_unlock(struct ctdb_recoverd *rec)
 {
-	if (rec->recovery_lock_handle != NULL) {
-		DEBUG(DEBUG_NOTICE, ("Releasing recovery lock\n"));
-		TALLOC_FREE(rec->recovery_lock_handle);
+	if (rec->recovery_lock_handle == NULL) {
+		return;
 	}
+
+	if (! rec->recovery_lock_handle->done) {
+		/*
+		 * Taking of recovery lock still in progress.  Free
+		 * the cluster mutex handle to release it but leave
+		 * the recovery lock handle in place to allow taking
+		 * of the lock to fail.
+		 */
+		D_NOTICE("Cancelling recovery lock\n");
+		TALLOC_FREE(rec->recovery_lock_handle->h);
+		rec->recovery_lock_handle->done = true;
+		rec->recovery_lock_handle->locked = false;
+		return;
+	}
+
+	D_NOTICE("Releasing recovery lock\n");
+	TALLOC_FREE(rec->recovery_lock_handle);
 }
 
 static void ban_misbehaving_nodes(struct ctdb_recoverd *rec, bool *self_ban)
@@ -1077,7 +1134,7 @@ static int helper_run(struct ctdb_recoverd *rec, TALLOC_CTX *mem_ctx,
 
 	state->done = false;
 
-	fde = tevent_add_fd(rec->ctdb->ev, rec->ctdb, state->fd[0],
+	fde = tevent_add_fd(rec->ctdb->ev, state, state->fd[0],
 			    TEVENT_FD_READ, helper_handler, state);
 	if (fde == NULL) {
 		goto fail;
@@ -1127,7 +1184,7 @@ static int ctdb_takeover(struct ctdb_recoverd *rec,
 {
 	static char prog[PATH_MAX+1] = "";
 	char *arg;
-	int i;
+	int i, ret;
 
 	if (!ctdb_set_helper("takeover_helper", prog, sizeof(prog),
 			     "CTDB_TAKEOVER_HELPER", CTDB_HELPER_BINDIR,
@@ -1145,6 +1202,14 @@ static int ctdb_takeover(struct ctdb_recoverd *rec,
 		}
 		if (arg == NULL) {
 			DEBUG(DEBUG_ERR, (__location__ " memory error\n"));
+			return -1;
+		}
+	}
+
+	if (ctdb_config.failover_disabled) {
+		ret = setenv("CTDB_DISABLE_IP_FAILOVER", "1", 1);
+		if (ret != 0) {
+			D_ERR("Failed to set CTDB_DISABLE_IP_FAILOVER variable\n");
 			return -1;
 		}
 	}
@@ -1305,31 +1370,47 @@ static int do_recovery(struct ctdb_recoverd *rec,
 		goto fail;
 	}
 
-        if (ctdb->recovery_lock != NULL) {
+	if (ctdb->recovery_lock != NULL) {
 		if (ctdb_recovery_have_lock(rec)) {
-			DEBUG(DEBUG_NOTICE, ("Already holding recovery lock\n"));
+			D_NOTICE("Already holding recovery lock\n");
 		} else {
-			DEBUG(DEBUG_NOTICE, ("Attempting to take recovery lock (%s)\n",
-					     ctdb->recovery_lock));
-			if (!ctdb_recovery_lock(rec)) {
-				if (ctdb->runstate == CTDB_RUNSTATE_FIRST_RECOVERY) {
-					/* If ctdb is trying first recovery, it's
-					 * possible that current node does not know
-					 * yet who the recmaster is.
-					 */
-					DEBUG(DEBUG_ERR, ("Unable to get recovery lock"
-							  " - retrying recovery\n"));
+			bool ok;
+
+			D_NOTICE("Attempting to take recovery lock (%s)\n",
+				 ctdb->recovery_lock);
+
+			ok = ctdb_recovery_lock(rec);
+			if (! ok) {
+				D_ERR("Unable to take recovery lock\n");
+
+				if (pnn != rec->recmaster) {
+					D_NOTICE("Recovery master changed to %u,"
+						 " aborting recovery\n",
+						 rec->recmaster);
+					rec->need_recovery = false;
 					goto fail;
 				}
 
-				DEBUG(DEBUG_ERR,("Unable to get recovery lock - aborting recovery "
-						 "and ban ourself for %u seconds\n",
-						 ctdb->tunable.recovery_ban_period));
-				ctdb_ban_node(rec, pnn, ctdb->tunable.recovery_ban_period);
+				if (ctdb->runstate ==
+				    CTDB_RUNSTATE_FIRST_RECOVERY) {
+					/*
+					 * First recovery?  Perhaps
+					 * current node does not yet
+					 * know who the recmaster is.
+					 */
+					D_ERR("Retrying recovery\n");
+					goto fail;
+				}
+
+				D_ERR("Abort recovery, "
+				      "ban this node for %u seconds\n",
+				      ctdb->tunable.recovery_ban_period);
+				ctdb_ban_node(rec,
+					      pnn,
+					      ctdb->tunable.recovery_ban_period);
 				goto fail;
 			}
-			DEBUG(DEBUG_NOTICE,
-			      ("Recovery lock taken successfully by recovery daemon\n"));
+			D_NOTICE("Recovery lock taken successfully\n");
 		}
 	}
 
@@ -2325,7 +2406,7 @@ static int verify_local_ip_allocation(struct ctdb_context *ctdb,
 	}
 
 	/* Return early if disabled... */
-	if (ctdb->tunable.disable_ip_failover != 0 ||
+	if (ctdb_config.failover_disabled ||
 	    ctdb_op_is_disabled(rec->takeover_run)) {
 		return  0;
 	}
@@ -2581,7 +2662,7 @@ static void main_loop(struct ctdb_context *ctdb, struct ctdb_recoverd *rec,
 		DEBUG(DEBUG_ERR, (__location__ " Failed to read debuglevel from parent\n"));
 		return;
 	}
-	DEBUGLEVEL = debug_level;
+	debuglevel_set(debug_level);
 
 	/* get relevant tunables */
 	ret = ctdb_ctrl_get_all_tunables(ctdb, CONTROL_TIMEOUT(), CTDB_CURRENT_NODE, &ctdb->tunable);
@@ -3204,7 +3285,7 @@ int ctdb_start_recoverd(struct ctdb_context *ctdb)
 		return -1;
 	}
 
-	prctl_set_comment("ctdb_recovered");
+	prctl_set_comment("ctdb_recoverd");
 	if (switch_from_server_to_client(ctdb) != 0) {
 		DEBUG(DEBUG_CRIT, (__location__ "ERROR: failed to switch recovery daemon into client mode. shutting down.\n"));
 		exit(1);

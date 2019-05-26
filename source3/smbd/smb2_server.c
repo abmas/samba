@@ -30,7 +30,10 @@
 #include "../librpc/gen_ndr/krb5pac.h"
 #include "lib/util/iov_buf.h"
 #include "auth.h"
-#include "lib/crypto/sha512.h"
+#include "libcli/smb/smbXcli_base.h"
+
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_SMB2
@@ -428,7 +431,7 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *xconn,
 			tf_iov[1].iov_base = (void *)hdr;
 			tf_iov[1].iov_len = enc_len;
 
-			status = smb2_signing_decrypt_pdu(s->global->decryption_key,
+			status = smb2_signing_decrypt_pdu(s->global->decryption_key_blob,
 							  xconn->smb2.server.cipher,
 							  tf_iov, 2);
 			if (!NT_STATUS_IS_OK(status)) {
@@ -445,6 +448,17 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *xconn,
 		 */
 
 		if (len < SMB2_HDR_BODY + 2) {
+
+			if ((len == 5) &&
+			    (IVAL(hdr, 0) == SMB_SUICIDE_PACKET) &&
+			    lp_parm_bool(-1, "smbd", "suicide mode", false)) {
+				uint8_t exitcode = CVAL(hdr, 4);
+				DBG_WARNING("SUICIDE: Exiting immediately "
+					    "with code %"PRIu8"\n",
+					    exitcode);
+				exit(exitcode);
+			}
+
 			DEBUG(10, ("%d bytes left, expected at least %d\n",
 				   (int)len, SMB2_HDR_BODY));
 			goto inval;
@@ -829,8 +843,11 @@ static void smb2_set_operation_credit(struct smbXsrv_connection *xconn,
 	 *       of requests and the used sequence number.
 	 *       Which means we would grant more credits
 	 *       for client which use multi credit requests.
+	 *
+	 * The above is what Windows Server < 2016 is doing,
+	 * but new servers use all credits (8192 by default).
 	 */
-	current_max_credits = xconn->smb2.credits.max / 16;
+	current_max_credits = xconn->smb2.credits.max;
 	current_max_credits = MAX(current_max_credits, 1);
 
 	if (xconn->smb2.credits.multicredit) {
@@ -875,15 +892,19 @@ static void smb2_set_operation_credit(struct smbXsrv_connection *xconn,
 			 * with a successful session setup
 			 */
 			if (NT_STATUS_IS_OK(out_status)) {
-				additional_max = 32;
+				additional_max = xconn->smb2.credits.max;
 			}
 			break;
 		default:
 			/*
-			 * We match windows and only grant additional credits
-			 * in chunks of 32.
+			 * Windows Server < 2016 and older Samba versions
+			 * used to only grant additional credits in
+			 * chunks of 32 credits.
+			 *
+			 * But we match Windows Server 2016 and grant
+			 * all credits as requested.
 			 */
-			additional_max = 32;
+			additional_max = xconn->smb2.credits.max;
 			break;
 		}
 
@@ -1097,6 +1118,7 @@ void smbd_server_connection_terminate_ex(struct smbXsrv_connection *xconn,
 		/* TODO: cancel pending requests */
 		DLIST_REMOVE(client->connections, xconn);
 		TALLOC_FREE(xconn);
+		DO_PROFILE_INC(disconnect);
 		return;
 	}
 
@@ -1321,10 +1343,15 @@ static NTSTATUS smb2_send_async_interim_response(const struct smbd_smb2_request 
 			return status;
 		}
 	} else if (req->last_key.length > 0) {
-		status = smb2_signing_sign_pdu(req->last_key,
+		struct smb2_signing_key key = {
+			.blob = req->last_key,
+		};
+
+		status = smb2_signing_sign_pdu(&key,
 					       xconn->protocol,
 					       outhdr_v,
 					       SMBD_SMB2_NUM_IOV_PER_REQ - 1);
+		smb2_signing_key_destructor(&key);
 		if (!NT_STATUS_IS_OK(status)) {
 			return status;
 		}
@@ -1390,7 +1417,7 @@ NTSTATUS smbd_smb2_request_pending_queue(struct smbd_smb2_request *req,
 		return NT_STATUS_OK;
 	}
 
-	if (req->async_internal) {
+	if (req->async_internal || defer_time == 0) {
 		/*
 		 * An SMB2 request implementation wants to handle the request
 		 * asynchronously "internally" while keeping synchronous
@@ -1500,19 +1527,20 @@ NTSTATUS smbd_smb2_request_pending_queue(struct smbd_smb2_request *req,
 	return NT_STATUS_OK;
 }
 
-static DATA_BLOB smbd_smb2_signing_key(struct smbXsrv_session *session,
-				       struct smbXsrv_connection *xconn)
+static
+struct smb2_signing_key *smbd_smb2_signing_key(struct smbXsrv_session *session,
+					       struct smbXsrv_connection *xconn)
 {
 	struct smbXsrv_channel_global0 *c = NULL;
 	NTSTATUS status;
-	DATA_BLOB key = data_blob_null;
+	struct smb2_signing_key *key = NULL;
 
 	status = smbXsrv_session_find_channel(session, xconn, &c);
 	if (NT_STATUS_IS_OK(status)) {
 		key = c->signing_key;
 	}
 
-	if (key.length == 0) {
+	if (!smb2_signing_key_valid(key)) {
 		key = session->global->signing_key;
 	}
 
@@ -1708,7 +1736,7 @@ static void smbd_smb2_request_pending_timer(struct tevent_context *ev,
 
 	if (req->do_encryption) {
 		struct smbXsrv_session *x = req->session;
-		DATA_BLOB encryption_key = x->global->encryption_key;
+		DATA_BLOB encryption_key = x->global->encryption_key_blob;
 
 		status = smb2_signing_encrypt_pdu(encryption_key,
 					xconn->smb2.server.cipher,
@@ -1721,7 +1749,8 @@ static void smbd_smb2_request_pending_timer(struct tevent_context *ev,
 		}
 	} else if (req->do_signing) {
 		struct smbXsrv_session *x = req->session;
-		DATA_BLOB signing_key = smbd_smb2_signing_key(x, xconn);
+		struct smb2_signing_key *signing_key =
+			smbd_smb2_signing_key(x, xconn);
 
 		status = smb2_signing_sign_pdu(signing_key,
 					xconn->protocol,
@@ -2358,7 +2387,11 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
 
 	req->async_internal = false;
 	req->do_signing = false;
-	req->do_encryption = false;
+	if (opcode != SMB2_OP_SESSSETUP) {
+		req->do_encryption = encryption_desired;
+	} else {
+		req->do_encryption = false;
+	}
 	req->was_encrypted = false;
 	if (intf_v->iov_len == SMB2_TF_HDR_SIZE) {
 		const uint8_t *intf = SMBD_SMB2_IN_TF_PTR(req);
@@ -2382,9 +2415,11 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
 		}
 
 		req->was_encrypted = true;
+		req->do_encryption = true;
 	}
 
 	if (encryption_required && !req->was_encrypted) {
+		req->do_encryption = true;
 		return smbd_smb2_request_error(req,
 				NT_STATUS_ACCESS_DENIED);
 	}
@@ -2430,7 +2465,7 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
 	if (req->was_encrypted) {
 		signing_required = false;
 	} else if (signing_required || (flags & SMB2_HDR_FLAG_SIGNED)) {
-		DATA_BLOB signing_key = data_blob_null;
+		struct smb2_signing_key *signing_key = NULL;
 
 		if (x == NULL) {
 			/*
@@ -2458,7 +2493,7 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
 		 * If we have a signing key, we should
 		 * sign the response
 		 */
-		if (signing_key.length > 0) {
+		if (smb2_signing_key_valid(signing_key)) {
 			req->do_signing = true;
 		}
 
@@ -2522,8 +2557,11 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
 			encryption_required = true;
 		}
 		if (encryption_required && !req->was_encrypted) {
+			req->do_encryption = true;
 			return smbd_smb2_request_error(req,
 				NT_STATUS_ACCESS_DENIED);
+		} else if (encryption_desired) {
+			req->do_encryption = true;
 		}
 	} else if (call->need_session) {
 		struct auth_session_info *session_info = NULL;
@@ -2541,10 +2579,6 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
 		set_current_user_info(session_info->unix_info->sanitized_username,
 				      session_info->unix_info->unix_name,
 				      session_info->info->domain_name);
-	}
-
-	if (req->was_encrypted || encryption_desired) {
-		req->do_encryption = true;
 	}
 
 	if (req->session) {
@@ -2614,10 +2648,8 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
 		SMB_ASSERT(call->fileid_ofs == 0);
 		/* This call needs to be run as root */
 		change_to_root_user();
-		req->ev_ctx = req->sconn->root_ev_ctx;
 	} else {
 		SMB_ASSERT(call->need_tcon);
-		req->ev_ctx = req->tcon->compat->user_ev_ctx;
 	}
 
 #define _INBYTES(_r) \
@@ -2819,9 +2851,9 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
 	    (firsttf->iov_len == 0) &&
 	    (req->first_key.length == 0) &&
 	    (req->session != NULL) &&
-	    (req->session->global->encryption_key.length != 0))
+	    (req->session->global->encryption_key_blob.length != 0))
 	{
-		DATA_BLOB encryption_key = req->session->global->encryption_key;
+		DATA_BLOB encryption_key = req->session->global->encryption_key_blob;
 		uint8_t *tf;
 		uint64_t session_id = req->session->global->session_wire_id;
 		uint64_t nonce_high;
@@ -2871,16 +2903,20 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
 	{
 		int last_idx = req->current_idx - SMBD_SMB2_NUM_IOV_PER_REQ;
 		struct iovec *lasthdr = SMBD_SMB2_IDX_HDR_IOV(req,out,last_idx);
+		struct smb2_signing_key key = {
+			.blob = req->last_key,
+		};
 
 		/*
 		 * As we are sure the header of the last request in the
 		 * compound chain will not change, we can to sign here
 		 * with the last signing key we remembered.
 		 */
-		status = smb2_signing_sign_pdu(req->last_key,
+		status = smb2_signing_sign_pdu(&key,
 					       xconn->protocol,
 					       lasthdr,
 					       SMBD_SMB2_NUM_IOV_PER_REQ - 1);
+		smb2_signing_key_destructor(&key);
 		if (!NT_STATUS_IS_OK(status)) {
 			return status;
 		}
@@ -2910,7 +2946,8 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
 
 		if (req->do_signing && firsttf->iov_len == 0) {
 			struct smbXsrv_session *x = req->session;
-			DATA_BLOB signing_key = smbd_smb2_signing_key(x, xconn);
+			struct smb2_signing_key *signing_key =
+				smbd_smb2_signing_key(x, xconn);
 
 			/*
 			 * we need to remember the signing key
@@ -2918,7 +2955,8 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
 			 * we are sure that we do not change
 			 * the header again.
 			 */
-			req->last_key = data_blob_dup_talloc(req, signing_key);
+			req->last_key = data_blob_dup_talloc(req,
+							     signing_key->blob);
 			if (req->last_key.data == NULL) {
 				return NT_STATUS_NO_MEMORY;
 			}
@@ -2962,7 +3000,8 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
 		}
 	} else if (req->do_signing) {
 		struct smbXsrv_session *x = req->session;
-		DATA_BLOB signing_key = smbd_smb2_signing_key(x, xconn);
+		struct smb2_signing_key *signing_key =
+			smbd_smb2_signing_key(x, xconn);
 
 		status = smb2_signing_sign_pdu(signing_key,
 					       xconn->protocol,
@@ -2977,28 +3016,54 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
 	}
 
 	if (req->preauth != NULL) {
-		struct hc_sha512state sctx;
-		int i;
+		gnutls_hash_hd_t hash_hnd = NULL;
+		size_t i;
+		int rc;
 
-		samba_SHA512_Init(&sctx);
-		samba_SHA512_Update(&sctx, req->preauth->sha512_value,
-				    sizeof(req->preauth->sha512_value));
+		rc = gnutls_hash_init(&hash_hnd, GNUTLS_DIG_SHA512);
+		if (rc < 0) {
+			return NT_STATUS_NO_MEMORY;
+		}
+		rc = gnutls_hash(hash_hnd,
+			    req->preauth->sha512_value,
+			    sizeof(req->preauth->sha512_value));
+		if (rc < 0) {
+			gnutls_hash_deinit(hash_hnd, NULL);
+			return NT_STATUS_INTERNAL_ERROR;
+		}
 		for (i = 1; i < req->in.vector_count; i++) {
-			samba_SHA512_Update(&sctx,
-					    req->in.vector[i].iov_base,
-					    req->in.vector[i].iov_len);
+			rc = gnutls_hash(hash_hnd,
+					 req->in.vector[i].iov_base,
+					 req->in.vector[i].iov_len);
+			if (rc < 0) {
+				gnutls_hash_deinit(hash_hnd, NULL);
+				return NT_STATUS_INTERNAL_ERROR;
+			}
 		}
-		samba_SHA512_Final(req->preauth->sha512_value, &sctx);
+		if (rc < 0) {
+			gnutls_hash_deinit(hash_hnd, NULL);
+			return NT_STATUS_INTERNAL_ERROR;
+		}
+		gnutls_hash_output(hash_hnd, req->preauth->sha512_value);
 
-		samba_SHA512_Init(&sctx);
-		samba_SHA512_Update(&sctx, req->preauth->sha512_value,
-				    sizeof(req->preauth->sha512_value));
-		for (i = 1; i < req->out.vector_count; i++) {
-			samba_SHA512_Update(&sctx,
-					    req->out.vector[i].iov_base,
-					    req->out.vector[i].iov_len);
+		rc = gnutls_hash(hash_hnd,
+				 req->preauth->sha512_value,
+				 sizeof(req->preauth->sha512_value));
+		if (rc < 0) {
+			gnutls_hash_deinit(hash_hnd, NULL);
+			return NT_STATUS_INTERNAL_ERROR;
 		}
-		samba_SHA512_Final(req->preauth->sha512_value, &sctx);
+		for (i = 1; i < req->out.vector_count; i++) {
+			rc = gnutls_hash(hash_hnd,
+					 req->out.vector[i].iov_base,
+					 req->out.vector[i].iov_len);
+			if (rc < 0) {
+				gnutls_hash_deinit(hash_hnd, NULL);
+				return NT_STATUS_INTERNAL_ERROR;
+			}
+		}
+
+		gnutls_hash_deinit(hash_hnd, req->preauth->sha512_value);
 
 		req->preauth = NULL;
 	}
@@ -3348,7 +3413,7 @@ static NTSTATUS smbd_smb2_send_break(struct smbXsrv_connection *xconn,
 	}
 
 	if (do_encryption) {
-		DATA_BLOB encryption_key = session->global->encryption_key;
+		DATA_BLOB encryption_key = session->global->encryption_key_blob;
 
 		status = smb2_signing_encrypt_pdu(encryption_key,
 					xconn->smb2.server.cipher,
@@ -3486,6 +3551,9 @@ static bool is_smb2_recvfile_write(struct smbd_smb2_request_read_state *state)
 		return false;
 	}
 	if (IS_PRINT(fsp->conn)) {
+		return false;
+	}
+	if (fsp->base_fsp != NULL) {
 		return false;
 	}
 

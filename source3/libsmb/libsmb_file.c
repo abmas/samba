@@ -298,7 +298,7 @@ SMBC_splice_ctx(SMBCCTX *context,
                 int (*splice_cb)(off_t n, void *priv),
                 void *priv)
 {
-	off_t written;
+	off_t written = 0;
 	TALLOC_CTX *frame = talloc_stackframe();
 	NTSTATUS status;
 
@@ -619,7 +619,7 @@ SMBC_setatr(SMBCCTX * context, SMBCSRV *srv, char *path,
                 if (!NT_STATUS_IS_OK(cli_open(srv->cli, path, O_RDWR, DENY_NONE, &fd))) {
                         errno = SMBC_errno(context, srv->cli);
 			TALLOC_FREE(frame);
-                        return -1;
+                        return False;
                 }
 
                 /* Set the new attributes */

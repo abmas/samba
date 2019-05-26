@@ -24,9 +24,11 @@
 #include "includes.h"
 #include "smbd/smbd.h"
 #include "system/filesys.h"
-#include "../lib/crypto/md5.h"
 #include "lib/util/tevent_unix.h"
 #include "librpc/gen_ndr/ioctl.h"
+
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_VFS
@@ -47,10 +49,11 @@ struct stream_io {
 
 static SMB_INO_T stream_inode(const SMB_STRUCT_STAT *sbuf, const char *sname)
 {
-	MD5_CTX ctx;
-        unsigned char hash[16];
-	SMB_INO_T result;
+	unsigned char hash[16];
+	gnutls_hash_hd_t hash_hnd = NULL;
+	SMB_INO_T result = 0;
 	char *upper_sname;
+	int rc;
 
 	DEBUG(10, ("stream_inode called for %lu/%lu [%s]\n",
 		   (unsigned long)sbuf->st_ex_dev,
@@ -59,21 +62,42 @@ static SMB_INO_T stream_inode(const SMB_STRUCT_STAT *sbuf, const char *sname)
 	upper_sname = talloc_strdup_upper(talloc_tos(), sname);
 	SMB_ASSERT(upper_sname != NULL);
 
-        MD5Init(&ctx);
-        MD5Update(&ctx, (const unsigned char *)&(sbuf->st_ex_dev),
-		  sizeof(sbuf->st_ex_dev));
-        MD5Update(&ctx, (const unsigned char *)&(sbuf->st_ex_ino),
-		  sizeof(sbuf->st_ex_ino));
-        MD5Update(&ctx, (unsigned char *)upper_sname,
-		  talloc_get_size(upper_sname)-1);
-        MD5Final(hash, &ctx);
+	rc = gnutls_hash_init(&hash_hnd, GNUTLS_DIG_MD5);
+	if (rc < 0) {
+		goto out;
+	}
 
-	TALLOC_FREE(upper_sname);
+	rc = gnutls_hash(hash_hnd, &(sbuf->st_ex_dev), sizeof(sbuf->st_ex_dev));
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		goto out;
+	}
+	rc = gnutls_hash(hash_hnd,
+			 &(sbuf->st_ex_ino),
+			 sizeof(sbuf->st_ex_ino));
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		goto out;
+	}
+	rc = gnutls_hash(hash_hnd,
+			 upper_sname,
+			 talloc_get_size(upper_sname) - 1);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		goto out;
+	}
+
+	gnutls_hash_deinit(hash_hnd, hash);
+
 
         /* Hopefully all the variation is in the lower 4 (or 8) bytes! */
 	memcpy(&result, hash, sizeof(result));
+	ZERO_ARRAY(hash);
 
 	DEBUG(10, ("stream_inode returns %lu\n", (unsigned long)result));
+
+out:
+	TALLOC_FREE(upper_sname);
 
 	return result;
 }
@@ -190,15 +214,20 @@ static bool streams_xattr_recheck(struct stream_io *sio)
 	TALLOC_FREE(sio->base);
 	sio->xattr_name = talloc_strdup(VFS_MEMCTX_FSP_EXTENSION(sio->handle, sio->fsp),
 					xattr_name);
-        sio->base = talloc_strdup(VFS_MEMCTX_FSP_EXTENSION(sio->handle, sio->fsp),
-                                  sio->fsp->fsp_name->base_name);
-	sio->fsp_name_ptr = sio->fsp->fsp_name;
-
-	TALLOC_FREE(xattr_name);
-
-	if ((sio->xattr_name == NULL) || (sio->base == NULL)) {
+	if (sio->xattr_name == NULL) {
+		DBG_DEBUG("sio->xattr_name==NULL\n");
 		return false;
 	}
+	TALLOC_FREE(xattr_name);
+
+	sio->base = talloc_strdup(VFS_MEMCTX_FSP_EXTENSION(sio->handle, sio->fsp),
+				  sio->fsp->fsp_name->base_name);
+	if (sio->base == NULL) {
+		DBG_DEBUG("sio->base==NULL\n");
+		return false;
+	}
+
+	sio->fsp_name_ptr = sio->fsp->fsp_name;
 
 	return true;
 }
@@ -407,6 +436,7 @@ static int streams_xattr_open(vfs_handle_struct *handle,
 	char *xattr_name = NULL;
 	int pipe_fds[2];
 	int fakefd = -1;
+	bool set_empty_xattr = false;
 	int ret;
 
 	SMB_VFS_HANDLE_GET_DATA(handle, config, struct streams_xattr_config,
@@ -440,39 +470,37 @@ static int streams_xattr_open(vfs_handle_struct *handle,
 		goto fail;
 	}
 
-	/*
-	 * Return a valid fd, but ensure any attempt to use it returns an error
-	 * (EPIPE).
-	 */
-	ret = pipe(pipe_fds);
-	if (ret != 0) {
-		goto fail;
-	}
-
-	close(pipe_fds[1]);
-	pipe_fds[1] = -1;
-	fakefd = pipe_fds[0];
-
 	status = get_ea_value(talloc_tos(), handle->conn, NULL,
 			      smb_fname, xattr_name, &ea);
 
 	DEBUG(10, ("get_ea_value returned %s\n", nt_errstr(status)));
 
-	if (!NT_STATUS_IS_OK(status)
-	    && !NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND)) {
-		/*
-		 * The base file is not there. This is an error even if we got
-		 * O_CREAT, the higher levels should have created the base
-		 * file for us.
-		 */
-		DEBUG(10, ("streams_xattr_open: base file %s not around, "
-			   "returning ENOENT\n", smb_fname->base_name));
-		errno = ENOENT;
-		goto fail;
+	if (!NT_STATUS_IS_OK(status)) {
+		if (!NT_STATUS_EQUAL(status, NT_STATUS_NOT_FOUND)) {
+			/*
+			 * The base file is not there. This is an error even if
+			 * we got O_CREAT, the higher levels should have created
+			 * the base file for us.
+			 */
+			DBG_DEBUG("streams_xattr_open: base file %s not around, "
+				  "returning ENOENT\n", smb_fname->base_name);
+			errno = ENOENT;
+			goto fail;
+		}
+
+		if (!(flags & O_CREAT)) {
+			errno = ENOATTR;
+			goto fail;
+		}
+
+		set_empty_xattr = true;
 	}
 
-	if ((!NT_STATUS_IS_OK(status) && (flags & O_CREAT)) ||
-	    (flags & O_TRUNC)) {
+	if (flags & O_TRUNC) {
+		set_empty_xattr = true;
+	}
+
+	if (set_empty_xattr) {
 		/*
 		 * The attribute does not exist or needs to be truncated
 		 */
@@ -495,6 +523,19 @@ static int streams_xattr_open(vfs_handle_struct *handle,
 		}
 	}
 
+	/*
+	 * Return a valid fd, but ensure any attempt to use it returns an error
+	 * (EPIPE).
+	 */
+	ret = pipe(pipe_fds);
+	if (ret != 0) {
+		goto fail;
+	}
+
+	close(pipe_fds[1]);
+	pipe_fds[1] = -1;
+	fakefd = pipe_fds[0];
+
         sio = VFS_ADD_FSP_EXTENSION(handle, fsp, struct stream_io, NULL);
         if (sio == NULL) {
                 errno = ENOMEM;
@@ -503,6 +544,11 @@ static int streams_xattr_open(vfs_handle_struct *handle,
 
         sio->xattr_name = talloc_strdup(VFS_MEMCTX_FSP_EXTENSION(handle, fsp),
 					xattr_name);
+	if (sio->xattr_name == NULL) {
+		errno = ENOMEM;
+		goto fail;
+	}
+
 	/*
 	 * so->base needs to be a copy of fsp->fsp_name->base_name,
 	 * making it identical to streams_xattr_recheck(). If the
@@ -512,14 +558,14 @@ static int streams_xattr_open(vfs_handle_struct *handle,
 	 */
         sio->base = talloc_strdup(VFS_MEMCTX_FSP_EXTENSION(handle, fsp),
 				  fsp->fsp_name->base_name);
-	sio->fsp_name_ptr = fsp->fsp_name;
-	sio->handle = handle;
-	sio->fsp = fsp;
-
-	if ((sio->xattr_name == NULL) || (sio->base == NULL)) {
+	if (sio->base == NULL) {
 		errno = ENOMEM;
 		goto fail;
 	}
+
+	sio->fsp_name_ptr = fsp->fsp_name;
+	sio->handle = handle;
+	sio->fsp = fsp;
 
 	return fakefd;
 
@@ -530,6 +576,31 @@ static int streams_xattr_open(vfs_handle_struct *handle,
 	}
 
 	return -1;
+}
+
+static int streams_xattr_close(vfs_handle_struct *handle,
+			       files_struct *fsp)
+{
+	int ret;
+	int fd;
+
+	fd = fsp->fh->fd;
+
+	DBG_DEBUG("streams_xattr_close called [%s] fd [%d]\n",
+			smb_fname_str_dbg(fsp->fsp_name), fd);
+
+	if (!is_ntfs_stream_smb_fname(fsp->fsp_name)) {
+		return SMB_VFS_NEXT_CLOSE(handle, fsp);
+	}
+
+	if (is_ntfs_default_stream_smb_fname(fsp->fsp_name)) {
+		return SMB_VFS_NEXT_CLOSE(handle, fsp);
+	}
+
+	ret = close(fd);
+	fsp->fh->fd = -1;
+
+	return ret;
 }
 
 static int streams_xattr_unlink(vfs_handle_struct *handle,
@@ -1631,6 +1702,7 @@ static struct vfs_fn_pointers vfs_streams_xattr_fns = {
 	.fs_capabilities_fn = streams_xattr_fs_capabilities,
 	.connect_fn = streams_xattr_connect,
 	.open_fn = streams_xattr_open,
+	.close_fn = streams_xattr_close,
 	.stat_fn = streams_xattr_stat,
 	.fstat_fn = streams_xattr_fstat,
 	.lstat_fn = streams_xattr_lstat,

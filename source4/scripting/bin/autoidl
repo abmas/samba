@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 # Unix SMB/CIFS implementation.
@@ -17,6 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
+from __future__ import print_function
 
 import sys
 
@@ -37,8 +38,8 @@ def find_num_funcs(conn):
     for i in xrange(MAX_OPNUM):
         try:
             conn.request(i, "")
-        except RuntimeError, (num, msg):
-            if num == DCERPC_FAULT_OP_RNG_ERROR:
+        except RuntimeError as e:
+            if e.args[0] == DCERPC_FAULT_OP_RNG_ERROR:
                 return i
     raise Exception("More than %d functions" % MAX_OPNUM)
 
@@ -54,7 +55,8 @@ class Function:
     def valid_ndr(self, data):
         try:
             self.request(data)
-        except RuntimeError, (num, msg):
+        except RuntimeError as e:
+            (num, msg) = e.args
             if num == DCERPC_FAULT_NDR:
                 return False
         return True
@@ -107,25 +109,25 @@ class Function:
         if base_request is None:
             raise Exception("Unable to determine base size for opnum %d" % self.opnum)
 
-        print "\tBase request is %r" % base_request
+        print("\tBase request is %r" % base_request)
 
         decision_byte_map = map(lambda x: self.check_decision_byte(base_request, x), range(len(base_request)))
 
-        print decision_byte_map
+        print(decision_byte_map)
         
         # find pointers
         possible_pointers = map(all, 
             [decision_byte_map[i*4:(i+1)*4] for i in range(int(len(base_request)/4))])
-        print possible_pointers
+        print(possible_pointers)
 
         pointer_deferrant_bases = map(
             lambda x: self.find_deferrant_data(base_request, x) if possible_pointers[x] else None, range(len(possible_pointers)))
 
-        print pointer_deferrant_bases
+        print(pointer_deferrant_bases)
 
 
 if len(sys.argv) < 3:
-    print "Usage: autoidl <binding> <UUID> [<version>]"
+    print("Usage: autoidl <binding> <UUID> [<version>]")
     sys.exit(1)
 
 (binding, uuid) = sys.argv[1:3]
@@ -147,15 +149,15 @@ if version is None:
 else:
     conn = ClientConnection(binding, (uuid, version))
 
-print "Figuring out number of connections...",
+print("Figuring out number of connections... ", end='')
 num_funcs = find_num_funcs(conn)
-print "%d" % num_funcs
+print("%d" % num_funcs)
 
 # Figure out the syntax for each one
 for i in range(num_funcs):
-    print "Function %d" % i
+    print("Function %d" % i)
     data = Function(conn, i)
     try:
         data.find_idl()
     except Exception as e:
-        print "Error: %r" % e
+        print("Error: %r" % e)

@@ -18,6 +18,7 @@
  */
 
 #include "replace.h"
+#include "util/util.h"
 #include "system/network.h"
 #include "system/filesys.h"
 #include "system/dir.h"
@@ -553,7 +554,7 @@ static void messaging_dgm_out_threaded_job(void *private_data)
 		if (state->sent != -1) {
 			return;
 		}
-		if (errno != ENOBUFS) {
+		if (state->err != ENOBUFS) {
 			return;
 		}
 
@@ -1066,7 +1067,7 @@ int messaging_dgm_init(struct tevent_context *ev,
 
 	ctx->have_dgm_context = &have_dgm_context;
 
-	ret = pthreadpool_tevent_init(ctx, 0, &ctx->pool);
+	ret = pthreadpool_tevent_init(ctx, UINT_MAX, &ctx->pool);
 	if (ret != 0) {
 		DBG_WARNING("pthreadpool_tevent_init failed: %s\n",
 			    strerror(ret));
@@ -1243,6 +1244,7 @@ static void messaging_dgm_read_handler(struct tevent_context *ev,
 	size_t msgbufsize = msghdr_prep_recv_fds(NULL, NULL, 0, INT8_MAX);
 	uint8_t msgbuf[msgbufsize];
 	uint8_t buf[MESSAGING_DGM_FRAGMENT_LENGTH];
+	size_t num_fds;
 
 	messaging_dgm_validate(ctx);
 
@@ -1278,8 +1280,12 @@ static void messaging_dgm_read_handler(struct tevent_context *ev,
 		return;
 	}
 
-	{
-		size_t num_fds = msghdr_extract_fds(&msg, NULL, 0);
+	num_fds = msghdr_extract_fds(&msg, NULL, 0);
+	if (num_fds == 0) {
+		int fds[1];
+
+		messaging_dgm_recv(ctx, ev, buf, received, fds, 0);
+	} else {
 		size_t i;
 		int fds[num_fds];
 
@@ -1297,7 +1303,6 @@ static void messaging_dgm_read_handler(struct tevent_context *ev,
 
 		messaging_dgm_recv(ctx, ev, buf, received, fds, num_fds);
 	}
-
 }
 
 static int messaging_dgm_in_msg_destructor(struct messaging_dgm_in_msg *m)
@@ -1415,6 +1420,7 @@ int messaging_dgm_send(pid_t pid,
 	struct messaging_dgm_context *ctx = global_dgm_context;
 	struct messaging_dgm_out *out;
 	int ret;
+	unsigned retries = 0;
 
 	if (ctx == NULL) {
 		return ENOTCONN;
@@ -1422,6 +1428,7 @@ int messaging_dgm_send(pid_t pid,
 
 	messaging_dgm_validate(ctx);
 
+again:
 	ret = messaging_dgm_out_get(ctx, pid, &out);
 	if (ret != 0) {
 		return ret;
@@ -1431,6 +1438,20 @@ int messaging_dgm_send(pid_t pid,
 
 	ret = messaging_dgm_out_send_fragmented(ctx->ev, out, iov, iovlen,
 						fds, num_fds);
+	if (ret == ECONNREFUSED) {
+		/*
+		 * We cache outgoing sockets. If the receiver has
+		 * closed and re-opened the socket since our last
+		 * message, we get connection refused. Retry.
+		 */
+
+		TALLOC_FREE(out);
+
+		if (retries < 5) {
+			retries += 1;
+			goto again;
+		}
+	}
 	return ret;
 }
 
@@ -1438,6 +1459,7 @@ static int messaging_dgm_read_unique(int fd, uint64_t *punique)
 {
 	char buf[25];
 	ssize_t rw_ret;
+	int error = 0;
 	unsigned long long unique;
 	char *endptr;
 
@@ -1447,13 +1469,11 @@ static int messaging_dgm_read_unique(int fd, uint64_t *punique)
 	}
 	buf[rw_ret] = '\0';
 
-	unique = strtoull(buf, &endptr, 10);
-	if ((unique == 0) && (errno == EINVAL)) {
-		return EINVAL;
+	unique = strtoull_err(buf, &endptr, 10, &error);
+	if (error != 0) {
+		return error;
 	}
-	if ((unique == ULLONG_MAX) && (errno == ERANGE)) {
-		return ERANGE;
-	}
+
 	if (endptr[0] != '\n') {
 		return EINVAL;
 	}
@@ -1504,7 +1524,9 @@ int messaging_dgm_cleanup(pid_t pid)
 	struct messaging_dgm_context *ctx = global_dgm_context;
 	struct sun_path_buf lockfile_name, socket_name;
 	int fd, len, ret;
-	struct flock lck = {};
+	struct flock lck = {
+		.l_pid = 0,
+	};
 
 	if (ctx == NULL) {
 		return ENOTCONN;
@@ -1595,6 +1617,7 @@ int messaging_dgm_forall(int (*fn)(pid_t pid, void *private_data),
 	struct messaging_dgm_context *ctx = global_dgm_context;
 	DIR *msgdir;
 	struct dirent *dp;
+	int error = 0;
 
 	if (ctx == NULL) {
 		return ENOTCONN;
@@ -1617,8 +1640,8 @@ int messaging_dgm_forall(int (*fn)(pid_t pid, void *private_data),
 		unsigned long pid;
 		int ret;
 
-		pid = strtoul(dp->d_name, NULL, 10);
-		if (pid == 0) {
+		pid = strtoul_err(dp->d_name, NULL, 10, &error);
+		if ((pid == 0) || (error != 0)) {
 			/*
 			 * . and .. and other malformed entries
 			 */

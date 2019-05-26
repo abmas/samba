@@ -32,6 +32,7 @@
 #include "param/pyparam.h"
 #include "lib/util/dlinklist.h"
 #include "dsdb/kcc/garbage_collect_tombstones.h"
+#include "dsdb/kcc/scavenge_dns_records.h"
 
 
 /* FIXME: These should be in a header file somewhere */
@@ -52,10 +53,13 @@
 static PyObject *py_ldb_get_exception(void)
 {
 	PyObject *mod = PyImport_ImportModule("ldb");
+	PyObject *result = NULL;
 	if (mod == NULL)
 		return NULL;
 
-	return PyObject_GetAttrString(mod, "LdbError");
+	result = PyObject_GetAttrString(mod, "LdbError");
+	Py_CLEAR(mod);
+	return result;
 }
 
 static void PyErr_SetLdbError(PyObject *error, int ret, struct ldb_context *ldb_ctx)
@@ -190,8 +194,8 @@ static PyObject *py_samdb_get_domain_sid(PyLdbObject *self, PyObject *args)
 	PyObject *py_ldb;
 	struct ldb_context *ldb;
 	const struct dom_sid *sid;
+	struct dom_sid_buf buf;
 	PyObject *ret;
-	char *retstr;
 
 	if (!PyArg_ParseTuple(args, "O", &py_ldb))
 		return NULL;
@@ -204,13 +208,7 @@ static PyObject *py_samdb_get_domain_sid(PyLdbObject *self, PyObject *args)
 		return NULL;
 	}
 
-	retstr = dom_sid_string(NULL, sid);
-	if (retstr == NULL) {
-		PyErr_NoMemory();
-		return NULL;
-	}
-	ret = PyStr_FromString(retstr);
-	talloc_free(retstr);
+	ret = PyStr_FromString(dom_sid_str_buf(sid, &buf));
 	return ret;
 }
 
@@ -518,7 +516,6 @@ static PyObject *py_dsdb_DsReplicaAttribute(PyObject *self, PyObject *args)
 	TALLOC_CTX *tmp_ctx;
 	WERROR werr;
 	Py_ssize_t i;
-	Py_ssize_t _size;
 
 	if (!PyArg_ParseTuple(args, "OsO", &py_ldb, &ldap_display_name, &el_list)) {
 		return NULL;
@@ -580,13 +577,17 @@ static PyObject *py_dsdb_DsReplicaAttribute(PyObject *self, PyObject *args)
 
 		for (i = 0; i < el->num_values; i++) {
 			PyObject *item = PyList_GetItem(el_list, i);
-			if (!(PyStr_Check(item) || PyUnicode_Check(item))) {
-				PyErr_Format(PyExc_TypeError, "ldif_elements should be strings");
+			if (!(PyBytes_Check(item))) {
+				PyErr_Format(PyExc_TypeError,
+					     "ldif_element type should be "
+					     PY_DESC_PY3_BYTES
+					     );
 				talloc_free(tmp_ctx);
 				return NULL;
 			}
-			el->values[i].data = (uint8_t *)PyStr_AsUTF8AndSize(item, &_size);
-			el->values[i].length = _size;
+			el->values[i].data =
+				(uint8_t *)PyBytes_AsString(item);
+			el->values[i].length = PyBytes_Size(item);
 		}
 	}
 
@@ -743,13 +744,23 @@ static PyObject *py_dsdb_normalise_attributes(PyObject *self, PyObject *args)
 
 	py_type = (PyTypeObject *)PyObject_GetAttrString(module, "MessageElement");
 	if (py_type == NULL) {
+		Py_DECREF(module);
 		return NULL;
 	}
+
+	Py_CLEAR(module);
+
 	py_ret = py_type->tp_alloc(py_type, 0);
+	Py_CLEAR(py_type);
+	if (py_ret == NULL) {
+		PyErr_NoMemory();
+		return NULL;
+	}
 	ret = (PyLdbMessageElementObject *)py_ret;
 
 	ret->mem_ctx = talloc_new(NULL);
 	if (talloc_reference(ret->mem_ctx, new_el) == NULL) {
+		Py_CLEAR(py_ret);
 		PyErr_NoMemory();
 		return NULL;
 	}
@@ -869,11 +880,10 @@ static PyObject *py_dsdb_load_partition_usn(PyObject *self, PyObject *args)
 
 	talloc_free(mem_ctx);
 
-	result = PyDict_New();
-
-	PyDict_SetItemString(result, "uSNHighest", PyInt_FromLong((uint64_t)highest_uSN));
-	PyDict_SetItemString(result, "uSNUrgent", PyInt_FromLong((uint64_t)urgent_uSN));
-
+	result = Py_BuildValue(
+			"{s:l, s:l}",
+			"uSNHighest", (uint64_t)highest_uSN,
+			"uSNUrgent", (uint64_t)urgent_uSN);
 
 	return result;
 }
@@ -1150,6 +1160,74 @@ static PyObject *py_dsdb_allocate_rid(PyObject *self, PyObject *args)
 	return PyInt_FromLong(rid);
 }
 
+static PyObject *py_dns_delete_tombstones(PyObject *self, PyObject *args)
+{
+	PyObject *py_ldb;
+	NTSTATUS status;
+	struct ldb_context *ldb = NULL;
+	TALLOC_CTX *mem_ctx = NULL;
+	char *error_string = NULL;
+
+	if (!PyArg_ParseTuple(args, "O", &py_ldb)) {
+		return NULL;
+	}
+	PyErr_LDB_OR_RAISE(py_ldb, ldb);
+
+	mem_ctx = talloc_new(ldb);
+	if (mem_ctx == NULL) {
+		return PyErr_NoMemory();
+	}
+
+	status = dns_delete_tombstones(mem_ctx, ldb, &error_string);
+
+	if (!NT_STATUS_IS_OK(status)) {
+		if (error_string) {
+			PyErr_Format(PyExc_RuntimeError, "%s", error_string);
+		} else {
+			PyErr_SetNTSTATUS(status);
+		}
+		TALLOC_FREE(mem_ctx);
+		return NULL;
+	}
+
+	TALLOC_FREE(mem_ctx);
+	Py_RETURN_NONE;
+}
+
+static PyObject *py_scavenge_dns_records(PyObject *self, PyObject *args)
+{
+	PyObject *py_ldb;
+	NTSTATUS status;
+	struct ldb_context *ldb = NULL;
+	TALLOC_CTX *mem_ctx = NULL;
+	char *error_string = NULL;
+
+	if (!PyArg_ParseTuple(args, "O", &py_ldb)) {
+		return NULL;
+	}
+	PyErr_LDB_OR_RAISE(py_ldb, ldb);
+
+	mem_ctx = talloc_new(ldb);
+	if (mem_ctx == NULL) {
+		return PyErr_NoMemory();
+	}
+
+	status = dns_tombstone_records(mem_ctx, ldb, &error_string);
+
+	if (!NT_STATUS_IS_OK(status)) {
+		if (error_string) {
+			PyErr_Format(PyExc_RuntimeError, "%s", error_string);
+		} else {
+			PyErr_SetNTSTATUS(status);
+		}
+		TALLOC_FREE(mem_ctx);
+		return NULL;
+	}
+
+	TALLOC_FREE(mem_ctx);
+	Py_RETURN_NONE;
+}
+
 static PyObject *py_dsdb_garbage_collect_tombstones(PyObject *self, PyObject *args)
 {
 	PyObject *py_ldb, *py_list_dn;
@@ -1204,7 +1282,7 @@ static PyObject *py_dsdb_garbage_collect_tombstones(PyObject *self, PyObject *ar
 	length = PyList_GET_SIZE(py_list_dn);
 
 	for (i = 0; i < length; i++) {
-		char *part_str = PyStr_AsString(PyList_GetItem(py_list_dn, i));
+		const char *part_str = PyStr_AsString(PyList_GetItem(py_list_dn, i));
 		struct ldb_dn *p;
 		struct dsdb_ldb_dn_list_node *node;
 
@@ -1383,6 +1461,10 @@ static PyMethodDef py_dsdb_methods[] = {
 	{ "_dsdb_garbage_collect_tombstones", (PyCFunction)py_dsdb_garbage_collect_tombstones, METH_VARARGS,
 		"_dsdb_kcc_check_deleted(samdb, [dn], current_time, tombstone_lifetime)"
 		" -> (num_objects_expunged, num_links_expunged)" },
+	{ "_scavenge_dns_records", (PyCFunction)py_scavenge_dns_records,
+		METH_VARARGS, NULL},
+	{ "_dns_delete_tombstones", (PyCFunction)py_dns_delete_tombstones,
+		METH_VARARGS, NULL},
 	{ "_dsdb_create_own_rid_set", (PyCFunction)py_dsdb_create_own_rid_set, METH_VARARGS,
 		"_dsdb_create_own_rid_set(samdb)"
 		" -> None" },
@@ -1581,6 +1663,9 @@ MODULE_INIT_FUNC(dsdb)
 	ADD_DSDB_STRING(DSDB_SYNTAX_OR_NAME);
 	ADD_DSDB_STRING(DSDB_CONTROL_DBCHECK);
 	ADD_DSDB_STRING(DSDB_CONTROL_DBCHECK_MODIFY_RO_REPLICA);
+	ADD_DSDB_STRING(DSDB_CONTROL_DBCHECK_FIX_DUPLICATE_LINKS);
+	ADD_DSDB_STRING(DSDB_CONTROL_DBCHECK_FIX_LINK_DN_NAME);
+	ADD_DSDB_STRING(DSDB_CONTROL_DBCHECK_FIX_LINK_DN_SID);
 	ADD_DSDB_STRING(DSDB_CONTROL_REPLMD_VANISH_LINKS);
 	ADD_DSDB_STRING(DSDB_CONTROL_PERMIT_INTERDOMAIN_TRUST_UAC_OID);
 	ADD_DSDB_STRING(DSDB_CONTROL_SKIP_DUPLICATES_CHECK_OID);

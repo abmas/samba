@@ -386,6 +386,7 @@ struct ctdb_db_context {
 	uint32_t freeze_transaction_id;
 	uint32_t generation;
 
+	bool invalid_records;
 	bool push_started;
 	void *push_state;
 
@@ -725,9 +726,12 @@ int ctdb_set_db_readonly(struct ctdb_context *ctdb,
 
 int ctdb_process_deferred_attach(struct ctdb_context *ctdb);
 
-int32_t ctdb_control_db_attach(struct ctdb_context *ctdb, TDB_DATA indata,
+int32_t ctdb_control_db_attach(struct ctdb_context *ctdb,
+			       TDB_DATA indata,
 			       TDB_DATA *outdata,
-			       uint8_t db_flags, uint32_t client_id,
+			       uint8_t db_flags,
+			       uint32_t srcnode,
+			       uint32_t client_id,
 			       struct ctdb_req_control_old *c,
 			       bool *async_reply);
 int32_t ctdb_control_db_detach(struct ctdb_context *ctdb, TDB_DATA indata,
@@ -817,8 +821,6 @@ int32_t ctdb_control_start_recovery(struct ctdb_context *ctdb,
 
 int32_t ctdb_control_try_delete_records(struct ctdb_context *ctdb,
 					TDB_DATA indata, TDB_DATA *outdata);
-int32_t ctdb_control_receive_records(struct ctdb_context *ctdb,
-				     TDB_DATA indata, TDB_DATA *outdata);
 
 int32_t ctdb_control_get_capabilities(struct ctdb_context *ctdb,
 				      TDB_DATA *outdata);

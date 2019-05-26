@@ -28,8 +28,10 @@
 #include "../libcli/security/security.h"
 #include "../librpc/gen_ndr/ndr_security.h"
 #include "../lib/util/bitmap.h"
-#include "lib/crypto/sha256.h"
 #include "passdb/lookup_sid.h"
+
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
 
 static NTSTATUS create_acl_blob(const struct security_descriptor *psd,
 			DATA_BLOB *pblob,
@@ -81,13 +83,17 @@ bool init_acl_common_config(vfs_handle_struct *handle,
 static NTSTATUS hash_blob_sha256(DATA_BLOB blob,
 				 uint8_t *hash)
 {
-	SHA256_CTX tctx;
+	int rc;
 
-	memset(hash, '\0', XATTR_SD_HASH_SIZE);
+	ZERO_ARRAY_LEN(hash, XATTR_SD_HASH_SIZE);
 
-	samba_SHA256_Init(&tctx);
-	samba_SHA256_Update(&tctx, blob.data, blob.length);
-	samba_SHA256_Final(hash, &tctx);
+	rc = gnutls_hash_fast(GNUTLS_DIG_SHA256,
+			      blob.data,
+			      blob.length,
+			      hash);
+	if (rc < 0) {
+		return NT_STATUS_INTERNAL_ERROR;
+	}
 
 	return NT_STATUS_OK;
 }
@@ -813,6 +819,7 @@ static NTSTATUS set_underlying_acl(vfs_handle_struct *handle, files_struct *fsp,
 {
 	NTSTATUS status;
 	const struct security_token *token = NULL;
+	struct dom_sid_buf buf;
 
 	status = SMB_VFS_NEXT_FSET_NT_ACL(handle, fsp, security_info_sent, psd);
 	if (!NT_STATUS_EQUAL(status, NT_STATUS_ACCESS_DENIED)) {
@@ -840,7 +847,8 @@ static NTSTATUS set_underlying_acl(vfs_handle_struct *handle, files_struct *fsp,
 	}
 
 	DBG_DEBUG("overriding chown on file %s for sid %s\n",
-		   fsp_str_dbg(fsp), sid_string_tos(psd->owner_sid));
+		  fsp_str_dbg(fsp),
+		  dom_sid_str_buf(psd->owner_sid, &buf));
 
 	/* Ok, we failed to chown and we have
 	   SEC_STD_WRITE_OWNER access - override. */

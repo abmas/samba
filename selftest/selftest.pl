@@ -301,6 +301,9 @@ unless (defined($ENV{VALGRIND})) {
 # make all our python scripts unbuffered
 $ENV{PYTHONUNBUFFERED} = 1;
 
+# do not depend on the users setup
+$ENV{TZ} = "UTC";
+
 my $bindir_abs = abs_path($bindir);
 
 # Backwards compatibility:
@@ -427,6 +430,9 @@ print "LD_PRELOAD=$ENV{LD_PRELOAD}\n";
 # Enable uid_wrapper globally
 $ENV{UID_WRAPPER} = 1;
 
+# We are already hitting the limit, so double it.
+$ENV{NSS_WRAPPER_MAX_HOSTENTS} = 200;
+
 # Disable RTLD_DEEPBIND hack for Samba bind dlz module
 #
 # This is needed in order to allow the ldb_*ldap module
@@ -508,12 +514,10 @@ foreach (@opt_include) {
 	push (@includes, read_test_regexes($_));
 }
 
-my $interfaces = join(',', ("127.0.0.11/8",
-			    "127.0.0.12/8",
-			    "127.0.0.13/8",
-			    "127.0.0.14/8",
-			    "127.0.0.15/8",
-			    "127.0.0.16/8"));
+# We give the selftest client 6 different IPv4 addresses to use. Most tests
+# only use the first (.11) IP. Note that winsreplication.c is one test that
+# uses the other IPs (search for iface_list_count()).
+my $interfaces = Samba::get_interfaces_config("client", 6);
 
 my $clientdir = "$prefix_abs/client";
 
@@ -703,11 +707,6 @@ $ENV{SELFTEST_PREFIX} = "$prefix_abs";
 $ENV{SELFTEST_TMPDIR} = "$tmpdir_abs";
 $ENV{TMPDIR} = "$tmpdir_abs";
 $ENV{TEST_DATA_PREFIX} = "$tmpdir_abs";
-if ($opt_socket_wrapper) {
-	$ENV{SELFTEST_INTERFACES} = $interfaces;
-} else {
-	$ENV{SELFTEST_INTERFACES} = "";
-}
 if ($opt_quick) {
 	$ENV{SELFTEST_QUICK} = "1";
 } else {
@@ -812,115 +811,6 @@ sub get_running_env($)
 	return $running_envs{$envname};
 }
 
-my @exported_envvars = (
-	# domain stuff
-	"DOMAIN",
-	"REALM",
-	"DOMSID",
-
-	# stuff related to a trusted domain
-	"TRUST_SERVER",
-	"TRUST_SERVER_IP",
-	"TRUST_SERVER_IPV6",
-	"TRUST_NETBIOSNAME",
-	"TRUST_USERNAME",
-	"TRUST_PASSWORD",
-	"TRUST_DOMAIN",
-	"TRUST_REALM",
-	"TRUST_DOMSID",
-
-	# domain controller stuff
-	"DC_SERVER",
-	"DC_SERVER_IP",
-	"DC_SERVER_IPV6",
-	"DC_NETBIOSNAME",
-	"DC_NETBIOSALIAS",
-
-	# domain member
-	"MEMBER_SERVER",
-	"MEMBER_SERVER_IP",
-	"MEMBER_SERVER_IPV6",
-	"MEMBER_NETBIOSNAME",
-	"MEMBER_NETBIOSALIAS",
-
-	# rpc proxy controller stuff
-	"RPC_PROXY_SERVER",
-	"RPC_PROXY_SERVER_IP",
-	"RPC_PROXY_SERVER_IPV6",
-	"RPC_PROXY_NETBIOSNAME",
-	"RPC_PROXY_NETBIOSALIAS",
-
-	# domain controller stuff for Vampired DC
-	"VAMPIRE_DC_SERVER",
-	"VAMPIRE_DC_SERVER_IP",
-	"VAMPIRE_DC_SERVER_IPV6",
-	"VAMPIRE_DC_NETBIOSNAME",
-	"VAMPIRE_DC_NETBIOSALIAS",
-
-	# domain controller stuff for RODC
-	"RODC_DC_SERVER",
-	"RODC_DC_SERVER_IP",
-	"RODC_DC_SERVER_IPV6",
-	"RODC_DC_NETBIOSNAME",
-
-	# domain controller stuff for FL 2000 Vampired DC
-	"VAMPIRE_2000_DC_SERVER",
-	"VAMPIRE_2000_DC_SERVER_IP",
-	"VAMPIRE_2000_DC_SERVER_IPV6",
-	"VAMPIRE_2000_DC_NETBIOSNAME",
-	"VAMPIRE_2000_DC_NETBIOSALIAS",
-
-	"PROMOTED_DC_SERVER",
-	"PROMOTED_DC_SERVER_IP",
-	"PROMOTED_DC_SERVER_IPV6",
-	"PROMOTED_DC_NETBIOSNAME",
-	"PROMOTED_DC_NETBIOSALIAS",
-
-	# server stuff
-	"SERVER",
-	"SERVER_IP",
-	"SERVER_IPV6",
-	"NETBIOSNAME",
-	"NETBIOSALIAS",
-	"SAMSID",
-
-	# user stuff
-	"USERNAME",
-	"USERID",
-	"PASSWORD",
-	"DC_USERNAME",
-	"DC_PASSWORD",
-
-	# UID/GID for rfc2307 mapping tests
-	"UID_RFC2307TEST",
-	"GID_RFC2307TEST",
-
-	# misc stuff
-	"KRB5_CONFIG",
-	"KRB5CCNAME",
-	"SELFTEST_WINBINDD_SOCKET_DIR",
-	"NMBD_SOCKET_DIR",
-	"LOCAL_PATH",
-	"DNS_FORWARDER1",
-	"DNS_FORWARDER2",
-	"RESOLV_CONF",
-	"UNACCEPTABLE_PASSWORD",
-	"LOCK_DIR",
-	"SMBD_TEST_LOG",
-
-	# nss_wrapper
-	"NSS_WRAPPER_PASSWD",
-	"NSS_WRAPPER_GROUP",
-	"NSS_WRAPPER_HOSTS",
-	"NSS_WRAPPER_HOSTNAME",
-	"NSS_WRAPPER_MODULE_SO_PATH",
-	"NSS_WRAPPER_MODULE_FN_PREFIX",
-
-	# resolv_wrapper
-	"RESOLV_WRAPPER_CONF",
-	"RESOLV_WRAPPER_HOSTS",
-);
-
 sub sighandler($)
 {
 	my $signame = shift;
@@ -957,13 +847,7 @@ sub setup_env($$)
 	# Initially clear out the environment for the provision, so previous envs'
 	# variables don't leak in. Provisioning steps must explicitly set their
 	# necessary variables when calling out to other executables
-	foreach (@exported_envvars) {
-		unless ($_ == "NSS_WRAPPER_HOSTS" ||
-		        $_ == "RESOLV_WRAPPER_HOSTS")
-		{
-			delete $ENV{$_};
-		}
-	}
+	Samba::clear_exported_envvars();
 	delete $ENV{SOCKET_WRAPPER_DEFAULT_IFACE};
 	delete $ENV{SMB_CONF_PATH};
 
@@ -983,7 +867,11 @@ sub setup_env($$)
 		        $testenv_vars->{target} = $target;
 		}
 		if (not defined($testenv_vars)) {
-			warn("$opt_target can't start up known environment '$envname'");
+			if ($opt_one) {
+				die("$opt_target can't start up known environment '$envname'");
+			} else {
+				warn("$opt_target can't start up known environment '$envname'");
+			}
 		}
 	}
 
@@ -1002,31 +890,13 @@ sub setup_env($$)
 		die("Unknown option[$option] for envname[$envname]");
 	}
 
-	foreach (@exported_envvars) {
-		if (defined($testenv_vars->{$_})) {
-			$ENV{$_} = $testenv_vars->{$_};
-		} else {
-			delete $ENV{$_};
-		}
-	}
+	# export the environment variables for the testenv (SERVER, SERVER_IP, etc)
+	Samba::export_envvars($testenv_vars);
 
 	my $krb5_ccache_path = "${selftest_krbt_ccache_path}.${envname}.${option}";
 	unlink($krb5_ccache_path);
 	$ENV{KRB5CCNAME} = "FILE:${krb5_ccache_path}";
 	return $testenv_vars;
-}
-
-sub exported_envvars_str($)
-{
-	my ($testenv_vars) = @_;
-	my $out = "";
-
-	foreach (@exported_envvars) {
-		next unless defined($testenv_vars->{$_});
-		$out .= $_."=".$testenv_vars->{$_}."\n";
-	}
-
-	return $out;
 }
 
 sub getlog_env($)
@@ -1077,7 +947,7 @@ if ($opt_testenv) {
 	$ENV{PIDDIR} = $testenv_vars->{PIDDIR};
 	$ENV{ENVNAME} = $testenv_name;
 
-	my $envvarstr = exported_envvars_str($testenv_vars);
+	my $envvarstr = Samba::exported_envvars_str($testenv_vars);
 
 	my @term_args = ("echo -e \"
 Welcome to the Samba4 Test environment '$testenv_name'

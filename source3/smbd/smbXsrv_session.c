@@ -67,7 +67,7 @@ NTSTATUS smbXsrv_session_global_init(struct messaging_context *msg_ctx)
 	/*
 	 * This contains secret information like session keys!
 	 */
-	global_path = lock_path("smbXsrv_session_global.tdb");
+	global_path = lock_path(talloc_tos(), "smbXsrv_session_global.tdb");
 	if (global_path == NULL) {
 		return NT_STATUS_NO_MEMORY;
 	}
@@ -89,7 +89,7 @@ NTSTATUS smbXsrv_session_global_init(struct messaging_context *msg_ctx)
 		return status;
 	}
 
-	db_ctx = db_open_watched(NULL, backend, server_messaging_context());
+	db_ctx = db_open_watched(NULL, &backend, global_messaging_context());
 	if (db_ctx == NULL) {
 		TALLOC_FREE(backend);
 		return NT_STATUS_NO_MEMORY;
@@ -1663,6 +1663,35 @@ NTSTATUS smbXsrv_session_logoff(struct smbXsrv_session *session)
 	session->client = NULL;
 	session->status = NT_STATUS_USER_SESSION_DELETED;
 
+	if (session->compat) {
+		/*
+		 * For SMB2 this is a bit redundant as files are also close
+		 * below via smb2srv_tcon_disconnect_all() -> ... ->
+		 * smbXsrv_tcon_disconnect() -> close_cnum() ->
+		 * file_close_conn().
+		 */
+		file_close_user(sconn, session->compat->vuid);
+	}
+
+	if (session->tcon_table != NULL) {
+		/*
+		 * Note: We only have a tcon_table for SMB2.
+		 */
+		status = smb2srv_tcon_disconnect_all(session);
+		if (!NT_STATUS_IS_OK(status)) {
+			DEBUG(0, ("smbXsrv_session_logoff(0x%08x): "
+				  "smb2srv_tcon_disconnect_all() failed: %s\n",
+				  session->global->session_global_id,
+				  nt_errstr(status)));
+			error = status;
+		}
+	}
+
+	if (session->compat) {
+		invalidate_vuid(sconn, session->compat->vuid);
+		session->compat = NULL;
+	}
+
 	global_rec = session->global->db_rec;
 	session->global->db_rec = NULL;
 	if (global_rec == NULL) {
@@ -1722,29 +1751,6 @@ NTSTATUS smbXsrv_session_logoff(struct smbXsrv_session *session)
 	}
 	session->db_rec = NULL;
 
-	if (session->compat) {
-		file_close_user(sconn, session->compat->vuid);
-	}
-
-	if (session->tcon_table != NULL) {
-		/*
-		 * Note: We only have a tcon_table for SMB2.
-		 */
-		status = smb2srv_tcon_disconnect_all(session);
-		if (!NT_STATUS_IS_OK(status)) {
-			DEBUG(0, ("smbXsrv_session_logoff(0x%08x): "
-				  "smb2srv_tcon_disconnect_all() failed: %s\n",
-				  session->global->session_global_id,
-				  nt_errstr(status)));
-			error = status;
-		}
-	}
-
-	if (session->compat) {
-		invalidate_vuid(sconn, session->compat->vuid);
-		session->compat = NULL;
-	}
-
 	return error;
 }
 
@@ -1756,9 +1762,9 @@ struct smbXsrv_session_logoff_all_state {
 static int smbXsrv_session_logoff_all_callback(struct db_record *local_rec,
 					       void *private_data);
 
-NTSTATUS smbXsrv_session_logoff_all(struct smbXsrv_connection *conn)
+NTSTATUS smbXsrv_session_logoff_all(struct smbXsrv_client *client)
 {
-	struct smbXsrv_session_table *table = conn->client->session_table;
+	struct smbXsrv_session_table *table = client->session_table;
 	struct smbXsrv_session_logoff_all_state state;
 	NTSTATUS status;
 	int count = 0;

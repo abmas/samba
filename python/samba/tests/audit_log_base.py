@@ -22,10 +22,12 @@ from __future__ import print_function
 import samba.tests
 from samba.messaging import Messaging
 from samba.dcerpc.messaging import MSG_AUTH_LOG, AUTH_EVENT_NAME
+from samba.param import LoadParm
 import time
 import json
 import os
 import re
+
 
 def getAudit(message):
     if "type" not in message:
@@ -35,14 +37,33 @@ def getAudit(message):
     audit = message[type]
     return audit
 
-class AuditLogTestBase(samba.tests.TestCase):
 
+class AuditLogTestBase(samba.tests.TestCase):
 
     def setUp(self):
         super(AuditLogTestBase, self).setUp()
-        lp_ctx = self.get_loadparm()
+
+        # connect to the server's messaging bus (we need to explicitly load a
+        # different smb.conf here, because in all other respects this test
+        # wants to act as a separate remote client)
+        server_conf = os.getenv('SERVERCONFFILE')
+        if server_conf:
+            lp_ctx = LoadParm(filename_for_non_global_lp=server_conf)
+        else:
+            lp_ctx = self.get_loadparm()
         self.msg_ctx = Messaging((1,), lp_ctx=lp_ctx)
         self.msg_ctx.irpc_add_name(self.event_type)
+
+        # Now switch back to using the client-side smb.conf. The tests will
+        # use the first interface in the client.conf (we need to strip off
+        # the subnet mask portion)
+        lp_ctx = self.get_loadparm()
+        client_ip_and_mask = lp_ctx.get('interfaces')[0]
+        client_ip = client_ip_and_mask.split('/')[0]
+
+        # the messaging ctx is the server's view of the world, so our own
+        # client IP will be the remoteAddress when connections are logged
+        self.remoteAddress = client_ip
 
         #
         # Check the remote address of a message against the one beimg used
@@ -51,7 +72,7 @@ class AuditLogTestBase(samba.tests.TestCase):
         def isRemote(message):
             audit = getAudit(message)
             if audit is None:
-                return false
+                return False
 
             remote = audit["remoteAddress"]
             if remote is None:
@@ -76,7 +97,7 @@ class AuditLogTestBase(samba.tests.TestCase):
             elif jsonMsg["type"] == "dsdbTransaction":
                 context["txnMessage"] = jsonMsg
 
-        self.context = {"messages": [], "txnMessage": ""}
+        self.context = {"messages": [], "txnMessage": None}
         self.msg_handler_and_context = (messageHandler, self.context)
         self.msg_ctx.register(self.msg_handler_and_context,
                               msg_type=self.message_type)
@@ -127,7 +148,6 @@ class AuditLogTestBase(samba.tests.TestCase):
                         return True
             return False
 
-
     def waitForMessages(self, number, connection=None, dn=None):
         """Wait for all the expected messages to arrive
         The connection is passed through to keep the connection alive
@@ -158,8 +178,11 @@ class AuditLogTestBase(samba.tests.TestCase):
     # Discard any previously queued messages.
     def discardMessages(self):
         self.msg_ctx.loop_once(0.001)
-        while len(self.context["messages"]):
+        while (len(self.context["messages"]) or
+               self.context["txnMessage"] is not None):
+
             self.context["messages"] = []
+            self.context["txnMessage"] = None
             self.msg_ctx.loop_once(0.001)
 
     GUID_RE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"

@@ -34,6 +34,7 @@
 #include "auth/kerberos/kerberos_util.h"
 #include "auth/kerberos/pac_utils.h"
 #include "param/param.h"
+#include "../libds/common/flags.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_AUTH
@@ -269,14 +270,14 @@ static int cli_credentials_set_from_ccache(struct cli_credentials *cred,
 		return ENOMEM;
 	}
 
-	realm = smb_krb5_principal_get_realm(ccache->smb_krb5_context->krb5_context,
-					     princ);
+	realm = smb_krb5_principal_get_realm(
+		cred, ccache->smb_krb5_context->krb5_context, princ);
 	krb5_free_principal(ccache->smb_krb5_context->krb5_context, princ);
 	if (realm == NULL) {
 		return ENOMEM;
 	}
 	ok = cli_credentials_set_realm(cred, realm, obtained);
-	SAFE_FREE(realm);
+	TALLOC_FREE(realm);
 	if (!ok) {
 		return ENOMEM;
 	}
@@ -350,18 +351,157 @@ _PUBLIC_ int cli_credentials_set_ccache(struct cli_credentials *cred,
 
 		if (ret) {
 			(*error_string) = error_message(ret);
+			TALLOC_FREE(ccc);
 			return ret;
 		}
-
-		cred->ccache = ccc;
-		cred->ccache_obtained = obtained;
-		talloc_steal(cred, ccc);
-
-		cli_credentials_invalidate_client_gss_creds(cred, cred->ccache_obtained);
-		return 0;
 	}
+
+	cred->ccache = ccc;
+	cred->ccache_obtained = obtained;
+
+	cli_credentials_invalidate_client_gss_creds(
+		cred, cred->ccache_obtained);
+
 	return 0;
 }
+
+#ifndef SAMBA4_USES_HEIMDAL
+/*
+ * This function is a workaround for old MIT Kerberos versions which did not
+ * implement the krb5_cc_remove_cred function. It creates a temporary
+ * credentials cache to copy the credentials in the current cache
+ * except the one we want to remove and then overwrites the contents of the
+ * current cache with the temporary copy.
+ */
+static krb5_error_code krb5_cc_remove_cred_wrap(struct ccache_container *ccc,
+						krb5_creds *creds)
+{
+	krb5_ccache dummy_ccache = NULL;
+	krb5_creds cached_creds = {0};
+	krb5_cc_cursor cursor = NULL;
+	krb5_error_code code;
+	char *dummy_name;
+
+	dummy_name = talloc_asprintf(ccc,
+				     "MEMORY:copy_ccache-%p",
+				     &ccc->ccache);
+	if (dummy_name == NULL) {
+		return KRB5_CC_NOMEM;
+	}
+
+	code = krb5_cc_resolve(ccc->smb_krb5_context->krb5_context,
+			       dummy_name,
+			       &dummy_ccache);
+	if (code != 0) {
+		DBG_ERR("krb5_cc_resolve failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				code, ccc));
+		TALLOC_FREE(dummy_name);
+		return code;
+	}
+
+	TALLOC_FREE(dummy_name);
+
+	code = krb5_cc_start_seq_get(ccc->smb_krb5_context->krb5_context,
+				     ccc->ccache,
+				     &cursor);
+	if (code != 0) {
+		krb5_cc_destroy(ccc->smb_krb5_context->krb5_context,
+				dummy_ccache);
+
+		DBG_ERR("krb5_cc_start_seq_get failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				code, ccc));
+		return code;
+	}
+
+	while ((code = krb5_cc_next_cred(ccc->smb_krb5_context->krb5_context,
+					 ccc->ccache,
+					 &cursor,
+					 &cached_creds)) == 0) {
+		/* If the principal matches skip it and do not copy to the
+		 * temporary cache as this is the one we want to remove */
+		if (krb5_principal_compare_flags(
+				ccc->smb_krb5_context->krb5_context,
+				creds->server,
+				cached_creds.server,
+				0)) {
+			continue;
+		}
+
+		code = krb5_cc_store_cred(
+				ccc->smb_krb5_context->krb5_context,
+				dummy_ccache,
+				&cached_creds);
+		if (code != 0) {
+			krb5_cc_destroy(ccc->smb_krb5_context->krb5_context,
+					dummy_ccache);
+			DBG_ERR("krb5_cc_store_cred failed: %s\n",
+				smb_get_krb5_error_message(
+					ccc->smb_krb5_context->krb5_context,
+					code, ccc));
+			return code;
+		}
+	}
+
+	if (code == KRB5_CC_END) {
+		krb5_cc_end_seq_get(ccc->smb_krb5_context->krb5_context,
+				    dummy_ccache,
+				    &cursor);
+		code = 0;
+	}
+
+	if (code != 0) {
+		krb5_cc_destroy(ccc->smb_krb5_context->krb5_context,
+				dummy_ccache);
+		DBG_ERR("krb5_cc_next_cred failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				code, ccc));
+		return code;
+	}
+
+	code = krb5_cc_initialize(ccc->smb_krb5_context->krb5_context,
+				  ccc->ccache,
+				  creds->client);
+	if (code != 0) {
+		krb5_cc_destroy(ccc->smb_krb5_context->krb5_context,
+				dummy_ccache);
+		DBG_ERR("krb5_cc_initialize failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				code, ccc));
+		return code;
+	}
+
+	code = krb5_cc_copy_creds(ccc->smb_krb5_context->krb5_context,
+				  dummy_ccache,
+				  ccc->ccache);
+	if (code != 0) {
+		krb5_cc_destroy(ccc->smb_krb5_context->krb5_context,
+				dummy_ccache);
+		DBG_ERR("krb5_cc_copy_creds failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				code, ccc));
+		return code;
+	}
+
+	code = krb5_cc_destroy(ccc->smb_krb5_context->krb5_context,
+			       dummy_ccache);
+	if (code != 0) {
+		DBG_ERR("krb5_cc_destroy failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				code, ccc));
+		return code;
+	}
+
+	return code;
+}
+#endif
 
 /*
  * Indicate the we failed to log in to this service/host with these
@@ -404,6 +544,21 @@ _PUBLIC_ bool cli_credentials_failed_kerberos_login(struct cli_credentials *cred
 		return false;
 	}
 
+	/* MIT kerberos requires creds.client to match against cached
+	 * credentials */
+	ret = krb5_cc_get_principal(ccc->smb_krb5_context->krb5_context,
+				    ccc->ccache,
+				    &creds.client);
+	if (ret != 0) {
+		krb5_free_cred_contents(ccc->smb_krb5_context->krb5_context,
+					&creds);
+		DBG_ERR("krb5_cc_get_principal failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				ret, ccc));
+		return false;
+	}
+
 	ret = krb5_cc_retrieve_cred(ccc->smb_krb5_context->krb5_context, ccc->ccache, KRB5_TC_MATCH_SRV_NAMEONLY, &creds, &creds2);
 	if (ret != 0) {
 		/* don't retry - we didn't find these credentials to remove */
@@ -412,6 +567,13 @@ _PUBLIC_ bool cli_credentials_failed_kerberos_login(struct cli_credentials *cred
 	}
 
 	ret = krb5_cc_remove_cred(ccc->smb_krb5_context->krb5_context, ccc->ccache, KRB5_TC_MATCH_SRV_NAMEONLY, &creds);
+#ifndef SAMBA4_USES_HEIMDAL
+	if (ret == KRB5_CC_NOSUPP) {
+		/* Old MIT kerberos versions did not implement
+		 * krb5_cc_remove_cred */
+		ret = krb5_cc_remove_cred_wrap(ccc, &creds);
+	}
+#endif
 	krb5_free_cred_contents(ccc->smb_krb5_context->krb5_context, &creds);
 	krb5_free_cred_contents(ccc->smb_krb5_context->krb5_context, &creds2);
 	if (ret != 0) {
@@ -421,6 +583,10 @@ _PUBLIC_ bool cli_credentials_failed_kerberos_login(struct cli_credentials *cred
 		 * creds don't exist, which is why we do a separate
 		 * krb5_cc_retrieve_cred() above.
 		 */
+		DBG_ERR("krb5_cc_remove_cred failed: %s\n",
+			smb_get_krb5_error_message(
+				ccc->smb_krb5_context->krb5_context,
+				ret, ccc));
 		return false;
 	}
 	return true;
@@ -895,11 +1061,25 @@ static int cli_credentials_shallow_ccache(struct cli_credentials *cred)
 	const struct ccache_container *old_ccc = NULL;
 	struct ccache_container *ccc = NULL;
 	char *ccache_name = NULL;
+	krb5_principal princ;
 
 	old_ccc = cred->ccache;
 	if (old_ccc == NULL) {
 		return 0;
 	}
+
+	ret = krb5_cc_get_principal(
+		old_ccc->smb_krb5_context->krb5_context,
+		old_ccc->ccache,
+		&princ);
+	if (ret != 0) {
+		/*
+		 * This is an empty ccache. No point in copying anything.
+		 */
+		cred->ccache = NULL;
+		return 0;
+	}
+	krb5_free_principal(old_ccc->smb_krb5_context->krb5_context, princ);
 
 	ccc = talloc(cred, struct ccache_container);
 	if (ccc == NULL) {
@@ -974,7 +1154,7 @@ _PUBLIC_ int cli_credentials_get_keytab(struct cli_credentials *cred,
 	const char *upn = NULL;
 	const char *realm = cli_credentials_get_realm(cred);
 	char *salt_principal = NULL;
-	bool is_computer = false;
+	uint32_t uac_flags = 0;
 
 	if (cred->keytab_obtained >= (MAX(cred->principal_obtained, 
 					  cred->username_obtained))) {
@@ -999,9 +1179,15 @@ _PUBLIC_ int cli_credentials_get_keytab(struct cli_credentials *cred,
 
 	switch (cred->secure_channel_type) {
 	case SEC_CHAN_WKSTA:
-	case SEC_CHAN_BDC:
 	case SEC_CHAN_RODC:
-		is_computer = true;
+		uac_flags = UF_WORKSTATION_TRUST_ACCOUNT;
+		break;
+	case SEC_CHAN_BDC:
+		uac_flags = UF_SERVER_TRUST_ACCOUNT;
+		break;
+	case SEC_CHAN_DOMAIN:
+	case SEC_CHAN_DNS_DOMAIN:
+		uac_flags = UF_INTERDOMAIN_TRUST_ACCOUNT;
 		break;
 	default:
 		upn = cli_credentials_get_principal(cred, mem_ctx);
@@ -1009,13 +1195,14 @@ _PUBLIC_ int cli_credentials_get_keytab(struct cli_credentials *cred,
 			TALLOC_FREE(mem_ctx);
 			return ENOMEM;
 		}
+		uac_flags = UF_NORMAL_ACCOUNT;
 		break;
 	}
 
 	ret = smb_krb5_salt_principal(realm,
 				      username, /* sAMAccountName */
 				      upn, /* userPrincipalName */
-				      is_computer,
+				      uac_flags,
 				      mem_ctx,
 				      &salt_principal);
 	if (ret) {

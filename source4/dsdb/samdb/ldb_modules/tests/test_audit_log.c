@@ -28,6 +28,7 @@ int ldb_audit_log_module_init(const char *version);
 
 #include "lib/ldb/include/ldb_private.h"
 #include <regex.h>
+#include <float.h>
 
 /*
  * Test helper to check ISO 8601 timestamps for validity
@@ -40,6 +41,7 @@ static void check_timestamp(time_t before, const char* timestamp)
 	struct tm tm;
 	time_t after;
 	time_t actual;
+	const double lower = -1;
 
 
 	after = time(NULL);
@@ -69,9 +71,12 @@ static void check_timestamp(time_t before, const char* timestamp)
 
 	/*
 	 * The timestamp should be before <= actual <= after
+	 * Note: as the microsecond portion of the time is truncated we use
+	 *       a -1 as the lower bound for the time difference instead of
+	 *       zero
 	 */
-	assert_true(difftime(actual, before) >= 0);
-	assert_true(difftime(after, actual) >= 0);
+	assert_true(difftime(actual, before) >= lower);
+	assert_true(difftime(after, actual) >= lower);
 }
 
 static void test_has_password_changed(void **state)
@@ -283,7 +288,7 @@ static void test_operation_json_empty(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct json_object json;
 	json_t *audit = NULL;
@@ -295,11 +300,11 @@ static void test_operation_json_empty(void **state)
 	TALLOC_CTX *ctx = talloc_new(NULL);
 
 	ldb = ldb_init(ctx, NULL);
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	req = talloc_zero(ctx, struct ldb_request);
 	reply = talloc_zero(ctx, struct ldb_reply);
@@ -390,7 +395,7 @@ static void test_operation_json(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct tsocket_address *ts = NULL;
 
@@ -427,13 +432,13 @@ static void test_operation_json(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	tsocket_address_inet_from_strings(ctx, "ip", "127.0.0.1", 0, &ts);
 	ldb_set_opaque(ldb, "remoteAddress", ts);
@@ -581,7 +586,7 @@ static void test_as_system_operation_json(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct tsocket_address *ts = NULL;
 
@@ -622,13 +627,13 @@ static void test_as_system_operation_json(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	tsocket_address_inet_from_strings(ctx, "ip", "127.0.0.1", 0, &ts);
 	ldb_set_opaque(ldb, "remoteAddress", ts);
@@ -784,7 +789,7 @@ static void test_password_change_json_empty(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct json_object json;
 	json_t *audit = NULL;
@@ -796,11 +801,11 @@ static void test_password_change_json_empty(void **state)
 	TALLOC_CTX *ctx = talloc_new(NULL);
 
 	ldb = ldb_init(ctx, NULL);
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	req = talloc_zero(ctx, struct ldb_request);
 	reply = talloc_zero(ctx, struct ldb_reply);
@@ -823,10 +828,13 @@ static void test_password_change_json_empty(void **state)
 	audit = json_object_get(json.root, "passwordChange");
 	assert_non_null(audit);
 	assert_true(json_is_object(audit));
-	assert_int_equal(9, json_object_size(audit));
+	assert_int_equal(10, json_object_size(audit));
 
 	o = json_object_get(audit, "version");
 	assert_non_null(o);
+
+	v = json_object_get(audit, "eventId");
+	assert_non_null(v);
 
 	v = json_object_get(audit, "statusCode");
 	assert_non_null(v);
@@ -867,7 +875,7 @@ static void test_password_change_json(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct tsocket_address *ts = NULL;
 
@@ -896,13 +904,13 @@ static void test_password_change_json(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	tsocket_address_inet_from_strings(ctx, "ip", "127.0.0.1", 0, &ts);
 	ldb_set_opaque(ldb, "remoteAddress", ts);
@@ -945,11 +953,16 @@ static void test_password_change_json(void **state)
 	audit = json_object_get(json.root, "passwordChange");
 	assert_non_null(audit);
 	assert_true(json_is_object(audit));
-	assert_int_equal(9, json_object_size(audit));
+	assert_int_equal(10, json_object_size(audit));
 
 	o = json_object_get(audit, "version");
 	assert_non_null(o);
 	check_version(o, PASSWORD_MAJOR,PASSWORD_MINOR);
+
+	v = json_object_get(audit, "eventId");
+	assert_non_null(v);
+	assert_true(json_is_integer(v));
+	assert_int_equal(EVT_ID_PASSWORD_RESET, json_integer_value(v));
 
 	v = json_object_get(audit, "statusCode");
 	assert_non_null(v);
@@ -1016,7 +1029,7 @@ static void test_transaction_json(void **state)
 	GUID_from_string(GUID, &guid);
 
 	before = time(NULL);
-	json = transaction_json("delete", &guid);
+	json = transaction_json("delete", &guid, 10000099);
 
 	assert_int_equal(3, json_object_size(json.root));
 
@@ -1033,7 +1046,7 @@ static void test_transaction_json(void **state)
 	audit = json_object_get(json.root, "dsdbTransaction");
 	assert_non_null(audit);
 	assert_true(json_is_object(audit));
-	assert_int_equal(3, json_object_size(audit));
+	assert_int_equal(4, json_object_size(audit));
 
 	o = json_object_get(audit, "version");
 	assert_non_null(o);
@@ -1048,6 +1061,11 @@ static void test_transaction_json(void **state)
 	assert_non_null(v);
 	assert_true(json_is_string(v));
 	assert_string_equal("delete", json_string_value(v));
+
+	v = json_object_get(audit, "duration");
+	assert_non_null(v);
+	assert_true(json_is_integer(v));
+	assert_int_equal(10000099, json_integer_value(v));
 
 	json_free(&json);
 
@@ -1074,6 +1092,7 @@ static void test_commit_failure_json(void **state)
 	before = time(NULL);
 	json = commit_failure_json(
 		"prepare",
+		987876,
 		LDB_ERR_OPERATIONS_ERROR,
 		"because",
 		&guid);
@@ -1093,7 +1112,7 @@ static void test_commit_failure_json(void **state)
 	audit = json_object_get(json.root, "dsdbTransaction");
 	assert_non_null(audit);
 	assert_true(json_is_object(audit));
-	assert_int_equal(6, json_object_size(audit));
+	assert_int_equal(7, json_object_size(audit));
 
 	o = json_object_get(audit, "version");
 	assert_non_null(o);
@@ -1126,6 +1145,11 @@ static void test_commit_failure_json(void **state)
 	assert_true(json_is_string(v));
 	assert_string_equal("because", json_string_value(v));
 
+	v = json_object_get(audit, "duration");
+	assert_non_null(v);
+	assert_true(json_is_integer(v));
+	assert_int_equal(987876, json_integer_value(v));
+
 	json_free(&json);
 
 }
@@ -1140,7 +1164,7 @@ static void test_replicated_update_json_empty(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 	struct dsdb_extended_replicated_objects *ro = NULL;
 	struct repsFromTo1 *source_dsa = NULL;
 
@@ -1154,11 +1178,11 @@ static void test_replicated_update_json_empty(void **state)
 	TALLOC_CTX *ctx = talloc_new(NULL);
 
 	ldb = ldb_init(ctx, NULL);
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	source_dsa = talloc_zero(ctx, struct repsFromTo1);
 	ro = talloc_zero(ctx, struct dsdb_extended_replicated_objects);
@@ -1264,7 +1288,7 @@ static void test_replicated_update_json(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 	struct dsdb_extended_replicated_objects *ro = NULL;
 	struct repsFromTo1 *source_dsa = NULL;
 
@@ -1291,13 +1315,13 @@ static void test_replicated_update_json(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	dn = ldb_dn_new(ctx, ldb, DN);
 	GUID_from_string(SOURCE_DSA, &source_dsa_obj_guid);
@@ -1411,7 +1435,7 @@ static void test_operation_hr_empty(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	char *line = NULL;
 	const char *rs = NULL;
@@ -1422,11 +1446,11 @@ static void test_operation_hr_empty(void **state)
 	TALLOC_CTX *ctx = talloc_new(NULL);
 
 	ldb = ldb_init(ctx, NULL);
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	req = talloc_zero(ctx, struct ldb_request);
 	reply = talloc_zero(ctx, struct ldb_reply);
@@ -1465,7 +1489,7 @@ static void test_operation_hr(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct tsocket_address *ts = NULL;
 
@@ -1495,13 +1519,13 @@ static void test_operation_hr(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	tsocket_address_inet_from_strings(ctx, "ip", "127.0.0.1", 0, &ts);
 	ldb_set_opaque(ldb, "remoteAddress", ts);
@@ -1563,7 +1587,7 @@ static void test_as_system_operation_hr(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct tsocket_address *ts = NULL;
 
@@ -1597,13 +1621,13 @@ static void test_as_system_operation_hr(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	tsocket_address_inet_from_strings(ctx, "ip", "127.0.0.1", 0, &ts);
 	ldb_set_opaque(ldb, "remoteAddress", ts);
@@ -1673,7 +1697,7 @@ static void test_password_change_hr_empty(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	char *line = NULL;
 	const char *rs = NULL;
@@ -1683,11 +1707,11 @@ static void test_password_change_hr_empty(void **state)
 	TALLOC_CTX *ctx = talloc_new(NULL);
 
 	ldb = ldb_init(ctx, NULL);
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	req = talloc_zero(ctx, struct ldb_request);
 	reply = talloc_zero(ctx, struct ldb_reply);
@@ -1725,7 +1749,7 @@ static void test_password_change_hr(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 
 	struct tsocket_address *ts = NULL;
 
@@ -1753,13 +1777,13 @@ static void test_password_change_hr(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	tsocket_address_inet_from_strings(ctx, "ip", "127.0.0.1", 0, &ts);
 	ldb_set_opaque(ldb, "remoteAddress", ts);
@@ -1829,14 +1853,14 @@ static void test_transaction_hr(void **state)
 
 	GUID_from_string(GUID, &guid);
 
-	line = transaction_human_readable(ctx, "delete");
+	line = transaction_human_readable(ctx, "delete", 23);
 	assert_non_null(line);
 
 	/*
 	 * We ignore the timestamp to make this test a little easier
 	 * to write.
 	 */
-	rs = "\\[delete] at \\[[^[]*\\]";
+	rs = "\\[delete] at \\[[^[]*\\] duration \\[23\\]";
 
 	ret = regcomp(&regex, rs, 0);
 	assert_int_equal(0, ret);
@@ -1871,6 +1895,7 @@ static void test_commit_failure_hr(void **state)
 	line = commit_failure_human_readable(
 		ctx,
 		"commit",
+		789345,
 		LDB_ERR_OPERATIONS_ERROR,
 		"because");
 
@@ -1880,7 +1905,8 @@ static void test_commit_failure_hr(void **state)
 	 * We ignore the timestamp to make this test a little easier
 	 * to write.
 	 */
-	rs = "\\[commit\\] at \\[[^[]*\\] status \\[1\\] reason \\[because\\]";
+	rs = "\\[commit\\] at \\[[^[]*\\] duration \\[789345\\] "
+	     "status \\[1\\] reason \\[because\\]";
 
 	ret = regcomp(&regex, rs, 0);
 	assert_int_equal(0, ret);
@@ -1896,7 +1922,7 @@ static void test_add_transaction_id(void **state)
 {
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 	struct GUID guid;
 	const char * const GUID = "7130cb06-2062-6a1b-409e-3514c26b1773";
 	struct ldb_control * control = NULL;
@@ -1904,12 +1930,12 @@ static void test_add_transaction_id(void **state)
 
 	TALLOC_CTX *ctx = talloc_new(NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(GUID, &guid);
-	ac->transaction_guid = guid;
+	audit_private->transaction_guid = guid;
 
 	module = talloc_zero(ctx, struct ldb_module);
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	req = talloc_zero(ctx, struct ldb_request);
 
@@ -1921,7 +1947,7 @@ static void test_add_transaction_id(void **state)
 		DSDB_CONTROL_TRANSACTION_IDENTIFIER_OID);
 	assert_non_null(control);
 	assert_memory_equal(
-		&ac->transaction_guid,
+		&audit_private->transaction_guid,
 		control->data,
 		sizeof(struct GUID));
 
@@ -2072,7 +2098,7 @@ static void test_replicated_update_hr_empty(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 	struct dsdb_extended_replicated_objects *ro = NULL;
 	struct repsFromTo1 *source_dsa = NULL;
 
@@ -2084,11 +2110,11 @@ static void test_replicated_update_hr_empty(void **state)
 	TALLOC_CTX *ctx = talloc_new(NULL);
 
 	ldb = ldb_init(ctx, NULL);
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	source_dsa = talloc_zero(ctx, struct repsFromTo1);
 	ro = talloc_zero(ctx, struct dsdb_extended_replicated_objects);
@@ -2132,7 +2158,7 @@ static void test_replicated_update_hr(void **state)
 	struct ldb_module  *module = NULL;
 	struct ldb_request *req = NULL;
 	struct ldb_reply *reply = NULL;
-	struct audit_context *ac = NULL;
+	struct audit_private *audit_private = NULL;
 	struct dsdb_extended_replicated_objects *ro = NULL;
 	struct repsFromTo1 *source_dsa = NULL;
 
@@ -2159,13 +2185,13 @@ static void test_replicated_update_hr(void **state)
 
 	ldb = ldb_init(ctx, NULL);
 
-	ac = talloc_zero(ctx, struct audit_context);
+	audit_private = talloc_zero(ctx, struct audit_private);
 	GUID_from_string(TRANSACTION, &transaction_id);
-	ac->transaction_guid = transaction_id;
+	audit_private->transaction_guid = transaction_id;
 
 	module = talloc_zero(ctx, struct ldb_module);
 	module->ldb = ldb;
-	ldb_module_set_private(module, ac);
+	ldb_module_set_private(module, audit_private);
 
 	dn = ldb_dn_new(ctx, ldb, DN);
 	GUID_from_string(SOURCE_DSA, &source_dsa_obj_guid);

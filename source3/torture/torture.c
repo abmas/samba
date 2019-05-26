@@ -44,6 +44,10 @@
 #include "lib/util/sys_rw_data.h"
 #include "lib/util/base64.h"
 #include "lib/util/time.h"
+#include "lib/gencache.h"
+
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
 
 extern char *optarg;
 extern int optind;
@@ -3831,7 +3835,7 @@ static bool run_oplock4(int dummy)
 	}
 
 	/* Now create a hardlink. */
-	status = cli_nt_hardlink(cli1, fname, fname_ln);
+	status = cli_hardlink(cli1, fname, fname_ln);
 	if (!NT_STATUS_IS_OK(status)) {
 		printf("nt hardlink failed (%s)\n", nt_errstr(status));
 		return false;
@@ -4735,7 +4739,7 @@ static bool run_deletetest_ln(int dummy)
 	}
 
 	/* Now create a hardlink. */
-	status = cli_nt_hardlink(cli, fname, fname_ln);
+	status = cli_hardlink(cli, fname, fname_ln);
 	if (!NT_STATUS_IS_OK(status)) {
 		printf("nt hardlink failed (%s)\n", nt_errstr(status));
 		return false;
@@ -6226,7 +6230,7 @@ static bool run_simple_posix_open_test(int dummy)
 	const char *sname = "posix:symlink";
 	const char *dname = "posix:dir";
 	char buf[10];
-	char namebuf[11];
+	char *target = NULL;
 	uint16_t fnum1 = (uint16_t)-1;
 	SMB_STRUCT_STAT sbuf;
 	bool correct = false;
@@ -6414,7 +6418,9 @@ static bool run_simple_posix_open_test(int dummy)
 	/* What happens when we try and POSIX open a directory for write ? */
 	status = cli_posix_open(cli1, dname, O_RDWR, 0, &fnum1);
 	if (NT_STATUS_IS_OK(status)) {
-		printf("POSIX open of directory %s succeeded, should have failed.\n", fname);
+		printf("POSIX open of directory %s succeeded, "
+		       "should have failed.\n",
+		       dname);
 		goto out;
 	} else {
 		if (!check_both_error(__LINE__, status, ERRDOS, EISDIR,
@@ -6511,15 +6517,15 @@ static bool run_simple_posix_open_test(int dummy)
 		}
 	}
 
-	status = cli_posix_readlink(cli1, sname, namebuf, sizeof(namebuf));
+	status = cli_posix_readlink(cli1, sname, talloc_tos(), &target);
 	if (!NT_STATUS_IS_OK(status)) {
 		printf("POSIX readlink on %s failed (%s)\n", sname, nt_errstr(status));
 		goto out;
 	}
 
-	if (strcmp(namebuf, fname) != 0) {
+	if (strcmp(target, fname) != 0) {
 		printf("POSIX readlink on %s failed to match name %s (read %s)\n",
-			sname, fname, namebuf);
+			sname, fname, target);
 		goto out;
 	}
 
@@ -7253,6 +7259,207 @@ static bool run_posix_ofd_lock_test(int dummy)
 	TALLOC_FREE(frame);
 	return correct;
 }
+
+/*
+  Test POSIX mkdir is case-sensitive.
+ */
+static bool run_posix_mkdir_test(int dummy)
+{
+	static struct cli_state *cli;
+	const char *fname_foo = "POSIX_foo";
+	const char *fname_foo_Foo = "POSIX_foo/Foo";
+	const char *fname_foo_foo = "POSIX_foo/foo";
+	const char *fname_Foo = "POSIX_Foo";
+	const char *fname_Foo_Foo = "POSIX_Foo/Foo";
+	const char *fname_Foo_foo = "POSIX_Foo/foo";
+	bool correct = false;
+	NTSTATUS status;
+	TALLOC_CTX *frame = NULL;
+	uint16_t fnum = (uint16_t)-1;
+
+	frame = talloc_stackframe();
+
+	printf("Starting POSIX mkdir test\n");
+
+	if (!torture_open_connection(&cli, 0)) {
+		TALLOC_FREE(frame);
+		return false;
+	}
+
+	smbXcli_conn_set_sockopt(cli->conn, sockops);
+
+	status = torture_setup_unix_extensions(cli);
+	if (!NT_STATUS_IS_OK(status)) {
+		TALLOC_FREE(frame);
+		return false;
+	}
+
+	cli_posix_rmdir(cli, fname_foo_foo);
+	cli_posix_rmdir(cli, fname_foo_Foo);
+	cli_posix_rmdir(cli, fname_foo);
+
+	cli_posix_rmdir(cli, fname_Foo_foo);
+	cli_posix_rmdir(cli, fname_Foo_Foo);
+	cli_posix_rmdir(cli, fname_Foo);
+
+	/*
+	 * Create a file POSIX_foo then try
+	 * and use it in a directory path by
+	 * doing mkdir POSIX_foo/bar.
+	 * The mkdir should fail with
+	 * NT_STATUS_OBJECT_PATH_NOT_FOUND
+	 */
+
+	status = cli_posix_open(cli,
+			fname_foo,
+			O_RDWR|O_CREAT,
+			0666,
+			&fnum);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_open of %s failed error %s\n",
+			fname_foo,
+			nt_errstr(status));
+		goto out;
+	}
+
+	status = cli_posix_mkdir(cli, fname_foo_foo, 0777);
+	if (!NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_PATH_NOT_FOUND)) {
+		printf("cli_posix_mkdir of %s should fail with "
+			"NT_STATUS_OBJECT_PATH_NOT_FOUND got "
+			"%s instead\n",
+			fname_foo_foo,
+			nt_errstr(status));
+		goto out;
+	}
+
+	status = cli_close(cli, fnum);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_close failed %s\n", nt_errstr(status));
+		goto out;
+	}
+	fnum = (uint16_t)-1;
+
+	status = cli_posix_unlink(cli, fname_foo);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_unlink of %s failed error %s\n",
+			fname_foo,
+			nt_errstr(status));
+		goto out;
+	}
+
+	/*
+	 * Now we've deleted everything, posix_mkdir, posix_rmdir,
+	 * posix_open, posix_unlink, on
+	 * POSIX_foo/foo should return NT_STATUS_OBJECT_PATH_NOT_FOUND
+	 * not silently create POSIX_foo/foo.
+	 */
+
+	status = cli_posix_mkdir(cli, fname_foo_foo, 0777);
+	if (!NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_PATH_NOT_FOUND)) {
+		printf("cli_posix_mkdir of %s should fail with "
+			"NT_STATUS_OBJECT_PATH_NOT_FOUND got "
+			"%s instead\n",
+			fname_foo_foo,
+			nt_errstr(status));
+		goto out;
+	}
+
+	status = cli_posix_rmdir(cli, fname_foo_foo);
+	if (!NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_PATH_NOT_FOUND)) {
+		printf("cli_posix_rmdir of %s should fail with "
+			"NT_STATUS_OBJECT_PATH_NOT_FOUND got "
+			"%s instead\n",
+			fname_foo_foo,
+			nt_errstr(status));
+		goto out;
+	}
+
+	status = cli_posix_open(cli,
+			fname_foo_foo,
+			O_RDWR|O_CREAT,
+			0666,
+			&fnum);
+	if (!NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_PATH_NOT_FOUND)) {
+		printf("cli_posix_open of %s should fail with "
+			"NT_STATUS_OBJECT_PATH_NOT_FOUND got "
+			"%s instead\n",
+			fname_foo_foo,
+			nt_errstr(status));
+		goto out;
+	}
+
+	status = cli_posix_unlink(cli, fname_foo_foo);
+	if (!NT_STATUS_EQUAL(status, NT_STATUS_OBJECT_PATH_NOT_FOUND)) {
+		printf("cli_posix_unlink of %s should fail with "
+			"NT_STATUS_OBJECT_PATH_NOT_FOUND got "
+			"%s instead\n",
+			fname_foo_foo,
+			nt_errstr(status));
+		goto out;
+	}
+
+	status = cli_posix_mkdir(cli, fname_foo, 0777);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_mkdir of %s failed\n", fname_foo);
+		goto out;
+	}
+
+	status = cli_posix_mkdir(cli, fname_Foo, 0777);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_mkdir of %s failed\n", fname_Foo);
+		goto out;
+	}
+
+	status = cli_posix_mkdir(cli, fname_foo_foo, 0777);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_mkdir of %s failed\n", fname_foo_foo);
+		goto out;
+	}
+
+	status = cli_posix_mkdir(cli, fname_foo_Foo, 0777);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_mkdir of %s failed\n", fname_foo_Foo);
+		goto out;
+	}
+
+	status = cli_posix_mkdir(cli, fname_Foo_foo, 0777);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_mkdir of %s failed\n", fname_Foo_foo);
+		goto out;
+	}
+
+	status = cli_posix_mkdir(cli, fname_Foo_Foo, 0777);
+	if (!NT_STATUS_IS_OK(status)) {
+		printf("cli_posix_mkdir of %s failed\n", fname_Foo_Foo);
+		goto out;
+	}
+
+	printf("POSIX mkdir test passed\n");
+	correct = true;
+
+  out:
+
+	if (fnum != (uint16_t)-1) {
+		cli_close(cli, fnum);
+		fnum = (uint16_t)-1;
+	}
+
+	cli_posix_rmdir(cli, fname_foo_foo);
+	cli_posix_rmdir(cli, fname_foo_Foo);
+	cli_posix_rmdir(cli, fname_foo);
+
+	cli_posix_rmdir(cli, fname_Foo_foo);
+	cli_posix_rmdir(cli, fname_Foo_Foo);
+	cli_posix_rmdir(cli, fname_Foo);
+
+	if (!torture_close_connection(cli)) {
+		correct = false;
+	}
+
+	TALLOC_FREE(frame);
+	return correct;
+}
+
 
 static uint32_t open_attrs_table[] = {
 		FILE_ATTRIBUTE_NORMAL,
@@ -8119,6 +8326,7 @@ static bool run_chain1(int dummy)
 	struct tevent_req *reqs[3], *smbreqs[3];
 	bool done = false;
 	const char *str = "foobar";
+	const char *fname = "\\test_chain";
 	NTSTATUS status;
 
 	printf("starting chain1 test\n");
@@ -8128,7 +8336,9 @@ static bool run_chain1(int dummy)
 
 	smbXcli_conn_set_sockopt(cli1->conn, sockops);
 
-	reqs[0] = cli_openx_create(talloc_tos(), evt, cli1, "\\test",
+	cli_unlink(cli1, fname, FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
+
+	reqs[0] = cli_openx_create(talloc_tos(), evt, cli1, fname,
 				  O_CREAT|O_RDWR, 0, &smbreqs[0]);
 	if (reqs[0] == NULL) return false;
 	tevent_req_set_callback(reqs[0], chain1_open_completion, NULL);
@@ -8244,7 +8454,8 @@ static struct tevent_req *torture_createdel_send(TALLOC_CTX *mem_ctx,
 		FILE_READ_DATA|FILE_WRITE_DATA|DELETE_ACCESS,
 		FILE_ATTRIBUTE_NORMAL,
 		FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
-		FILE_OPEN_IF, FILE_DELETE_ON_CLOSE, 0);
+		FILE_OPEN_IF, FILE_DELETE_ON_CLOSE,
+		SMB2_IMPERSONATION_IMPERSONATION, 0);
 
 	if (tevent_req_nomem(subreq, req)) {
 		return tevent_req_post(req, ev);
@@ -9240,6 +9451,158 @@ static bool run_cli_echo(int dummy)
 	return NT_STATUS_IS_OK(status);
 }
 
+static int splice_status(off_t written, void *priv)
+{
+        return true;
+}
+
+static bool run_cli_splice(int dummy)
+{
+	uint8_t *buf = NULL;
+	struct cli_state *cli1 = NULL;
+	bool correct = false;
+	const char *fname_src = "\\splice_src.dat";
+	const char *fname_dst = "\\splice_dst.dat";
+	NTSTATUS status;
+	uint16_t fnum1 = UINT16_MAX;
+	uint16_t fnum2 = UINT16_MAX;
+	size_t file_size = 2*1024*1024;
+	size_t splice_size = 1*1024*1024 + 713;
+	uint8_t digest1[16], digest2[16];
+	off_t written = 0;
+	size_t nread = 0;
+	TALLOC_CTX *frame = talloc_stackframe();
+
+	printf("starting cli_splice test\n");
+
+	if (!torture_open_connection(&cli1, 0)) {
+		goto out;
+	}
+
+	cli_unlink(cli1, fname_src,
+		FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
+	cli_unlink(cli1, fname_dst,
+		FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
+
+	/* Create a file */
+	status = cli_ntcreate(cli1, fname_src, 0, GENERIC_ALL_ACCESS,
+			FILE_ATTRIBUTE_NORMAL, 0, FILE_OVERWRITE_IF,
+			0, 0, &fnum1, NULL);
+
+	if (!NT_STATUS_IS_OK(status)) {
+		d_printf("open %s failed: %s\n", fname_src, nt_errstr(status));
+		goto out;
+	}
+
+	/* Write file_size bytes - must be bigger than splice_size. */
+	buf = talloc_zero_array(frame, uint8_t, file_size);
+	if (buf == NULL) {
+		d_printf("talloc_fail\n");
+		goto out;
+	}
+
+	/* Fill it with random numbers. */
+	generate_random_buffer(buf, file_size);
+
+	/* MD5 the first 1MB + 713 bytes. */
+	gnutls_hash_fast(GNUTLS_DIG_MD5,
+			 buf,
+			 splice_size,
+			 digest1);
+
+	status = cli_writeall(cli1,
+			      fnum1,
+			      0,
+			      buf,
+			      0,
+			      file_size,
+			      NULL);
+	if (!NT_STATUS_IS_OK(status)) {
+		d_printf("cli_writeall failed: %s\n", nt_errstr(status));
+		goto out;
+	}
+
+	status = cli_ntcreate(cli1, fname_dst, 0, GENERIC_ALL_ACCESS,
+			FILE_ATTRIBUTE_NORMAL, 0, FILE_OVERWRITE_IF,
+			0, 0, &fnum2, NULL);
+
+	if (!NT_STATUS_IS_OK(status)) {
+		d_printf("open %s failed: %s\n", fname_dst, nt_errstr(status));
+		goto out;
+	}
+
+	/* Now splice 1MB + 713 bytes. */
+	status = cli_splice(cli1,
+				cli1,
+				fnum1,
+				fnum2,
+				splice_size,
+				0,
+				0,
+				&written,
+				splice_status,
+				NULL);
+
+	if (!NT_STATUS_IS_OK(status)) {
+		d_printf("cli_splice failed: %s\n", nt_errstr(status));
+		goto out;
+	}
+
+	/* Clear the old buffer. */
+	memset(buf, '\0', file_size);
+
+	/* Read the new file. */
+	status = cli_read(cli1, fnum2, (char *)buf, 0, splice_size, &nread);
+	if (!NT_STATUS_IS_OK(status)) {
+		d_printf("cli_read failed: %s\n", nt_errstr(status));
+		goto out;
+	}
+	if (nread != splice_size) {
+		d_printf("bad read of 0x%x, should be 0x%x\n",
+			(unsigned int)nread,
+			(unsigned int)splice_size);
+		goto out;
+	}
+
+	/* MD5 the first 1MB + 713 bytes. */
+	gnutls_hash_fast(GNUTLS_DIG_MD5,
+			 buf,
+			 splice_size,
+			 digest2);
+
+	/* Must be the same. */
+	if (memcmp(digest1, digest2, 16) != 0) {
+		d_printf("bad MD5 compare\n");
+		goto out;
+	}
+
+	correct = true;
+	printf("Success on cli_splice test\n");
+
+  out:
+
+	if (cli1) {
+		if (fnum1 != UINT16_MAX) {
+			cli_close(cli1, fnum1);
+		}
+		if (fnum2 != UINT16_MAX) {
+			cli_close(cli1, fnum2);
+		}
+
+		cli_unlink(cli1, fname_src,
+			FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
+		cli_unlink(cli1, fname_dst,
+			FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
+
+		if (!torture_close_connection(cli1)) {
+			correct = false;
+		}
+	}
+
+	TALLOC_FREE(frame);
+	return correct;
+}
+
 static bool run_uid_regression_test(int dummy)
 {
 	static struct cli_state *cli;
@@ -9293,7 +9656,7 @@ static bool run_uid_regression_test(int dummy)
 		goto out;
 	}
 
-	/* Now try a SMBtdis with the invald vuid set to zero. */
+	/* Now try a SMBtdis with the invalid vuid set to zero. */
 	cli_state_set_uid(cli, 0);
 
 	/* This should succeed. */
@@ -9605,8 +9968,8 @@ https://bugzilla.samba.org/show_bug.cgi?id=7084
 static bool run_dir_createtime(int dummy)
 {
 	struct cli_state *cli;
-	const char *dname = "\\testdir";
-	const char *fname = "\\testdir\\testfile";
+	const char *dname = "\\testdir_createtime";
+	const char *fname = "\\testdir_createtime\\testfile";
 	NTSTATUS status;
 	struct timespec create_time;
 	struct timespec create_time1;
@@ -9673,9 +10036,9 @@ static bool run_dir_createtime(int dummy)
 static bool run_streamerror(int dummy)
 {
 	struct cli_state *cli;
-	const char *dname = "\\testdir";
+	const char *dname = "\\testdir_streamerror";
 	const char *streamname =
-		"testdir:{4c8cc155-6c1e-11d1-8e41-00c04fb9386d}:$DATA";
+		"testdir_streamerror:{4c8cc155-6c1e-11d1-8e41-00c04fb9386d}:$DATA";
 	NTSTATUS status;
 	time_t change_time, access_time, write_time;
 	off_t size;
@@ -9686,7 +10049,7 @@ static bool run_streamerror(int dummy)
 		return false;
 	}
 
-	cli_unlink(cli, "\\testdir\\*", FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
+	cli_unlink(cli, "\\testdir_streamerror\\*", FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
 	cli_rmdir(cli, dname);
 
 	status = cli_mkdir(cli, dname);
@@ -10086,7 +10449,9 @@ static bool run_local_base64(int dummy)
 	return ret;
 }
 
-static void parse_fn(time_t timeout, DATA_BLOB blob, void *private_data)
+static void parse_fn(const struct gencache_timeout *t,
+		     DATA_BLOB blob,
+		     void *private_data)
 {
 	return;
 }
@@ -10480,8 +10845,9 @@ static bool run_local_string_to_sid(int dummy) {
 		return false;
 	}
 	if (!dom_sid_equal(&sid, &global_sid_Builtin_Users)) {
+		struct dom_sid_buf buf;
 		printf("mis-parsed S-1-5-32-545 as %s\n",
-		       sid_string_tos(&sid));
+		       dom_sid_str_buf(&sid, &buf));
 		return false;
 	}
 	return true;
@@ -10517,6 +10883,7 @@ static bool run_local_sid_to_string(int dummy) {
 }
 
 static bool run_local_binary_to_sid(int dummy) {
+	ssize_t ret;
 	struct dom_sid *sid = talloc(NULL, struct dom_sid);
 	static const uint8_t good_binary_sid[] = {
 		0x1, /* revision number */
@@ -10601,13 +10968,16 @@ static bool run_local_binary_to_sid(int dummy) {
 		0x1, 0x1, 0x1, 0x1, /* auth[31] */
 	};
 
-	if (!sid_parse(good_binary_sid, sizeof(good_binary_sid), sid)) {
+	ret = sid_parse(good_binary_sid, sizeof(good_binary_sid), sid);
+	if (ret == -1) {
 		return false;
 	}
-	if (sid_parse(long_binary_sid2, sizeof(long_binary_sid2), sid)) {
+	ret = sid_parse(long_binary_sid2, sizeof(long_binary_sid2), sid);
+	if (ret != -1) {
 		return false;
 	}
-	if (sid_parse(long_binary_sid, sizeof(long_binary_sid), sid)) {
+	ret = sid_parse(long_binary_sid, sizeof(long_binary_sid), sid);
+	if (ret != -1) {
 		return false;
 	}
 	return true;
@@ -10788,13 +11158,14 @@ static bool data_blob_equal(DATA_BLOB a, DATA_BLOB b)
 static bool run_local_memcache(int dummy)
 {
 	struct memcache *cache;
-	DATA_BLOB k1, k2, k3;
+	DATA_BLOB k1, k2, k3, k4, k5;
 	DATA_BLOB d1, d3;
 	DATA_BLOB v1, v3;
 
 	TALLOC_CTX *mem_ctx;
 	char *ptr1 = NULL;
 	char *ptr2 = NULL;
+	char *ptr3 = NULL;
 
 	char *str1, *str2;
 	size_t size1, size2;
@@ -10820,6 +11191,8 @@ static bool run_local_memcache(int dummy)
 	k1 = data_blob_const("d1", 2);
 	k2 = data_blob_const("d2", 2);
 	k3 = data_blob_const("d3", 2);
+	k4 = data_blob_const("d4", 2);
+	k5 = data_blob_const("d5", 2);
 
 	memcache_add(cache, STAT_CACHE, k1, d1);
 
@@ -10880,6 +11253,71 @@ static bool run_local_memcache(int dummy)
 	ptr2 = memcache_lookup_talloc(cache, GETWD_CACHE, k2);
 	if (ptr2 != NULL) {
 		printf("Did find k2, should have been purged\n");
+		return false;
+	}
+
+	/*
+	 * Test that talloc size also is accounted in memcache and
+	 * causes purge of other object.
+	 */
+
+	str1 = talloc_zero_size(mem_ctx, 100);
+	str2 = talloc_zero_size(mem_ctx, 100);
+
+	memcache_add_talloc(cache, GETWD_CACHE, k4, &str1);
+	memcache_add_talloc(cache, GETWD_CACHE, k5, &str1);
+
+	ptr3 = memcache_lookup_talloc(cache, GETWD_CACHE, k4);
+	if (ptr3 != NULL) {
+		printf("Did find k4, should have been purged\n");
+		return false;
+	}
+
+	/*
+	 * Test that adding a duplicate non-talloced
+	 * key/value on top of a talloced key/value takes account
+	 * of the talloc_freed value size.
+	 */
+	TALLOC_FREE(cache);
+	TALLOC_FREE(mem_ctx);
+
+	mem_ctx = talloc_init("key_replace");
+	if (mem_ctx == NULL) {
+		return false;
+	}
+
+	cache = memcache_init(NULL, sizeof(void *) == 8 ? 200 : 100);
+	if (cache == NULL) {
+		return false;
+	}
+
+	/*
+	 * Add a 100 byte talloced string. This will
+	 * store a (4 or 8 byte) pointer and record the
+	 * total talloced size.
+	 */
+	str1 = talloc_zero_size(mem_ctx, 100);
+	memcache_add_talloc(cache, GETWD_CACHE, k4, &str1);
+	/*
+	 * Now overwrite with a small talloced
+	 * value. This should fit in the existing size
+	 * and the total talloced size should be removed
+	 * from the cache size.
+	 */
+	str1 = talloc_zero_size(mem_ctx, 2);
+	memcache_add_talloc(cache, GETWD_CACHE, k4, &str1);
+	/*
+	 * Now store a 20 byte string. If the
+	 * total talloced size wasn't accounted for
+	 * and removed in the overwrite, then this
+	 * will evict k4.
+	 */
+	str2 = talloc_zero_size(mem_ctx, 20);
+	memcache_add_talloc(cache, GETWD_CACHE, k5, &str2);
+
+	ptr3 = memcache_lookup_talloc(cache, GETWD_CACHE, k4);
+	if (ptr3 == NULL) {
+		printf("Did not find k4, should not have been purged\n");
 		return false;
 	}
 
@@ -11568,158 +12006,627 @@ static struct {
 	bool (*fn)(int);
 	unsigned flags;
 } torture_ops[] = {
-	{"FDPASS", run_fdpasstest, 0},
-	{"LOCK1",  run_locktest1,  0},
-	{"LOCK2",  run_locktest2,  0},
-	{"LOCK3",  run_locktest3,  0},
-	{"LOCK4",  run_locktest4,  0},
-	{"LOCK5",  run_locktest5,  0},
-	{"LOCK6",  run_locktest6,  0},
-	{"LOCK7",  run_locktest7,  0},
-	{"LOCK8",  run_locktest8,  0},
-	{"LOCK9",  run_locktest9,  0},
-	{"UNLINK", run_unlinktest, 0},
-	{"BROWSE", run_browsetest, 0},
-	{"ATTR",   run_attrtest,   0},
-	{"TRANS2", run_trans2test, 0},
-	{"MAXFID", run_maxfidtest, FLAG_MULTIPROC},
-	{"TORTURE",run_torture,    FLAG_MULTIPROC},
-	{"RANDOMIPC", run_randomipc, 0},
-	{"NEGNOWAIT", run_negprot_nowait, 0},
-	{"NBENCH",  run_nbench, 0},
-	{"NBENCH2", run_nbench2, 0},
-	{"OPLOCK1",  run_oplock1, 0},
-	{"OPLOCK2",  run_oplock2, 0},
-	{"OPLOCK4",  run_oplock4, 0},
-	{"DIR",  run_dirtest, 0},
-	{"DIR1",  run_dirtest1, 0},
-	{"DIR-CREATETIME",  run_dir_createtime, 0},
-	{"DENY1",  torture_denytest1, 0},
-	{"DENY2",  torture_denytest2, 0},
-	{"TCON",  run_tcon_test, 0},
-	{"TCONDEV",  run_tcon_devtype_test, 0},
-	{"RW1",  run_readwritetest, 0},
-	{"RW2",  run_readwritemulti, FLAG_MULTIPROC},
-	{"RW3",  run_readwritelarge, 0},
-	{"RW-SIGNING",  run_readwritelarge_signtest, 0},
-	{"OPEN", run_opentest, 0},
-	{"POSIX", run_simple_posix_open_test, 0},
-	{"POSIX-APPEND", run_posix_append, 0},
-	{"POSIX-SYMLINK-ACL", run_acl_symlink_test, 0},
-	{"POSIX-SYMLINK-EA", run_ea_symlink_test, 0},
-	{"POSIX-STREAM-DELETE", run_posix_stream_delete, 0},
-	{"POSIX-OFD-LOCK", run_posix_ofd_lock_test, 0},
-	{"WINDOWS-BAD-SYMLINK", run_symlink_open_test, 0},
-	{"CASE-INSENSITIVE-CREATE", run_case_insensitive_create, 0},
-	{"ASYNC-ECHO", run_async_echo, 0},
-	{ "UID-REGRESSION-TEST", run_uid_regression_test, 0},
-	{ "SHORTNAME-TEST", run_shortname_test, 0},
-	{ "ADDRCHANGE", run_addrchange, 0},
+	{
+		.name = "FDPASS",
+		.fn   = run_fdpasstest,
+	},
+	{
+		.name = "LOCK1",
+		.fn   = run_locktest1,
+	},
+	{
+		.name = "LOCK2",
+		.fn   =  run_locktest2,
+	},
+	{
+		.name = "LOCK3",
+		.fn   =  run_locktest3,
+	},
+	{
+		.name = "LOCK4",
+		.fn   =  run_locktest4,
+	},
+	{
+		.name = "LOCK5",
+		.fn   =  run_locktest5,
+	},
+	{
+		.name = "LOCK6",
+		.fn   =  run_locktest6,
+	},
+	{
+		.name = "LOCK7",
+		.fn   =  run_locktest7,
+	},
+	{
+		.name = "LOCK8",
+		.fn   =  run_locktest8,
+	},
+	{
+		.name = "LOCK9",
+		.fn   =  run_locktest9,
+	},
+	{
+		.name = "UNLINK",
+		.fn   = run_unlinktest,
+	},
+	{
+		.name = "BROWSE",
+		.fn   = run_browsetest,
+	},
+	{
+		.name = "ATTR",
+		.fn   =   run_attrtest,
+	},
+	{
+		.name = "TRANS2",
+		.fn   = run_trans2test,
+	},
+	{
+		.name  = "MAXFID",
+		.fn    = run_maxfidtest,
+		.flags = FLAG_MULTIPROC,
+	},
+	{
+		.name  = "TORTURE",
+		.fn    = run_torture,
+		.flags = FLAG_MULTIPROC,
+	},
+	{
+		.name  = "RANDOMIPC",
+		.fn    = run_randomipc,
+	},
+	{
+		.name  = "NEGNOWAIT",
+		.fn    = run_negprot_nowait,
+	},
+	{
+		.name  = "NBENCH",
+		.fn    =  run_nbench,
+	},
+	{
+		.name  = "NBENCH2",
+		.fn    = run_nbench2,
+	},
+	{
+		.name  = "OPLOCK1",
+		.fn    =  run_oplock1,
+	},
+	{
+		.name  = "OPLOCK2",
+		.fn    =  run_oplock2,
+	},
+	{
+		.name  = "OPLOCK4",
+		.fn    =  run_oplock4,
+	},
+	{
+		.name  = "DIR",
+		.fn    =  run_dirtest,
+	},
+	{
+		.name  = "DIR1",
+		.fn    =  run_dirtest1,
+	},
+	{
+		.name  = "DIR-CREATETIME",
+		.fn    =  run_dir_createtime,
+	},
+	{
+		.name  = "DENY1",
+		.fn    =  torture_denytest1,
+	},
+	{
+		.name  = "DENY2",
+		.fn    =  torture_denytest2,
+	},
+	{
+		.name  = "TCON",
+		.fn    =  run_tcon_test,
+	},
+	{
+		.name  = "TCONDEV",
+		.fn    =  run_tcon_devtype_test,
+	},
+	{
+		.name  = "RW1",
+		.fn    =  run_readwritetest,
+	},
+	{
+		.name  = "RW2",
+		.fn    =  run_readwritemulti,
+		.flags = FLAG_MULTIPROC
+	},
+	{
+		.name  = "RW3",
+		.fn    =  run_readwritelarge,
+	},
+	{
+		.name  = "RW-SIGNING",
+		.fn    =  run_readwritelarge_signtest,
+	},
+	{
+		.name  = "OPEN",
+		.fn    = run_opentest,
+	},
+	{
+		.name  = "POSIX",
+		.fn    = run_simple_posix_open_test,
+	},
+	{
+		.name  = "POSIX-APPEND",
+		.fn    = run_posix_append,
+	},
+	{
+		.name  = "POSIX-SYMLINK-ACL",
+		.fn    = run_acl_symlink_test,
+	},
+	{
+		.name  = "POSIX-SYMLINK-EA",
+		.fn    = run_ea_symlink_test,
+	},
+	{
+		.name  = "POSIX-STREAM-DELETE",
+		.fn    = run_posix_stream_delete,
+	},
+	{
+		.name  = "POSIX-OFD-LOCK",
+		.fn    = run_posix_ofd_lock_test,
+	},
+	{
+		.name  = "POSIX-MKDIR",
+		.fn    = run_posix_mkdir_test,
+	},
+	{
+		.name  = "WINDOWS-BAD-SYMLINK",
+		.fn    = run_symlink_open_test,
+	},
+	{
+		.name  = "CASE-INSENSITIVE-CREATE",
+		.fn    = run_case_insensitive_create,
+	},
+	{
+		.name  = "ASYNC-ECHO",
+		.fn    = run_async_echo,
+	},
+	{
+		.name  = "UID-REGRESSION-TEST",
+		.fn    = run_uid_regression_test,
+	},
+	{
+		.name  = "SHORTNAME-TEST",
+		.fn    = run_shortname_test,
+	},
+	{
+		.name  = "ADDRCHANGE",
+		.fn    = run_addrchange,
+	},
 #if 1
-	{"OPENATTR", run_openattrtest, 0},
+	{
+		.name  = "OPENATTR",
+		.fn    = run_openattrtest,
+	},
 #endif
-	{"XCOPY", run_xcopy, 0},
-	{"RENAME", run_rename, 0},
-	{"RENAME-ACCESS", run_rename_access, 0},
-	{"OWNER-RIGHTS", run_owner_rights, 0},
-	{"DELETE", run_deletetest, 0},
-	{"DELETE-PRINT", run_delete_print_test, 0},
-	{"WILDDELETE", run_wild_deletetest, 0},
-	{"DELETE-LN", run_deletetest_ln, 0},
-	{"PROPERTIES", run_properties, 0},
-	{"MANGLE", torture_mangle, 0},
-	{"MANGLE1", run_mangle1, 0},
-	{"MANGLE-ILLEGAL", run_mangle_illegal, 0},
-	{"W2K", run_w2ktest, 0},
-	{"TRANS2SCAN", torture_trans2_scan, 0},
-	{"NTTRANSSCAN", torture_nttrans_scan, 0},
-	{"UTABLE", torture_utable, 0},
-	{"CASETABLE", torture_casetable, 0},
-	{"ERRMAPEXTRACT", run_error_map_extract, 0},
-	{"PIPE_NUMBER", run_pipe_number, 0},
-	{"TCON2",  run_tcon2_test, 0},
-	{"IOCTL",  torture_ioctl_test, 0},
-	{"CHKPATH",  torture_chkpath_test, 0},
-	{"FDSESS", run_fdsesstest, 0},
-	{ "EATEST", run_eatest, 0},
-	{ "SESSSETUP_BENCH", run_sesssetup_bench, 0},
-	{ "CHAIN1", run_chain1, 0},
-	{ "CHAIN2", run_chain2, 0},
-	{ "CHAIN3", run_chain3, 0},
-	{ "WINDOWS-WRITE", run_windows_write, 0},
-	{ "LARGE_READX", run_large_readx, 0},
-	{ "NTTRANS-CREATE", run_nttrans_create, 0},
-	{ "NTTRANS-FSCTL", run_nttrans_fsctl, 0},
-	{ "CLI_ECHO", run_cli_echo, 0},
-	{ "TLDAP", run_tldap },
-	{ "STREAMERROR", run_streamerror },
-	{ "NOTIFY-BENCH", run_notify_bench },
-	{ "NOTIFY-BENCH2", run_notify_bench2 },
-	{ "NOTIFY-BENCH3", run_notify_bench3 },
-	{ "BAD-NBT-SESSION", run_bad_nbt_session },
-	{ "IGN-BAD-NEGPROT", run_ign_bad_negprot },
-	{ "SMB-ANY-CONNECT", run_smb_any_connect },
-	{ "NOTIFY-ONLINE", run_notify_online },
-	{ "SMB2-BASIC", run_smb2_basic },
-	{ "SMB2-NEGPROT", run_smb2_negprot },
-	{ "SMB2-ANONYMOUS", run_smb2_anonymous },
-	{ "SMB2-SESSION-RECONNECT", run_smb2_session_reconnect },
-	{ "SMB2-TCON-DEPENDENCE", run_smb2_tcon_dependence },
-	{ "SMB2-MULTI-CHANNEL", run_smb2_multi_channel },
-	{ "SMB2-SESSION-REAUTH", run_smb2_session_reauth },
-	{ "SMB2-FTRUNCATE", run_smb2_ftruncate },
-	{ "SMB2-DIR-FSYNC", run_smb2_dir_fsync },
-	{ "CLEANUP1", run_cleanup1 },
-	{ "CLEANUP2", run_cleanup2 },
-	{ "CLEANUP3", run_cleanup3 },
-	{ "CLEANUP4", run_cleanup4 },
-	{ "OPLOCK-CANCEL", run_oplock_cancel },
-	{ "PIDHIGH", run_pidhigh },
-	{ "LOCAL-SUBSTITUTE", run_local_substitute, 0},
-	{ "LOCAL-GENCACHE", run_local_gencache, 0},
-	{ "LOCAL-DBWRAP-WATCH1", run_dbwrap_watch1, 0 },
-	{ "LOCAL-DBWRAP-WATCH2", run_dbwrap_watch2, 0 },
-	{ "LOCAL-DBWRAP-DO-LOCKED1", run_dbwrap_do_locked1, 0 },
-	{ "LOCAL-MESSAGING-READ1", run_messaging_read1, 0 },
-	{ "LOCAL-MESSAGING-READ2", run_messaging_read2, 0 },
-	{ "LOCAL-MESSAGING-READ3", run_messaging_read3, 0 },
-	{ "LOCAL-MESSAGING-READ4", run_messaging_read4, 0 },
-	{ "LOCAL-MESSAGING-FDPASS1", run_messaging_fdpass1, 0 },
-	{ "LOCAL-MESSAGING-FDPASS2", run_messaging_fdpass2, 0 },
-	{ "LOCAL-MESSAGING-FDPASS2a", run_messaging_fdpass2a, 0 },
-	{ "LOCAL-MESSAGING-FDPASS2b", run_messaging_fdpass2b, 0 },
-	{ "LOCAL-MESSAGING-SEND-ALL", run_messaging_send_all, 0 },
-	{ "LOCAL-BASE64", run_local_base64, 0},
-	{ "LOCAL-RBTREE", run_local_rbtree, 0},
-	{ "LOCAL-MEMCACHE", run_local_memcache, 0},
-	{ "LOCAL-STREAM-NAME", run_local_stream_name, 0},
-	{ "WBCLIENT-MULTI-PING", run_wbclient_multi_ping, 0},
-	{ "LOCAL-string_to_sid", run_local_string_to_sid, 0},
-	{ "LOCAL-sid_to_string", run_local_sid_to_string, 0},
-	{ "LOCAL-binary_to_sid", run_local_binary_to_sid, 0},
-	{ "LOCAL-DBTRANS", run_local_dbtrans, 0},
-	{ "LOCAL-TEVENT-POLL", run_local_tevent_poll, 0},
-	{ "LOCAL-CONVERT-STRING", run_local_convert_string, 0},
-	{ "LOCAL-CONV-AUTH-INFO", run_local_conv_auth_info, 0},
-	{ "LOCAL-hex_encode_buf", run_local_hex_encode_buf, 0},
-	{ "LOCAL-IDMAP-TDB-COMMON", run_idmap_tdb_common_test, 0},
-	{ "LOCAL-remove_duplicate_addrs2", run_local_remove_duplicate_addrs2, 0},
-	{ "local-tdb-opener", run_local_tdb_opener, 0 },
-	{ "local-tdb-writer", run_local_tdb_writer, 0 },
-	{ "LOCAL-DBWRAP-CTDB", run_local_dbwrap_ctdb, 0 },
-	{ "LOCAL-BENCH-PTHREADPOOL", run_bench_pthreadpool, 0 },
-	{ "LOCAL-PTHREADPOOL-TEVENT", run_pthreadpool_tevent, 0 },
-	{ "LOCAL-G-LOCK1", run_g_lock1, 0 },
-	{ "LOCAL-G-LOCK2", run_g_lock2, 0 },
-	{ "LOCAL-G-LOCK3", run_g_lock3, 0 },
-	{ "LOCAL-G-LOCK4", run_g_lock4, 0 },
-	{ "LOCAL-G-LOCK5", run_g_lock5, 0 },
-	{ "LOCAL-G-LOCK6", run_g_lock6, 0 },
-	{ "LOCAL-G-LOCK-PING-PONG", run_g_lock_ping_pong, 0 },
-	{ "LOCAL-CANONICALIZE-PATH", run_local_canonicalize_path, 0 },
-	{ "LOCAL-NAMEMAP-CACHE1", run_local_namemap_cache1, 0 },
-	{ "qpathinfo-bufsize", run_qpathinfo_bufsize, 0 },
-	{NULL, NULL, 0}};
+	{
+		.name  = "XCOPY",
+		.fn    = run_xcopy,
+	},
+	{
+		.name  = "RENAME",
+		.fn    = run_rename,
+	},
+	{
+		.name  = "RENAME-ACCESS",
+		.fn    = run_rename_access,
+	},
+	{
+		.name  = "OWNER-RIGHTS",
+		.fn    = run_owner_rights,
+	},
+	{
+		.name  = "DELETE",
+		.fn    = run_deletetest,
+	},
+	{
+		.name  = "DELETE-PRINT",
+		.fn    = run_delete_print_test,
+	},
+	{
+		.name  = "WILDDELETE",
+		.fn    = run_wild_deletetest,
+	},
+	{
+		.name  = "DELETE-LN",
+		.fn    = run_deletetest_ln,
+	},
+	{
+		.name  = "PROPERTIES",
+		.fn    = run_properties,
+	},
+	{
+		.name  = "MANGLE",
+		.fn    = torture_mangle,
+	},
+	{
+		.name  = "MANGLE1",
+		.fn    = run_mangle1,
+	},
+	{
+		.name  = "MANGLE-ILLEGAL",
+		.fn    = run_mangle_illegal,
+	},
+	{
+		.name  = "W2K",
+		.fn    = run_w2ktest,
+	},
+	{
+		.name  = "TRANS2SCAN",
+		.fn    = torture_trans2_scan,
+	},
+	{
+		.name  = "NTTRANSSCAN",
+		.fn    = torture_nttrans_scan,
+	},
+	{
+		.name  = "UTABLE",
+		.fn    = torture_utable,
+	},
+	{
+		.name  = "CASETABLE",
+		.fn    = torture_casetable,
+	},
+	{
+		.name  = "ERRMAPEXTRACT",
+		.fn    = run_error_map_extract,
+	},
+	{
+		.name  = "PIPE_NUMBER",
+		.fn    = run_pipe_number,
+	},
+	{
+		.name  = "TCON2",
+		.fn    =  run_tcon2_test,
+	},
+	{
+		.name  = "IOCTL",
+		.fn    =  torture_ioctl_test,
+	},
+	{
+		.name  = "CHKPATH",
+		.fn    =  torture_chkpath_test,
+	},
+	{
+		.name  = "FDSESS",
+		.fn    = run_fdsesstest,
+	},
+	{
+		.name  = "EATEST",
+		.fn    = run_eatest,
+	},
+	{
+		.name  = "SESSSETUP_BENCH",
+		.fn    = run_sesssetup_bench,
+	},
+	{
+		.name  = "CHAIN1",
+		.fn    = run_chain1,
+	},
+	{
+		.name  = "CHAIN2",
+		.fn    = run_chain2,
+	},
+	{
+		.name  = "CHAIN3",
+		.fn    = run_chain3,
+	},
+	{
+		.name  = "WINDOWS-WRITE",
+		.fn    = run_windows_write,
+	},
+	{
+		.name  = "LARGE_READX",
+		.fn    = run_large_readx,
+	},
+	{
+		.name  = "NTTRANS-CREATE",
+		.fn    = run_nttrans_create,
+	},
+	{
+		.name  = "NTTRANS-FSCTL",
+		.fn    = run_nttrans_fsctl,
+	},
+	{
+		.name  = "CLI_ECHO",
+		.fn    = run_cli_echo,
+	},
+	{
+		.name  = "CLI_SPLICE",
+		.fn    = run_cli_splice,
+	},
+	{
+		.name  = "TLDAP",
+		.fn    = run_tldap,
+	},
+	{
+		.name  = "STREAMERROR",
+		.fn    = run_streamerror,
+	},
+	{
+		.name  = "NOTIFY-BENCH",
+		.fn    = run_notify_bench,
+	},
+	{
+		.name  = "NOTIFY-BENCH2",
+		.fn    = run_notify_bench2,
+	},
+	{
+		.name  = "NOTIFY-BENCH3",
+		.fn    = run_notify_bench3,
+	},
+	{
+		.name  = "BAD-NBT-SESSION",
+		.fn    = run_bad_nbt_session,
+	},
+	{
+		.name  = "IGN-BAD-NEGPROT",
+		.fn    = run_ign_bad_negprot,
+	},
+	{
+		.name  = "SMB-ANY-CONNECT",
+		.fn    = run_smb_any_connect,
+	},
+	{
+		.name  = "NOTIFY-ONLINE",
+		.fn    = run_notify_online,
+	},
+	{
+		.name  = "SMB2-BASIC",
+		.fn    = run_smb2_basic,
+	},
+	{
+		.name  = "SMB2-NEGPROT",
+		.fn    = run_smb2_negprot,
+	},
+	{
+		.name  = "SMB2-ANONYMOUS",
+		.fn    = run_smb2_anonymous,
+	},
+	{
+		.name  = "SMB2-SESSION-RECONNECT",
+		.fn    = run_smb2_session_reconnect,
+	},
+	{
+		.name  = "SMB2-TCON-DEPENDENCE",
+		.fn    = run_smb2_tcon_dependence,
+	},
+	{
+		.name  = "SMB2-MULTI-CHANNEL",
+		.fn    = run_smb2_multi_channel,
+	},
+	{
+		.name  = "SMB2-SESSION-REAUTH",
+		.fn    = run_smb2_session_reauth,
+	},
+	{
+		.name  = "SMB2-FTRUNCATE",
+		.fn    = run_smb2_ftruncate,
+	},
+	{
+		.name  = "SMB2-DIR-FSYNC",
+		.fn    = run_smb2_dir_fsync,
+	},
+	{
+		.name  = "CLEANUP1",
+		.fn    = run_cleanup1,
+	},
+	{
+		.name  = "CLEANUP2",
+		.fn    = run_cleanup2,
+	},
+	{
+		.name  = "CLEANUP3",
+		.fn    = run_cleanup3,
+	},
+	{
+		.name  = "CLEANUP4",
+		.fn    = run_cleanup4,
+	},
+	{
+		.name  = "OPLOCK-CANCEL",
+		.fn    = run_oplock_cancel,
+	},
+	{
+		.name  = "PIDHIGH",
+		.fn    = run_pidhigh,
+	},
+	{
+		.name  = "LOCAL-SUBSTITUTE",
+		.fn    = run_local_substitute,
+	},
+	{
+		.name  = "LOCAL-GENCACHE",
+		.fn    = run_local_gencache,
+	},
+	{
+		.name  = "LOCAL-DBWRAP-WATCH1",
+		.fn    = run_dbwrap_watch1,
+	},
+	{
+		.name  = "LOCAL-DBWRAP-WATCH2",
+		.fn    = run_dbwrap_watch2,
+	},
+	{
+		.name  = "LOCAL-DBWRAP-DO-LOCKED1",
+		.fn    = run_dbwrap_do_locked1,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-READ1",
+		.fn    = run_messaging_read1,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-READ2",
+		.fn    = run_messaging_read2,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-READ3",
+		.fn    = run_messaging_read3,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-READ4",
+		.fn    = run_messaging_read4,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-FDPASS1",
+		.fn    = run_messaging_fdpass1,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-FDPASS2",
+		.fn    = run_messaging_fdpass2,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-FDPASS2a",
+		.fn    = run_messaging_fdpass2a,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-FDPASS2b",
+		.fn    = run_messaging_fdpass2b,
+	},
+	{
+		.name  = "LOCAL-MESSAGING-SEND-ALL",
+		.fn    = run_messaging_send_all,
+	},
+	{
+		.name  = "LOCAL-BASE64",
+		.fn    = run_local_base64,
+	},
+	{
+		.name  = "LOCAL-RBTREE",
+		.fn    = run_local_rbtree,
+	},
+	{
+		.name  = "LOCAL-MEMCACHE",
+		.fn    = run_local_memcache,
+	},
+	{
+		.name  = "LOCAL-STREAM-NAME",
+		.fn    = run_local_stream_name,
+	},
+	{
+		.name  = "WBCLIENT-MULTI-PING",
+		.fn    = run_wbclient_multi_ping,
+	},
+	{
+		.name  = "LOCAL-string_to_sid",
+		.fn    = run_local_string_to_sid,
+	},
+	{
+		.name  = "LOCAL-sid_to_string",
+		.fn    = run_local_sid_to_string,
+	},
+	{
+		.name  = "LOCAL-binary_to_sid",
+		.fn    = run_local_binary_to_sid,
+	},
+	{
+		.name  = "LOCAL-DBTRANS",
+		.fn    = run_local_dbtrans,
+	},
+	{
+		.name  = "LOCAL-TEVENT-POLL",
+		.fn    = run_local_tevent_poll,
+	},
+	{
+		.name  = "LOCAL-CONVERT-STRING",
+		.fn    = run_local_convert_string,
+	},
+	{
+		.name  = "LOCAL-CONV-AUTH-INFO",
+		.fn    = run_local_conv_auth_info,
+	},
+	{
+		.name  = "LOCAL-hex_encode_buf",
+		.fn    = run_local_hex_encode_buf,
+	},
+	{
+		.name  = "LOCAL-IDMAP-TDB-COMMON",
+		.fn    = run_idmap_tdb_common_test,
+	},
+	{
+		.name  = "LOCAL-remove_duplicate_addrs2",
+		.fn    = run_local_remove_duplicate_addrs2,
+	},
+	{
+		.name  = "local-tdb-opener",
+		.fn    = run_local_tdb_opener,
+	},
+	{
+		.name  = "local-tdb-writer",
+		.fn    = run_local_tdb_writer,
+	},
+	{
+		.name  = "LOCAL-DBWRAP-CTDB",
+		.fn    = run_local_dbwrap_ctdb,
+	},
+	{
+		.name  = "LOCAL-BENCH-PTHREADPOOL",
+		.fn    = run_bench_pthreadpool,
+	},
+	{
+		.name  = "LOCAL-PTHREADPOOL-TEVENT",
+		.fn    = run_pthreadpool_tevent,
+	},
+	{
+		.name  = "LOCAL-G-LOCK1",
+		.fn    = run_g_lock1,
+	},
+	{
+		.name  = "LOCAL-G-LOCK2",
+		.fn    = run_g_lock2,
+	},
+	{
+		.name  = "LOCAL-G-LOCK3",
+		.fn    = run_g_lock3,
+	},
+	{
+		.name  = "LOCAL-G-LOCK4",
+		.fn    = run_g_lock4,
+	},
+	{
+		.name  = "LOCAL-G-LOCK5",
+		.fn    = run_g_lock5,
+	},
+	{
+		.name  = "LOCAL-G-LOCK6",
+		.fn    = run_g_lock6,
+	},
+	{
+		.name  = "LOCAL-G-LOCK-PING-PONG",
+		.fn    = run_g_lock_ping_pong,
+	},
+	{
+		.name  = "LOCAL-CANONICALIZE-PATH",
+		.fn    = run_local_canonicalize_path,
+	},
+	{
+		.name  = "LOCAL-NAMEMAP-CACHE1",
+		.fn    = run_local_namemap_cache1,
+	},
+	{
+		.name  = "LOCAL-IDMAP-CACHE1",
+		.fn    = run_local_idmap_cache1,
+	},
+	{
+		.name  = "qpathinfo-bufsize",
+		.fn    = run_qpathinfo_bufsize,
+	},
+	{
+		.name  = "hide-new-files-timeout",
+		.fn    = run_hidenewfiles,
+	},
+	{
+		.name = NULL,
+	},
+};
 
 /****************************************************************************
 run a specified test or "ALL"

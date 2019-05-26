@@ -28,6 +28,9 @@ if [ -d "$EVENTSCRIPTS_TESTS_VAR_DIR" ] ; then
 fi
 mkdir -p "$EVENTSCRIPTS_TESTS_VAR_DIR"
 
+# Force this to be absolute - event scripts can change directory
+EVENTSCRIPTS_TESTS_VAR_DIR=$(cd "$EVENTSCRIPTS_TESTS_VAR_DIR" && echo "$PWD")
+
 export CTDB_LOGGING="file:${EVENTSCRIPTS_TESTS_VAR_DIR}/log.ctdb"
 touch "${CTDB_LOGGING#file:}" || \
     die "Unable to setup logging for \"$CTDB_LOGGING\""
@@ -40,7 +43,6 @@ else
 fi
 
 setup_ctdb_base "$EVENTSCRIPTS_TESTS_VAR_DIR" "etc-ctdb" \
-		events \
 		functions \
 		nfs-checks.d \
 		nfs-linux-kernel-callout \
@@ -446,49 +448,59 @@ setup ()
 # Set some globals and print the summary.
 define_test ()
 {
-    desc="$1"
+	desc="$1"
 
-    _f=$(basename "$0" ".sh")
+	_f=$(basename "$0" ".sh")
 
-    # Remaining format should be NN.service.event.NNN or NN.service.NNN:
-    _num="${_f##*.}"
-    _f="${_f%.*}"
+	# Remaining format should be NN.script.event.NUM or
+	# NN.script.NUM or script.NUM:
+	_num="${_f##*.}"
+	_f="${_f%.*}"
 
-    case "$_f" in
-	[0-9][0-9].*.*)
-	    script="${_f%.*}.script"
-	    event="${_f##*.}"
-	    script_dir="${CTDB_BASE}/events/legacy"
-	    ;;
+	case "$_f" in
 	[0-9][0-9].*)
-	    script="${_f}.script"
-	    unset event
-	    script_dir="${CTDB_BASE}/events/legacy"
-	    ;;
-	*.*)
-	    script="${_f%.*}"
-	    event="${_f##*.}"
-	    script_dir="${CTDB_BASE}"
-	    ;;
+		case "$_f" in
+		[0-9][0-9].*.*)
+			script="${_f%.*}.script"
+			event="${_f##*.}"
+			;;
+		[0-9][0-9].*)
+			script="${_f}.script"
+			unset event
+			;;
+		esac
+		# "Enable" the script
+		_subdir="events/legacy"
+		script_dir="${CTDB_BASE}/${_subdir}"
+		# Symlink target needs to be absolute
+		case "$CTDB_SCRIPTS_DATA_DIR" in
+		/*) _data_dir="${CTDB_SCRIPTS_DATA_DIR}/${_subdir}" ;;
+		*)  _data_dir="${PWD}/${CTDB_SCRIPTS_DATA_DIR}/${_subdir}"
+		esac
+		mkdir -p "$script_dir"
+		ln -s "${_data_dir}/${script}" "$script_dir"
+		;;
 	*)
-	    script="${_f%.*}"
-	    unset event
-	    script_dir="${CTDB_BASE}"
-    esac
+		script="${_f%.*}"
+		unset event
+		script_dir="${CTDB_BASE}"
+	esac
 
-    [ -r "${script_dir}/${script}" ] || \
-	die "Internal error - unable to find script \"${script_dir}/${script}\""
+	_s="${script_dir}/${script}"
+	[ -r "$_s" ] || \
+		die "Internal error - unable to find script \"${_s}\""
 
-    script_short="${script%.script}"
+	script_short="${script%.script}"
 
-    printf "%-17s %-10s %-4s - %s\n\n" "$script_short" "$event" "$_num" "$desc"
+	printf "%-17s %-10s %-4s - %s\n\n" \
+	       "$script_short" "$event" "$_num" "$desc"
 
-    _f="${TEST_SUBDIR}/scripts/${script_short}.sh"
-    if [ -r "$_f" ] ; then
-	    . "$_f"
-    fi
+	_f="${TEST_SUBDIR}/scripts/${script_short}.sh"
+	if [ -r "$_f" ] ; then
+		. "$_f"
+	fi
 
-    ctdb_set_pnn 0
+	ctdb_set_pnn 0
 }
 
 # Run an eventscript once.  The test passes if the return code and
@@ -538,5 +550,5 @@ simple_test_event ()
 
 simple_test_command ()
 {
-    unit_test "$@"
+    unit_test_notrace "$@"
 }

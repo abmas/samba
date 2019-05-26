@@ -17,32 +17,39 @@
 #
 
 """Samba Python tests."""
-
+from __future__ import print_function
 import os
 import tempfile
+import warnings
 import ldb
 import samba
 from samba import param
 from samba import credentials
 from samba.credentials import Credentials
 from samba import gensec
-import socket
-import struct
 import subprocess
 import sys
-import tempfile
 import unittest
 import re
 import samba.auth
 import samba.dcerpc.base
-from samba.compat import PY3, text_type
+from samba.compat import text_type
+from samba.compat import string_types
 from random import randint
-if not PY3:
-    # Py2 only
+from random import SystemRandom
+from contextlib import contextmanager
+import string
+try:
     from samba.samdb import SamDB
-    import samba.ndr
-    import samba.dcerpc.dcerpc
-    import samba.dcerpc.epmapper
+except ImportError:
+    # We are built without samdb support,
+    # imitate it so that connect_samdb() can recover
+    def SamDB(*args, **kwargs):
+        return None
+
+import samba.ndr
+import samba.dcerpc.dcerpc
+import samba.dcerpc.epmapper
 
 try:
     from unittest import SkipTest
@@ -50,7 +57,11 @@ except ImportError:
     class SkipTest(Exception):
         """Test skipped."""
 
-HEXDUMP_FILTER=''.join([(len(repr(chr(x)))==3) and chr(x) or '.' for x in range(256)])
+BINDIR = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                      "../../../../bin"))
+
+HEXDUMP_FILTER = bytearray([x if ((len(repr(chr(x))) == 3) and (x < 127)) else ord('.') for x in range(256)])
+
 
 class TestCase(unittest.TestCase):
     """A Samba test case."""
@@ -80,25 +91,33 @@ class TestCase(unittest.TestCase):
     def hexdump(self, src):
         N = 0
         result = ''
+        is_string = isinstance(src, string_types)
         while src:
             ll = src[:8]
             lr = src[8:16]
             src = src[16:]
-            hl = ' '.join(["%02X" % ord(x) for x in ll])
-            hr = ' '.join(["%02X" % ord(x) for x in lr])
-            ll = ll.translate(HEXDUMP_FILTER)
-            lr = lr.translate(HEXDUMP_FILTER)
-            result += "[%04X] %-*s  %-*s  %s %s\n" % (N, 8*3, hl, 8*3, hr, ll, lr)
+            if is_string:
+                hl = ' '.join(["%02X" % ord(x) for x in ll])
+                hr = ' '.join(["%02X" % ord(x) for x in lr])
+                ll = ll.translate(HEXDUMP_FILTER)
+                lr = lr.translate(HEXDUMP_FILTER)
+            else:
+                hl = ' '.join(["%02X" % x for x in ll])
+                hr = ' '.join(["%02X" % x for x in lr])
+                ll = ll.translate(HEXDUMP_FILTER).decode('utf8')
+                lr = lr.translate(HEXDUMP_FILTER).decode('utf8')
+            result += "[%04X] %-*s  %-*s  %s %s\n" % (N, 8 * 3, hl, 8 * 3, hr, ll, lr)
             N += 16
         return result
 
     def insta_creds(self, template=None, username=None, userpass=None, kerberos_state=None):
 
         if template is None:
-            assert template is not None
+            raise ValueError("you need to supply a Credentials template")
 
-        if username is not None:
-            assert userpass is not None
+        if username is not None and userpass is None:
+            raise ValueError(
+                "you cannot set creds username without setting a password")
 
         if username is None:
             assert userpass is None
@@ -120,8 +139,6 @@ class TestCase(unittest.TestCase):
                               | gensec.FEATURE_SEAL)
         c.set_kerberos_state(kerberos_state)
         return c
-
-
 
     # These functions didn't exist before Python2.7:
     if sys.version_info < (2, 7):
@@ -182,7 +199,8 @@ class TestCase(unittest.TestCase):
                 result.addSuccess(self)
 
         def run(self, result=None):
-            if result is None: result = self.defaultTestResult()
+            if result is None:
+                result = self.defaultTestResult()
             result.startTest(self)
             testMethod = getattr(self, self._testMethodName)
             try:
@@ -223,7 +241,8 @@ class TestCase(unittest.TestCase):
 
                 for (fn, args, kwargs) in reversed(getattr(self, "_cleanups", [])):
                     fn(*args, **kwargs)
-                if ok: result.addSuccess(self)
+                if ok:
+                    result.addSuccess(self)
             finally:
                 result.stopTest(self)
 
@@ -239,7 +258,7 @@ class TestCase(unittest.TestCase):
                              "a diff follows\n"
                              % ('when stripped ' if strip else '',
                                 len(a), len(b),
-                             ))
+                                ))
 
             from difflib import unified_diff
             diff = unified_diff(a.splitlines(True),
@@ -277,9 +296,24 @@ class TestCaseInTempDir(TestCase):
         self.addCleanup(self._remove_tempdir)
 
     def _remove_tempdir(self):
+        # Note asserting here is treated as an error rather than a test failure
         self.assertEquals([], os.listdir(self.tempdir))
         os.rmdir(self.tempdir)
         self.tempdir = None
+
+    @contextmanager
+    def mktemp(self):
+        """Yield a temporary filename in the tempdir."""
+        try:
+            fd, fn = tempfile.mkstemp(dir=self.tempdir)
+            yield fn
+        finally:
+            try:
+                os.close(fd)
+                os.unlink(fn)
+            except (OSError, IOError) as e:
+                print("could not remove temporary file: %s" % e,
+                      file=sys.stderr)
 
 
 def env_loadparm():
@@ -307,6 +341,7 @@ def env_get_var_value(var_name, allow_missing=False):
 
 cmdline_credentials = None
 
+
 class RpcInterfaceTestCase(TestCase):
     """DCE/RPC Test case."""
 
@@ -317,7 +352,7 @@ class ValidNetbiosNameTests(TestCase):
         self.assertTrue(samba.valid_netbios_name("FOO"))
 
     def test_too_long(self):
-        self.assertFalse(samba.valid_netbios_name("FOO"*10))
+        self.assertFalse(samba.valid_netbios_name("FOO" * 10))
 
     def test_invalid_characters(self):
         self.assertFalse(samba.valid_netbios_name("*BLA"))
@@ -333,28 +368,52 @@ class BlackboxProcessError(Exception):
 
     def __init__(self, returncode, cmd, stdout, stderr, msg=None):
         self.returncode = returncode
-        self.cmd = cmd
+        if isinstance(cmd, list):
+            self.cmd = ' '.join(cmd)
+            self.shell = False
+        else:
+            self.cmd = cmd
+            self.shell = True
         self.stdout = stdout
         self.stderr = stderr
         self.msg = msg
 
     def __str__(self):
-        s = ("Command '%s'; exit status %d; stdout: '%s'; stderr: '%s'" %
-             (self.cmd, self.returncode, self.stdout, self.stderr))
+        s = ("Command '%s'; shell %s; exit status %d; "
+             "stdout: '%s'; stderr: '%s'" %
+             (self.cmd, self.shell, self.returncode, self.stdout, self.stderr))
         if self.msg is not None:
             s = "%s; message: %s" % (s, self.msg)
 
         return s
 
+
 class BlackboxTestCase(TestCaseInTempDir):
     """Base test case for blackbox tests."""
 
     def _make_cmdline(self, line):
-        bindir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../bin"))
-        parts = line.split(" ")
-        if os.path.exists(os.path.join(bindir, parts[0])):
-            parts[0] = os.path.join(bindir, parts[0])
-        line = " ".join(parts)
+        """Expand the called script into a fully resolved path in the bin
+        directory."""
+        if isinstance(line, list):
+            parts = line
+        else:
+            parts = line.split(" ", 1)
+        cmd = parts[0]
+        exe = os.path.join(BINDIR, cmd)
+
+        python_cmds = ["samba-tool",
+            "samba_dnsupdate",
+            "script/traffic_replay",
+            "script/traffic_learner"]
+
+        if os.path.exists(exe):
+            parts[0] = exe
+        if cmd in python_cmds and os.getenv("PYTHON", None):
+            parts.insert(0, os.environ["PYTHON"])
+
+        if not isinstance(line, list):
+            line = " ".join(parts)
+
         return line
 
     def check_run(self, line, msg=None):
@@ -362,13 +421,16 @@ class BlackboxTestCase(TestCaseInTempDir):
 
     def check_exit_code(self, line, expected, msg=None):
         line = self._make_cmdline(line)
+        use_shell = not isinstance(line, list)
         p = subprocess.Popen(line,
                              stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE,
-                             shell=True)
+                             shell=use_shell)
         stdoutdata, stderrdata = p.communicate()
         retcode = p.returncode
         if retcode != expected:
+            if msg is None:
+                msg = "expected return code %s; got %s" % (expected, retcode)
             raise BlackboxProcessError(retcode,
                                        line,
                                        stdoutdata,
@@ -376,13 +438,26 @@ class BlackboxTestCase(TestCaseInTempDir):
                                        msg)
 
     def check_output(self, line):
+        use_shell = not isinstance(line, list)
         line = self._make_cmdline(line)
-        p = subprocess.Popen(line, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, close_fds=True)
+        p = subprocess.Popen(line, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             shell=use_shell, close_fds=True)
         stdoutdata, stderrdata = p.communicate()
         retcode = p.returncode
         if retcode:
             raise BlackboxProcessError(retcode, line, stdoutdata, stderrdata)
         return stdoutdata
+
+    # Generate a random password that can be safely  passed on the command line
+    # i.e. it does not contain any shell meta characters.
+    def random_password(self, count=32):
+        password = SystemRandom().choice(string.ascii_uppercase)
+        password += SystemRandom().choice(string.digits)
+        password += SystemRandom().choice(string.ascii_lowercase)
+        password += ''.join(SystemRandom().choice(string.ascii_uppercase +
+                    string.ascii_lowercase +
+                    string.digits) for x in range(count - 3))
+        return password
 
 
 def connect_samdb(samdb_url, lp=None, session_info=None, credentials=None,
@@ -401,7 +476,7 @@ def connect_samdb(samdb_url, lp=None, session_info=None, credentials=None,
     to make proper URL for ldb.connect() while using default
     parameters for connection based on test environment
     """
-    if not "://" in samdb_url:
+    if "://" not in samdb_url:
         if not ldap_only and os.path.isfile(samdb_url):
             samdb_url = "tdb://%s" % samdb_url
         else:
@@ -477,6 +552,7 @@ def delete_force(samdb, dn, **kwargs):
         (num, errstr) = error.args
         assert num == ldb.ERR_NO_SUCH_OBJECT, "ldb.delete() failed: %s" % errstr
 
+
 def create_test_ou(samdb, name):
     """Creates a unique OU for the test"""
 
@@ -485,6 +561,6 @@ def create_test_ou(samdb, name):
     # objects can be slow to replicate out. So the OU created by a previous
     # testenv may still exist at the point that tests start on another testenv.
     rand = randint(1, 10000000)
-    dn = ldb.Dn(samdb, "OU=%s%d,%s" %(name, rand, samdb.get_default_basedn()))
-    samdb.add({ "dn": dn, "objectclass": "organizationalUnit"})
+    dn = ldb.Dn(samdb, "OU=%s%d,%s" % (name, rand, samdb.get_default_basedn()))
+    samdb.add({"dn": dn, "objectclass": "organizationalUnit"})
     return dn

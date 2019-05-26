@@ -22,8 +22,8 @@ what most Samba developers use already anyways, with a few exceptions as
 mentioned below.
 
 The coding style for Python code is documented in PEP8,
-http://www.python.org/pep/pep8. New Python code should be compatible with
-Python 2.6, 2.7, and Python 3.4 onwards. This means using Python 3 syntax
+https://www.python.org/dev/peps/pep-0008/. New Python code should be compatible
+with Python 2.6, 2.7, and Python 3.4 onwards. This means using Python 3 syntax
 with the appropriate 'from __future__' imports.
 
 But to save you the trouble of reading the Linux kernel style guide, here
@@ -100,6 +100,7 @@ AllowShortIfStatementsOnASingleLine: false
 IndentCaseLabels: false
 BinPackParameters: false
 BinPackArguments: false
+SortIncludes: false
 
 
 =========================
@@ -429,6 +430,22 @@ an iterator style:
 
 	while ((opt = poptGetNextOpt(pc)) != -1) {
 		   ... do something with opt ...
+	}
+
+Another exception: DBG messages for example printing a SID or a GUID:
+Here we don't expect any surprise from the printing functions, and the
+main reason of this guideline is to make debugging easier. That reason
+rarely exists for this particular use case, and we gain some
+efficiency because the DBG_ macros don't evaluate their arguments if
+the debuglevel is not high enough.
+
+	if (!NT_STATUS_IS_OK(status)) {
+		struct dom_sid_buf sid_buf;
+		struct GUID_txt_buf guid_buf;
+		DBG_WARNING(
+		    "objectSID [%s] for GUID [%s] invalid\n",
+		    dom_sid_str_buf(objectsid, &sid_buf),
+		    GUID_buf_string(&cache->entries[idx], &guid_buf));
 	}
 
 But in general, please try to avoid this pattern.

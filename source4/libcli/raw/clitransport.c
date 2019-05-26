@@ -114,6 +114,50 @@ struct smbcli_transport *smbcli_transport_init(struct smbcli_socket *sock,
 }
 
 /*
+  create a transport structure based on an established socket
+*/
+NTSTATUS smbcli_transport_raw_init(TALLOC_CTX *mem_ctx,
+				   struct tevent_context *ev,
+				   struct smbXcli_conn **_conn,
+				   const struct smbcli_options *options,
+				   struct smbcli_transport **_transport)
+{
+	struct smbcli_transport *transport = NULL;
+	NTSTATUS status;
+
+	if (*_conn == NULL) {
+		return NT_STATUS_INVALID_PARAMETER;
+	}
+
+	transport = talloc_zero(mem_ctx, struct smbcli_transport);
+	if (transport == NULL) {
+		return NT_STATUS_NO_MEMORY;
+	}
+
+	transport->ev = ev;
+	transport->options = *options;
+
+	/*
+	 * First only set the pointer without move.
+	 */
+	transport->conn = *_conn;
+	status = smb_raw_negotiate_fill_transport(transport);
+	if (!NT_STATUS_IS_OK(status)) {
+		TALLOC_FREE(transport);
+		return status;
+	}
+
+	talloc_set_destructor(transport, transport_destructor);
+
+	/*
+	 * Now move it away from the caller...
+	 */
+	transport->conn = talloc_move(transport, _conn);
+	*_transport = transport;
+	return NT_STATUS_OK;
+}
+
+/*
   mark the transport as dead
 */
 void smbcli_transport_dead(struct smbcli_transport *transport, NTSTATUS status)
@@ -137,6 +181,14 @@ static void idle_handler(struct tevent_context *ev,
 
 	transport->idle.func(transport, transport->idle.private_data);
 
+	if (transport->idle.func == NULL) {
+		return;
+	}
+
+	if (!smbXcli_conn_is_connected(transport->conn)) {
+		return;
+	}
+
 	next = timeval_current_ofs_usec(transport->idle.period);
 
 	transport->idle.te = tevent_add_timer(transport->ev,
@@ -156,6 +208,15 @@ _PUBLIC_ void smbcli_transport_idle_handler(struct smbcli_transport *transport,
 				   void *private_data)
 {
 	TALLOC_FREE(transport->idle.te);
+	ZERO_STRUCT(transport->idle);
+
+	if (idle_func == NULL) {
+		return;
+	}
+
+	if (!smbXcli_conn_is_connected(transport->conn)) {
+		return;
+	}
 
 	transport->idle.func = idle_func;
 	transport->idle.private_data = private_data;

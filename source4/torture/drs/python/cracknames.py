@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) Catalyst .Net Ltd 2017
@@ -23,6 +23,7 @@ import drs_base
 
 from samba.dcerpc import drsuapi
 
+
 class DrsCracknamesTestCase(drs_base.DrsBaseTestCase):
     def setUp(self):
         super(DrsCracknamesTestCase, self).setUp()
@@ -39,10 +40,10 @@ class DrsCracknamesTestCase(drs_base.DrsBaseTestCase):
         self.user_record = {
             "dn": self.user,
             "objectclass": "user",
-            "sAMAccountName" : self.username,
-            "userPrincipalName" : "test@test.com",
-            "servicePrincipalName" : "test/%s" % self.ldb_dc1.get_default_basedn(),
-            "displayName" : "test"}
+            "sAMAccountName": self.username,
+            "userPrincipalName": "test@test.com",
+            "servicePrincipalName": "test/%s" % self.ldb_dc1.get_default_basedn(),
+            "displayName": "test"}
 
         self.ldb_dc1.add(self.user_record)
         self.ldb_dc1.delete(self.user_record["dn"])
@@ -60,9 +61,9 @@ class DrsCracknamesTestCase(drs_base.DrsBaseTestCase):
             drsuapi.DRSUAPI_DS_NAME_FORMAT_CANONICAL_EX,
             drsuapi.DRSUAPI_DS_NAME_FORMAT_SERVICE_PRINCIPAL,
             # We currently don't support this
-            #drsuapi.DRSUAPI_DS_NAME_FORMAT_SID_OR_SID_HISTORY,
+            # drsuapi.DRSUAPI_DS_NAME_FORMAT_SID_OR_SID_HISTORY,
             # This format is not supported by Windows (or us)
-            #drsuapi.DRSUAPI_DS_NAME_FORMAT_DNS_DOMAIN,
+            # drsuapi.DRSUAPI_DS_NAME_FORMAT_DNS_DOMAIN,
         }
 
     def tearDown(self):
@@ -121,11 +122,11 @@ class DrsCracknamesTestCase(drs_base.DrsBaseTestCase):
         user_record = {
             "dn": user,
             "objectclass": "user",
-            "sAMAccountName" : username,
-            "userPrincipalName" : "test2@test.com",
-            "servicePrincipalName" : ["test2/%s" % self.ldb_dc1.get_default_basedn(),
-                                      "test3/%s" % self.ldb_dc1.get_default_basedn()],
-            "displayName" : "test2"}
+            "sAMAccountName": username,
+            "userPrincipalName": "test2@test.com",
+            "servicePrincipalName": ["test2/%s" % self.ldb_dc1.get_default_basedn(),
+                                     "test3/%s" % self.ldb_dc1.get_default_basedn()],
+            "displayName": "test2"}
 
         self.ldb_dc1.add(user_record)
 
@@ -149,12 +150,50 @@ class DrsCracknamesTestCase(drs_base.DrsBaseTestCase):
 
         self.ldb_dc1.delete(user)
 
+    def test_NoSPNAttribute(self):
+        """
+        Verifies that, if we try and cracknames with the desired output
+        being an SPN, it returns
+        DRSUAPI_DS_NAME_STATUS_NOT_UNIQUE.
+        """
+        username = "Cracknames_no_SPN"
+        user = "cn=%s,%s" % (username, self.ou)
+
+        user_record = {
+            "dn": user,
+            "objectclass": "user",
+            "sAMAccountName" : username,
+            "userPrincipalName" : "test4@test.com",
+            "displayName" : "test4"}
+
+        self.ldb_dc1.add(user_record)
+
+        (result, ctr) = self._do_cracknames(user,
+                                            drsuapi.DRSUAPI_DS_NAME_FORMAT_FQDN_1779,
+                                            drsuapi.DRSUAPI_DS_NAME_FORMAT_GUID)
+
+        self.assertEquals(ctr.count, 1)
+        self.assertEquals(ctr.array[0].status,
+                          drsuapi.DRSUAPI_DS_NAME_STATUS_OK)
+
+        user_guid = ctr.array[0].result_name
+
+        (result, ctr) = self._do_cracknames(user_guid,
+                                            drsuapi.DRSUAPI_DS_NAME_FORMAT_GUID,
+                                            drsuapi.DRSUAPI_DS_NAME_FORMAT_SERVICE_PRINCIPAL)
+
+        self.assertEquals(ctr.count, 1)
+        self.assertEquals(ctr.array[0].status,
+                          drsuapi.DRSUAPI_DS_NAME_STATUS_NOT_FOUND)
+
+        self.ldb_dc1.delete(user)
+
     def _do_cracknames(self, name, format_offered, format_desired):
         req = drsuapi.DsNameRequest1()
         names = drsuapi.DsNameString()
         names.str = name
 
-        req.codepage = 1252 # German, but it doesn't really matter here
+        req.codepage = 1252  # German, but it doesn't really matter here
         req.language = 1033
         req.format_flags = 0
         req.format_offered = format_offered

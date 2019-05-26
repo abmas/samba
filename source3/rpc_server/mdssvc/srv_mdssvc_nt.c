@@ -18,6 +18,7 @@
  */
 
 #include "includes.h"
+#include "messages.h"
 #include "ntdomain.h"
 #include "rpc_server/rpc_service_setup.h"
 #include "rpc_server/rpc_config.h"
@@ -25,6 +26,7 @@
 #include "rpc_server/mdssvc/srv_mdssvc_nt.h"
 #include "../librpc/gen_ndr/srv_mdssvc.h"
 #include "libcli/security/security_token.h"
+#include "libcli/security/dom_sid.h"
 #include "gen_ndr/auth.h"
 #include "mdssvc.h"
 
@@ -113,7 +115,10 @@ static NTSTATUS create_mdssvc_policy_handle(TALLOC_CTX *mem_ctx,
 
 	ZERO_STRUCTP(handle);
 
-	mds_ctx = mds_init_ctx(mem_ctx, p->session_info, path);
+	mds_ctx = mds_init_ctx(mem_ctx,
+			       messaging_tevent_context(p->msg_ctx),
+			       p->session_info,
+			       path);
 	if (mds_ctx == NULL) {
 		DEBUG(1, ("error in mds_init_ctx for: %s\n", path));
 		return NT_STATUS_UNSUCCESSFUL;
@@ -208,8 +213,9 @@ void _mdssvc_cmd(struct pipes_struct *p, struct mdssvc_cmd *r)
 	ok = security_token_is_sid(p->session_info->security_token,
 				   &mds_ctx->sid);
 	if (!ok) {
-		DEBUG(1,("%s: not the same sid: %s\n", __func__,
-			 sid_string_tos(&mds_ctx->sid)));
+		struct dom_sid_buf buf;
+		DBG_WARNING("not the same sid: %s\n",
+			    dom_sid_str_buf(&mds_ctx->sid, &buf));
 		p->fault_state = DCERPC_FAULT_ACCESS_DENIED;
 		return;
 	}

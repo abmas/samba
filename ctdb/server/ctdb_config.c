@@ -28,6 +28,7 @@
 #include "cluster/cluster_conf.h"
 #include "database/database_conf.h"
 #include "event/event_conf.h"
+#include "failover/failover_conf.h"
 #include "legacy_conf.h"
 
 #include "ctdb_config.h"
@@ -73,6 +74,10 @@ static void setup_config_pointers(struct conf_context *conf)
 				   DATABASE_CONF_SECTION,
 				   DATABASE_CONF_LOCK_DEBUG_SCRIPT,
 				   &ctdb_config.lock_debug_script);
+	conf_assign_boolean_pointer(conf,
+				    DATABASE_CONF_SECTION,
+				    DATABASE_CONF_TDB_MUTEXES,
+				    &ctdb_config.tdb_mutexes);
 
 	/*
 	 * Event
@@ -83,13 +88,21 @@ static void setup_config_pointers(struct conf_context *conf)
 				   &ctdb_config.event_debug_script);
 
 	/*
+	 * Failover
+	 */
+	conf_assign_boolean_pointer(conf,
+				    FAILOVER_CONF_SECTION,
+				    FAILOVER_CONF_DISABLED,
+				    &ctdb_config.failover_disabled);
+
+	/*
 	 * Legacy
 	 */
 
 	conf_assign_boolean_pointer(conf,
 				    LEGACY_CONF_SECTION,
-				    LEGACY_CONF_NO_REALTIME,
-				    &ctdb_config.no_realtime);
+				    LEGACY_CONF_REALTIME_SCHEDULING,
+				    &ctdb_config.realtime_scheduling);
 	conf_assign_boolean_pointer(conf,
 				    LEGACY_CONF_SECTION,
 				    LEGACY_CONF_RECMASTER_CAPABILITY,
@@ -128,6 +141,7 @@ int ctdbd_config_load(TALLOC_CTX *mem_ctx,
 	cluster_conf_init(conf);
 	database_conf_init(conf);
 	event_conf_init(conf);
+	failover_conf_init(conf);
 	legacy_conf_init(conf);
 
 	setup_config_pointers(conf);

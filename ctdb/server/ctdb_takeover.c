@@ -33,14 +33,19 @@
 #include "lib/util/sys_rw.h"
 #include "lib/util/util_process.h"
 
+#include "protocol/protocol_util.h"
+
 #include "ctdb_private.h"
 #include "ctdb_client.h"
 
 #include "common/rb_tree.h"
 #include "common/reqid.h"
 #include "common/system.h"
+#include "common/system_socket.h"
 #include "common/common.h"
 #include "common/logging.h"
+
+#include "server/ctdb_config.h"
 
 #include "server/ipalloc.h"
 
@@ -298,10 +303,16 @@ static void ctdb_vnn_unassign_iface(struct ctdb_context *ctdb,
 static bool ctdb_vnn_available(struct ctdb_context *ctdb,
 			       struct ctdb_vnn *vnn)
 {
+	uint32_t flags;
 	struct vnn_interface *i;
 
 	/* Nodes that are not RUNNING can not host IPs */
 	if (ctdb->runstate != CTDB_RUNSTATE_RUNNING) {
+		return false;
+	}
+
+	flags = ctdb->nodes[ctdb->pnn]->flags;
+	if ((flags & (NODE_FLAGS_INACTIVE|NODE_FLAGS_DISABLED)) != 0) {
 		return false;
 	}
 
@@ -365,8 +376,8 @@ static void ctdb_control_send_arp(struct tevent_context *ev,
 
 	ret = ctdb_sys_send_arp(&arp->addr, iface);
 	if (ret != 0) {
-		DEBUG(DEBUG_CRIT,(__location__ " sending of arp failed on iface '%s' (%s)\n",
-				  iface, strerror(errno)));
+		DBG_ERR("Failed to send ARP on interface %s: %s\n",
+			iface, strerror(ret));
 	}
 
 	tcparray = arp->tcparray;
@@ -457,7 +468,7 @@ static void ctdb_do_takeip_callback(struct ctdb_context *ctdb, int status,
 	TDB_DATA data;
 
 	if (status != 0) {
-		if (status == -ETIME) {
+		if (status == -ETIMEDOUT) {
 			ctdb_ban_self(ctdb);
 		}
 		DEBUG(DEBUG_ERR,(__location__ " Failed to takeover IP %s on interface %s\n",
@@ -578,7 +589,7 @@ static void ctdb_do_updateip_callback(struct ctdb_context *ctdb, int status,
 		talloc_get_type(private_data, struct ctdb_do_updateip_state);
 
 	if (status != 0) {
-		if (status == -ETIME) {
+		if (status == -ETIMEDOUT) {
 			ctdb_ban_self(ctdb);
 		}
 		DEBUG(DEBUG_ERR,
@@ -743,7 +754,7 @@ int32_t ctdb_control_takeover_ip(struct ctdb_context *ctdb,
 		return 0;
 	}
 
-	if (ctdb->tunable.disable_ip_failover == 0 && ctdb->do_checkpublicip) {
+	if (ctdb_config.failover_disabled == 0 && ctdb->do_checkpublicip) {
 		have_ip = ctdb_sys_have_ip(&pip->addr);
 	}
 	best_iface = ctdb_vnn_best_iface(ctdb, vnn);
@@ -877,11 +888,11 @@ static void release_ip_callback(struct ctdb_context *ctdb, int status,
 	struct release_ip_callback_state *state =
 		talloc_get_type(private_data, struct release_ip_callback_state);
 
-	if (status == -ETIME) {
+	if (status == -ETIMEDOUT) {
 		ctdb_ban_self(ctdb);
 	}
 
-	if (ctdb->tunable.disable_ip_failover == 0 && ctdb->do_checkpublicip) {
+	if (ctdb_config.failover_disabled == 0 && ctdb->do_checkpublicip) {
 		if  (ctdb_sys_have_ip(state->addr)) {
 			DEBUG(DEBUG_ERR,
 			      ("IP %s still hosted during release IP callback, failing\n",
@@ -945,7 +956,7 @@ int32_t ctdb_control_release_ip(struct ctdb_context *ctdb,
 	 * local node.  Redundant releases need to update the PNN but
 	 * are otherwise ignored.
 	 */
-	if (ctdb->tunable.disable_ip_failover == 0 && ctdb->do_checkpublicip) {
+	if (ctdb_config.failover_disabled == 0 && ctdb->do_checkpublicip) {
 		if (!ctdb_sys_have_ip(&pip->addr)) {
 			DEBUG(DEBUG_DEBUG,("Redundant release of IP %s/%u on interface %s (ip not held)\n",
 				ctdb_addr_to_str(&pip->addr),
@@ -1149,6 +1160,7 @@ int ctdb_set_public_addresses(struct ctdb_context *ctdb, bool check_addresses)
 		const char *addrstr;
 		const char *ifaces;
 		char *tok, *line;
+		int ret;
 
 		line = lines[i];
 		while ((*line == ' ') || (*line == '\t')) {
@@ -1172,11 +1184,21 @@ int ctdb_set_public_addresses(struct ctdb_context *ctdb, bool check_addresses)
 		}
 		ifaces = tok;
 
-		if (!addrstr || !parse_ip_mask(addrstr, ifaces, &addr, &mask)) {
-			DEBUG(DEBUG_CRIT,("Badly formed line %u in public address list\n", i+1));
+		if (addrstr == NULL) {
+			D_ERR("Badly formed line %u in public address list\n",
+			      i+1);
 			talloc_free(lines);
 			return -1;
 		}
+
+		ret = ctdb_sock_addr_mask_from_string(addrstr, &addr, &mask);
+		if (ret != 0) {
+			D_ERR("Badly formed line %u in public address list\n",
+			      i+1);
+			talloc_free(lines);
+			return -1;
+		}
+
 		if (ctdb_add_public_address(ctdb, &addr, mask, ifaces, check_addresses)) {
 			DEBUG(DEBUG_CRIT,("Failed to add line %u to the public address list\n", i+1));
 			talloc_free(lines);
@@ -1570,7 +1592,7 @@ void ctdb_release_all_ips(struct ctdb_context *ctdb)
 	struct ctdb_vnn *vnn, *next;
 	int count = 0;
 
-	if (ctdb->tunable.disable_ip_failover == 1) {
+	if (ctdb_config.failover_disabled == 1) {
 		return;
 	}
 
@@ -2093,8 +2115,8 @@ static void send_gratious_arp(struct tevent_context *ev,
 
 	ret = ctdb_sys_send_arp(&arp->addr, arp->iface);
 	if (ret != 0) {
-		DEBUG(DEBUG_ERR,(__location__ " sending of gratious arp on iface '%s' failed (%s)\n",
-				 arp->iface, strerror(errno)));
+		DBG_ERR("Failed to send gratuitous ARP on iface %s: %s\n",
+			arp->iface, strerror(ret));
 	}
 
 
@@ -2250,7 +2272,7 @@ static void ctdb_ipreallocated_callback(struct ctdb_context *ctdb,
 		DEBUG(DEBUG_ERR,
 		      (" \"ipreallocated\" event script failed (status %d)\n",
 		       status));
-		if (status == -ETIME) {
+		if (status == -ETIMEDOUT) {
 			ctdb_ban_self(ctdb);
 		}
 	}

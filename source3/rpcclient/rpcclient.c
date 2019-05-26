@@ -21,7 +21,7 @@
 
 #include "includes.h"
 #include "../libcli/auth/netlogon_creds_cli.h"
-#include "popt_common.h"
+#include "popt_common_cmdline.h"
 #include "rpcclient.h"
 #include "../libcli/auth/libcli_auth.h"
 #include "../librpc/gen_ndr/ndr_lsa_c.h"
@@ -35,6 +35,7 @@
 #include "auth/gensec/gensec.h"
 #include "../libcli/smb/smbXcli_base.h"
 #include "messages.h"
+#include "cmdline_contexts.h"
 
 enum pipe_auth_type_spnego {
 	PIPE_AUTH_TYPE_SPNEGO_NONE = 0,
@@ -607,30 +608,174 @@ static NTSTATUS cmd_choose_transport(struct rpc_pipe_client *cli, TALLOC_CTX *me
 
 static struct cmd_set rpcclient_commands[] = {
 
-	{ "GENERAL OPTIONS" },
+	{
+		.name = "GENERAL OPTIONS",
+	},
 
-	{ "help", RPC_RTYPE_NTSTATUS, cmd_help, NULL, 	  NULL, NULL,	"Get help on commands", "[command]" },
-	{ "?", 	RPC_RTYPE_NTSTATUS, cmd_help, NULL,	  NULL, NULL,	"Get help on commands", "[command]" },
-	{ "debuglevel", RPC_RTYPE_NTSTATUS, cmd_debuglevel, NULL,   NULL,	NULL, "Set debug level", "level" },
-	{ "debug", RPC_RTYPE_NTSTATUS, cmd_debuglevel, NULL,   NULL,	NULL, "Set debug level", "level" },
-	{ "list",	RPC_RTYPE_NTSTATUS, cmd_listcommands, NULL, NULL,	NULL, "List available commands on <pipe>", "pipe" },
-	{ "exit", RPC_RTYPE_NTSTATUS, cmd_quit, NULL,   NULL,	NULL,	"Exit program", "" },
-	{ "quit", RPC_RTYPE_NTSTATUS, cmd_quit, NULL,	  NULL,	NULL, "Exit program", "" },
-	{ "sign", RPC_RTYPE_NTSTATUS, cmd_sign, NULL,	  NULL,	NULL, "Force RPC pipe connections to be signed", "" },
-	{ "seal", RPC_RTYPE_NTSTATUS, cmd_seal, NULL,	  NULL,	NULL, "Force RPC pipe connections to be sealed", "" },
-	{ "packet", RPC_RTYPE_NTSTATUS, cmd_packet, NULL,	  NULL,	NULL, "Force RPC pipe connections with packet authentication level", "" },
-	{ "schannel", RPC_RTYPE_NTSTATUS, cmd_schannel, NULL,	  NULL, NULL,	"Force RPC pipe connections to be sealed with 'schannel'.  Assumes valid machine account to this domain controller.", "" },
-	{ "schannelsign", RPC_RTYPE_NTSTATUS, cmd_schannel_sign, NULL,	  NULL, NULL, "Force RPC pipe connections to be signed (not sealed) with 'schannel'.  Assumes valid machine account to this domain controller.", "" },
-	{ "timeout", RPC_RTYPE_NTSTATUS, cmd_timeout, NULL,	  NULL, NULL, "Set timeout (in milliseconds) for RPC operations", "" },
-	{ "transport", RPC_RTYPE_NTSTATUS, cmd_choose_transport, NULL,	  NULL, NULL, "Choose ncacn transport for RPC operations", "" },
-	{ "none", RPC_RTYPE_NTSTATUS, cmd_none, NULL,	  NULL, NULL, "Force RPC pipe connections to have no special properties", "" },
+	{
+		.name               = "help",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_help,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Get help on commands",
+		.usage              = "[command]",
+	},
+	{
+		.name               = "?",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_help,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Get help on commands",
+		.usage              = "[command]",
+	},
+	{
+		.name               = "debuglevel",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_debuglevel,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Set debug level",
+		.usage              = "level",
+	},
+	{
+		.name               = "debug",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_debuglevel,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Set debug level",
+		.usage              = "level",
+	},
+	{
+		.name               = "list",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_listcommands,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "List available commands on <pipe>",
+		.usage              = "pipe",
+	},
+	{
+		.name               = "exit",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_quit,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Exit program",
+		.usage              = "",
+	},
+	{
+		.name               = "quit",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_quit,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Exit program",
+		.usage              = "",
+	},
+	{
+		.name               = "sign",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_sign,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Force RPC pipe connections to be signed",
+		.usage              = "",
+	},
+	{
+		.name               = "seal",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_seal,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Force RPC pipe connections to be sealed",
+		.usage              = "",
+	},
+	{
+		.name               = "packet",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_packet,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Force RPC pipe connections with packet authentication level",
+		.usage              = "",
+	},
+	{
+		.name               = "schannel",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_schannel,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Force RPC pipe connections to be sealed with 'schannel'. "
+				      "Assumes valid machine account to this domain controller.",
+		.usage              = "",
+	},
+	{
+		.name               = "schannelsign",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_schannel_sign,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Force RPC pipe connections to be signed (not sealed) with "
+				      "'schannel'.  Assumes valid machine account to this domain "
+				      "controller.",
+		.usage              = "",
+	},
+	{
+		.name               = "timeout",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_timeout,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Set timeout (in milliseconds) for RPC operations",
+		.usage              = "",
+	},
+	{
+		.name               = "transport",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_choose_transport,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Choose ncacn transport for RPC operations",
+		.usage              = "",
+	},
+	{
+		.name               = "none",
+		.returntype         = RPC_RTYPE_NTSTATUS,
+		.ntfn               = cmd_none,
+		.wfn                = NULL,
+		.table              = NULL,
+		.rpc_pipe           = NULL,
+		.description        = "Force RPC pipe connections to have no special properties",
+		.usage              = "",
+	},
 
-	{ NULL }
+	{ .name = NULL, },
 };
 
 static struct cmd_set separator_command[] = {
-	{ "---------------", MAX_RPC_RETURN_TYPE, NULL, NULL,	NULL, NULL, "----------------------" },
-	{ NULL }
+	{
+		.name               = "---------------",
+		.returntype         = MAX_RPC_RETURN_TYPE,
+		.description        = "----------------------"
+	},
+	{ .name = NULL, },
 };
 
 
@@ -950,7 +1095,6 @@ out_free:
 	const char *binding_string = NULL;
 	const char *host;
 	int signing_state = SMB_SIGNING_IPC_DEFAULT;
-	struct tevent_context *ev_ctx = NULL;
 
 	/* make sure the vars that get altered (4th field) are in
 	   a fixed location or certain compilers complain */
@@ -981,6 +1125,8 @@ out_free:
 
 	pc = poptGetContext("rpcclient", argc, const_argv,
 			    long_options, 0);
+
+	poptSetOtherOptionHelp(pc, "[OPTION...] <server>\nOptions:");
 
 	if (argc == 1) {
 		poptPrintHelp(pc, stderr, 0);
@@ -1016,30 +1162,7 @@ out_free:
 	poptFreeContext(pc);
 	popt_burn_cmdline_password(argc, argv);
 
-	ev_ctx = samba_tevent_context_init(frame);
-	if (ev_ctx == NULL) {
-		fprintf(stderr, "Could not init event context\n");
-		result = 1;
-		goto done;
-	}
-
-	nt_status = messaging_init_client(ev_ctx,
-					  ev_ctx,
-					  &rpcclient_msg_ctx);
-	if (geteuid() != 0 &&
-			NT_STATUS_EQUAL(nt_status, NT_STATUS_ACCESS_DENIED)) {
-		/*
-		 * Normal to fail to initialize messaging context
-		 * if we're not root as we don't have ability to
-		 * read lock directory.
-		 */
-		DBG_NOTICE("Unable to initialize messaging context. "
-			"Must be root to do that.\n");
-	} else if (!NT_STATUS_IS_OK(nt_status)) {
-		fprintf(stderr, "Could not init messaging context\n");
-		result = 1;
-		goto done;
-	}
+	rpcclient_msg_ctx = cmdline_messaging_context(get_dyn_CONFIGFILE());
 
 	if (!init_names()) {
 		result = 1;
@@ -1258,7 +1381,6 @@ done:
 	popt_free_cmdline_auth_info();
 	netlogon_creds_cli_close_global_db();
 	TALLOC_FREE(rpcclient_msg_ctx);
-	TALLOC_FREE(ev_ctx);
 	TALLOC_FREE(frame);
 	return result;
 }

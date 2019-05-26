@@ -30,11 +30,13 @@
 #include "system/filesys.h"
 #include "smbd/smbd.h"
 #include "libcli/security/security_token.h"
+#include "libcli/security/dom_sid.h"
 #include "nfs4_acls.h"
 #include "librpc/gen_ndr/ndr_nfs4acl.h"
 #include "nfs4acl_xattr.h"
 #include "nfs4acl_xattr_ndr.h"
 #include "nfs4acl_xattr_xdr.h"
+#include "nfs4acl_xattr_nfs.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_VFS
@@ -42,6 +44,7 @@
 static const struct enum_list nfs4acl_encoding[] = {
 	{NFS4ACL_ENCODING_NDR, "ndr"},
 	{NFS4ACL_ENCODING_XDR, "xdr"},
+	{NFS4ACL_ENCODING_NFS, "nfs"},
 };
 
 /*
@@ -59,6 +62,10 @@ static bool nfs4acl_validate_blob(vfs_handle_struct *handle,
 	SMB_VFS_HANDLE_GET_DATA(handle, config,
 				struct nfs4acl_config,
 				return false);
+
+	if (!config->validate_mode) {
+		return true;
+	}
 
 	if (!VALID_STAT(smb_fname->st)) {
 		/* might be a create */
@@ -228,6 +235,9 @@ static NTSTATUS nfs4acl_blob_to_smb4(struct vfs_handle_struct *handle,
 	case NFS4ACL_ENCODING_XDR:
 		status = nfs4acl_xdr_blob_to_smb4(handle, mem_ctx, blob, smb4acl);
 		break;
+	case NFS4ACL_ENCODING_NFS:
+		status = nfs4acl_nfs_blob_to_smb4(handle, mem_ctx, blob, smb4acl);
+		break;
 	default:
 		status = NT_STATUS_INTERNAL_ERROR;
 		break;
@@ -328,6 +338,10 @@ static bool nfs4acl_smb4acl_set_fn(vfs_handle_struct *handle,
 		status = nfs4acl_smb4acl_to_xdr_blob(handle, talloc_tos(),
 						     smb4acl, &blob);
 		break;
+	case NFS4ACL_ENCODING_NFS:
+		status = nfs4acl_smb4acl_to_nfs_blob(handle, talloc_tos(),
+						     smb4acl, &blob);
+		break;
 	default:
 		status = NT_STATUS_INTERNAL_ERROR;
 		break;
@@ -372,6 +386,7 @@ static NTSTATUS nfs4acl_xattr_fset_nt_acl(vfs_handle_struct *handle,
 	mode_t expected_mode;
 	mode_t restored_mode;
 	bool chown_needed = false;
+	struct dom_sid_buf buf;
 	NTSTATUS status;
 	int ret;
 
@@ -389,6 +404,10 @@ static NTSTATUS nfs4acl_xattr_fset_nt_acl(vfs_handle_struct *handle,
 		expected_mode = 0777;
 	} else {
 		expected_mode = 0666;
+	}
+	if (!config->validate_mode) {
+		existing_mode = 0;
+		expected_mode = 0;
 	}
 	if ((existing_mode & expected_mode) != expected_mode) {
 		int saved_errno = 0;
@@ -429,6 +448,9 @@ static NTSTATUS nfs4acl_xattr_fset_nt_acl(vfs_handle_struct *handle,
 	if (NT_STATUS_IS_OK(status)) {
 		return NT_STATUS_OK;
 	}
+	if (!NT_STATUS_EQUAL(status, NT_STATUS_ACCESS_DENIED)) {
+		return status;
+	}
 
 	/*
 	 * We got access denied. If we're already root, or we didn't
@@ -467,7 +489,8 @@ static NTSTATUS nfs4acl_xattr_fset_nt_acl(vfs_handle_struct *handle,
 	}
 
 	DBG_DEBUG("overriding chown on file %s for sid %s\n",
-		  fsp_str_dbg(fsp), sid_string_tos(psd->owner_sid));
+		  fsp_str_dbg(fsp),
+		  dom_sid_str_buf(psd->owner_sid, &buf));
 
 	become_root();
 	status = smb_set_nt_acl_nfs4(handle,
@@ -487,6 +510,7 @@ static int nfs4acl_connect(struct vfs_handle_struct *handle,
 	struct nfs4acl_config *config = NULL;
 	const struct enum_list *default_acl_style_list = NULL;
 	const char *default_xattr_name = NULL;
+	bool default_validate_mode = true;
 	int enumval;
 	unsigned nfs_version;
 	int ret;
@@ -526,6 +550,10 @@ static int nfs4acl_connect(struct vfs_handle_struct *handle,
 	case NFS4ACL_ENCODING_XDR:
 		default_xattr_name = NFS4ACL_XDR_XATTR_NAME;
 		break;
+	case NFS4ACL_ENCODING_NFS:
+		default_xattr_name = NFS4ACL_NFS_XATTR_NAME;
+		default_validate_mode = false;
+		break;
 	case NFS4ACL_ENCODING_NDR:
 	default:
 		default_xattr_name = NFS4ACL_NDR_XATTR_NAME;
@@ -559,6 +587,17 @@ static int nfs4acl_connect(struct vfs_handle_struct *handle,
 						   "nfs4acl_xattr",
 						   "xattr_name",
 						   default_xattr_name);
+
+	config->nfs4_id_numeric = lp_parm_bool(SNUM(handle->conn),
+					       "nfs4acl_xattr",
+					       "nfs4_id_numeric",
+					       false);
+
+
+	config->validate_mode = lp_parm_bool(SNUM(handle->conn),
+					     "nfs4acl_xattr",
+					     "validate_mode",
+					     default_validate_mode);
 
 	SMB_VFS_HANDLE_SET_DATA(handle, config, NULL, struct nfs4acl_config,
 				return -1);

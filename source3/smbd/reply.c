@@ -33,7 +33,6 @@
 #include "fake_file.h"
 #include "rpc_client/rpc_client.h"
 #include "../librpc/gen_ndr/ndr_spoolss_c.h"
-#include "../librpc/gen_ndr/open_files.h"
 #include "rpc_client/cli_spoolss.h"
 #include "rpc_client/init_spoolss.h"
 #include "rpc_server/rpc_ncacn_np.h"
@@ -1014,7 +1013,7 @@ void reply_tcon_and_X(struct smb_request *req)
 	 * change any more.
 	 */
 	if (session->global->application_key.length == 0 &&
-	    session->global->signing_key.length > 0)
+	    smb2_signing_key_valid(session->global->signing_key))
 	{
 		struct smbXsrv_session *x = session;
 		struct auth_session_info *session_info =
@@ -1022,8 +1021,8 @@ void reply_tcon_and_X(struct smb_request *req)
 		uint8_t session_key[16];
 
 		ZERO_STRUCT(session_key);
-		memcpy(session_key, x->global->signing_key.data,
-		       MIN(x->global->signing_key.length, sizeof(session_key)));
+		memcpy(session_key, x->global->signing_key->blob.data,
+		       MIN(x->global->signing_key->blob.length, sizeof(session_key)));
 
 		/*
 		 * The application key is truncated/padded to 16 bytes
@@ -1039,9 +1038,16 @@ void reply_tcon_and_X(struct smb_request *req)
 		}
 
 		if (tcon_flags & TCONX_FLAG_EXTENDED_SIGNATURES) {
-			smb_key_derivation(x->global->application_key.data,
-					   x->global->application_key.length,
-					   x->global->application_key.data);
+			NTSTATUS status;
+
+			status = smb_key_derivation(x->global->application_key.data,
+						    x->global->application_key.length,
+						    x->global->application_key.data);
+			if (!NT_STATUS_IS_OK(status)) {
+				DBG_ERR("smb_key_derivation failed: %s\n",
+					nt_errstr(status));
+				return;
+			}
 			optional_support |= SMB_EXTENDED_SIGNATURES;
 		}
 
@@ -1306,6 +1312,7 @@ void reply_checkpath(struct smb_request *req)
 				name,
 				ucf_flags,
 				NULL,
+				NULL,
 				&smb_fname);
 
 	if (!NT_STATUS_IS_OK(status)) {
@@ -1404,6 +1411,7 @@ void reply_getatr(struct smb_request *req)
 				fname,
 				ucf_flags,
 				NULL,
+				NULL,
 				&smb_fname);
 		if (!NT_STATUS_IS_OK(status)) {
 			if (NT_STATUS_EQUAL(status,NT_STATUS_PATH_NOT_COVERED)) {
@@ -1488,8 +1496,6 @@ void reply_setatr(struct smb_request *req)
 
 	START_PROFILE(SMBsetatr);
 
-	ZERO_STRUCT(ft);
-
 	if (req->wct < 2) {
 		reply_nterror(req, NT_STATUS_INVALID_PARAMETER);
 		goto out;
@@ -1507,6 +1513,7 @@ void reply_setatr(struct smb_request *req)
 				fname,
 				ucf_flags,
 				NULL,
+				NULL,
 				&smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
 		if (NT_STATUS_EQUAL(status,NT_STATUS_PATH_NOT_COVERED)) {
@@ -1518,8 +1525,7 @@ void reply_setatr(struct smb_request *req)
 		goto out;
 	}
 
-	if (smb_fname->base_name[0] == '.' &&
-	    smb_fname->base_name[1] == '\0') {
+	if (ISDOT(smb_fname->base_name)) {
 		/*
 		 * Not sure here is the right place to catch this
 		 * condition. Might be moved to somewhere else later -- vl
@@ -1537,8 +1543,8 @@ void reply_setatr(struct smb_request *req)
 		else
 			mode &= ~FILE_ATTRIBUTE_DIRECTORY;
 
-		status = check_access(conn, NULL, smb_fname,
-					FILE_WRITE_ATTRIBUTES);
+		status = smbd_check_access_rights(
+			conn, smb_fname, false, FILE_WRITE_ATTRIBUTES);
 		if (!NT_STATUS_IS_OK(status)) {
 			reply_nterror(req, status);
 			goto out;
@@ -1551,7 +1557,10 @@ void reply_setatr(struct smb_request *req)
 		}
 	}
 
-	ft.mtime = convert_time_t_to_timespec(mtime);
+	ft = (struct smb_file_time) {
+		.mtime = convert_time_t_to_timespec(mtime)
+	};
+
 	status = smb_set_file_time(conn, NULL, smb_fname, &ft, true);
 	if (!NT_STATUS_IS_OK(status)) {
 		reply_nterror(req, status);
@@ -1804,6 +1813,7 @@ void reply_search(struct smb_request *req)
 		nt_status = filename_convert(ctx, conn,
 					     path,
 					     ucf_flags,
+					     NULL,
 					     &mask_contains_wcard,
 					     &smb_fname);
 		if (!NT_STATUS_IS_OK(nt_status)) {
@@ -2147,6 +2157,7 @@ void reply_open(struct smb_request *req)
 				fname,
 				ucf_flags,
 				NULL,
+				NULL,
 				&smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
 		if (NT_STATUS_EQUAL(status,NT_STATUS_PATH_NOT_COVERED)) {
@@ -2318,6 +2329,7 @@ void reply_open_and_X(struct smb_request *req)
 				conn,
 				fname,
 				ucf_flags,
+				NULL,
 				NULL,
 				&smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -2563,6 +2575,7 @@ void reply_mknew(struct smb_request *req)
 				fname,
 				ucf_flags,
 				NULL,
+				NULL,
 				&smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
 		if (NT_STATUS_EQUAL(status,NT_STATUS_PATH_NOT_COVERED)) {
@@ -2698,6 +2711,7 @@ void reply_ctemp(struct smb_request *req)
 		status = filename_convert(ctx, conn,
 				fname,
 				ucf_flags,
+				NULL,
 				NULL,
 				&smb_fname);
 		if (!NT_STATUS_IS_OK(status)) {
@@ -3237,6 +3251,7 @@ void reply_unlink(struct smb_request *req)
 	status = filename_convert(ctx, conn,
 				  name,
 				  ucf_flags,
+				  NULL,
 				  &path_contains_wcard,
 				  &smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -4380,7 +4395,7 @@ static NTSTATUS read_smb_length(int fd, char *inbuf, unsigned int timeout,
 			char addr[INET6_ADDRSTRLEN];
 			/* Try and give an error message
 			 * saying what client failed. */
-			DEBUG(0, ("read_fd_with_timeout failed for "
+			DEBUG(0, ("read_smb_length_return_keepalive failed for "
 				  "client %s read error = %s.\n",
 				  get_peer_addr(fd,addr,sizeof(addr)),
 				  nt_errstr(status)));
@@ -4965,6 +4980,10 @@ bool is_valid_writeX_buffer(struct smbXsrv_connection *xconn,
 		DEBUG(10,("is_valid_writeX_buffer: printing tid\n"));
 		return false;
 	}
+	if (fsp->base_fsp != NULL) {
+		DEBUG(10,("is_valid_writeX_buffer: stream fsp\n"));
+		return false;
+	}
 	doff = SVAL(inbuf,smb_vwv11);
 
 	numtowrite = SVAL(inbuf,smb_vwv10);
@@ -5268,6 +5287,23 @@ void reply_lseek(struct smb_request *req)
 	return;
 }
 
+static struct files_struct *file_sync_one_fn(struct files_struct *fsp,
+					     void *private_data)
+{
+	connection_struct *conn = talloc_get_type_abort(
+		private_data, connection_struct);
+
+	if (conn != fsp->conn) {
+		return NULL;
+	}
+	if (fsp->fh->fd == -1) {
+		return NULL;
+	}
+	sync_file(conn, fsp, True /* write through */);
+
+	return NULL;
+}
+
 /****************************************************************************
  Reply to a flush.
 ****************************************************************************/
@@ -5293,7 +5329,7 @@ void reply_flush(struct smb_request *req)
 	}
 
 	if (!fsp) {
-		file_sync_all(conn);
+		files_forall(req->sconn, file_sync_one_fn, conn);
 	} else {
 		NTSTATUS status = sync_file(conn, fsp, True);
 		if (!NT_STATUS_IS_OK(status)) {
@@ -5392,7 +5428,7 @@ void reply_close(struct smb_request *req)
 		 */
 
 		fsp->deferred_close = tevent_wait_send(
-			fsp, req->ev_ctx);
+			fsp, fsp->conn->sconn->ev_ctx);
 		if (fsp->deferred_close == NULL) {
 			status = NT_STATUS_NO_MEMORY;
 			goto done;
@@ -6169,6 +6205,7 @@ void reply_mkdir(struct smb_request *req)
 				 directory,
 				 ucf_flags,
 				 NULL,
+				 NULL,
 				 &smb_dname);
 	if (!NT_STATUS_IS_OK(status)) {
 		if (NT_STATUS_EQUAL(status,NT_STATUS_PATH_NOT_COVERED)) {
@@ -6238,6 +6275,7 @@ void reply_rmdir(struct smb_request *req)
 	status = filename_convert(ctx, conn,
 				 directory,
 				 ucf_flags,
+				 NULL,
 				 NULL,
 				 &smb_dname);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -6903,7 +6941,7 @@ NTSTATUS rename_internals_fsp(connection_struct *conn,
 			status = can_set_delete_on_close(fsp, 0);
 
 			if (NT_STATUS_IS_OK(status)) {
-				/* Note that here we set the *inital* delete on close flag,
+				/* Note that here we set the *initial* delete on close flag,
 				 * not the regular one. The magic gets handled in close. */
 				fsp->initial_delete_on_close = True;
 			}
@@ -7361,6 +7399,7 @@ void reply_mv(struct smb_request *req)
 				  conn,
 				  name,
 				  src_ucf_flags,
+				  NULL,
 				  &src_has_wcard,
 				  &smb_fname_src);
 
@@ -7378,6 +7417,7 @@ void reply_mv(struct smb_request *req)
 				  conn,
 				  newname,
 				  dst_ucf_flags,
+				  NULL,
 				  &dest_has_wcard,
 				  &smb_fname_dst);
 
@@ -7671,6 +7711,7 @@ void reply_copy(struct smb_request *req)
 	status = filename_convert(ctx, conn,
 				  fname_src,
 				  ucf_flags_src,
+				  NULL,
 				  &source_has_wild,
 				  &smb_fname_src);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -7686,6 +7727,7 @@ void reply_copy(struct smb_request *req)
 	status = filename_convert(ctx, conn,
 				  fname_dst,
 				  ucf_flags_dst,
+				  NULL,
 				  &dest_has_wild,
 				  &smb_fname_dst);
 	if (!NT_STATUS_IS_OK(status)) {

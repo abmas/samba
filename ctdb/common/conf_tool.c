@@ -32,6 +32,7 @@
 #include "cluster/cluster_conf.h"
 #include "database/database_conf.h"
 #include "event/event_conf.h"
+#include "failover/failover_conf.h"
 #include "server/legacy_conf.h"
 
 #include "common/conf_tool.h"
@@ -243,6 +244,7 @@ int conf_tool_run(struct conf_tool_context *ctx, int *result)
 	cluster_conf_init(ctx->conf);
 	database_conf_init(ctx->conf);
 	event_conf_init(ctx->conf);
+	failover_conf_init(ctx->conf);
 	legacy_conf_init(ctx->conf);
 
 	if (! conf_valid(ctx->conf)) {
@@ -274,6 +276,7 @@ int main(int argc, const char **argv)
 	TALLOC_CTX *mem_ctx;
 	struct conf_tool_context *ctx;
 	int ret, result;
+	int level;
 	bool ok;
 
 	mem_ctx = talloc_new(NULL);
@@ -295,10 +298,11 @@ int main(int argc, const char **argv)
 	}
 
 	setup_logging("ctdb-config", DEBUG_STDERR);
-	ok = debug_level_parse(conf_data.debug, &DEBUGLEVEL);
+	ok = debug_level_parse(conf_data.debug, &level);
 	if (!ok) {
-		DEBUGLEVEL = DEBUG_ERR;
+		level = DEBUG_ERR;
 	}
+	debuglevel_set(level);
 
 	ret = conf_tool_run(ctx, &result);
 	if (ret != 0) {

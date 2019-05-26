@@ -41,6 +41,9 @@ const char *ctdb_sock_addr_to_string(TALLOC_CTX *mem_ctx,
 				     ctdb_sock_addr *addr, bool with_port);
 int ctdb_sock_addr_from_string(const char *str,
 			       ctdb_sock_addr *addr, bool with_port);
+int ctdb_sock_addr_mask_from_string(const char *str,
+				    ctdb_sock_addr *addr,
+				    unsigned int *mask);
 unsigned int ctdb_sock_addr_port(ctdb_sock_addr *addr);
 void ctdb_sock_addr_set_port(ctdb_sock_addr *addr, unsigned int port);
 int ctdb_sock_addr_cmp_ip(const ctdb_sock_addr *addr1,
@@ -66,7 +69,9 @@ int ctdb_connection_list_sort(struct ctdb_connection_list *conn_list);
 const char *ctdb_connection_list_to_string(
 	TALLOC_CTX *mem_ctx,
 	struct ctdb_connection_list *conn_list, bool client_first);
-int ctdb_connection_list_read(TALLOC_CTX *mem_ctx, bool client_first,
+int ctdb_connection_list_read(TALLOC_CTX *mem_ctx,
+			      int fd,
+			      bool client_first,
 			      struct ctdb_connection_list **conn_list);
 
 #endif /* __CTDB_PROTOCOL_UTIL_H__ */

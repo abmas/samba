@@ -28,6 +28,7 @@
 #include "../librpc/gen_ndr/open_files.h"
 #include "source3/lib/dbwrap/dbwrap_watch.h"
 #include "messages.h"
+#include "librpc/gen_ndr/ndr_quota.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_SMB2
@@ -107,7 +108,7 @@ NTSTATUS smbd_smb2_request_process_setinfo(struct smbd_smb2_request *req)
 		return smbd_smb2_request_error(req, NT_STATUS_FILE_CLOSED);
 	}
 
-	subreq = smbd_smb2_setinfo_send(req, req->ev_ctx,
+	subreq = smbd_smb2_setinfo_send(req, req->sconn->ev_ctx,
 					req, in_fsp,
 					in_info_type,
 					in_file_info_class,
@@ -201,28 +202,27 @@ static struct tevent_req *delay_rename_for_lease_break(struct tevent_req *req,
 
 	for (i=0; i<d->num_share_modes; i++) {
 		struct share_mode_entry *e = &d->share_modes[i];
-		struct share_mode_lease *l = NULL;
-		uint32_t e_lease_type = get_lease_type(d, e);
+		uint32_t e_lease_type;
 		uint32_t break_to;
 
 		if (e->op_type != LEASE_OPLOCK) {
 			continue;
 		}
 
-		l = &d->leases[e->lease_idx];
+		e_lease_type = get_lease_type(d, e);
+
+		if (!(e_lease_type & SMB2_LEASE_HANDLE)) {
+			continue;
+		}
 
 		if (smb2_lease_equal(fsp_client_guid(fsp),
 				&fsp->lease->lease.lease_key,
-				&l->client_guid,
-				&l->lease_key)) {
+				&e->client_guid,
+				&e->lease_key)) {
 			continue;
 		}
 
 		if (share_mode_stale_pid(d, i)) {
-			continue;
-		}
-
-		if (!(e_lease_type & SMB2_LEASE_HANDLE)) {
 			continue;
 		}
 
@@ -386,7 +386,7 @@ static struct tevent_req *smbd_smb2_setinfo_send(TALLOC_CTX *mem_ctx,
 	}
 
 	switch (in_info_type) {
-	case 0x01:/* SMB2_SETINFO_FILE */
+	case SMB2_0_INFO_FILE:
 	{
 		uint16_t file_info_level;
 		char *data;
@@ -406,7 +406,7 @@ static struct tevent_req *smbd_smb2_setinfo_send(TALLOC_CTX *mem_ctx,
 			 * handle (returned from an NT SMB). NT5.0 seems
 			 * to do this call. JRA.
 			 */
-			if (INFO_LEVEL_IS_UNIX(file_info_level)) {
+			if (fsp->fsp_name->flags & SMB_FILENAME_POSIX_PATH) {
 				/* Always do lstat for UNIX calls. */
 				if (SMB_VFS_LSTAT(conn, fsp->fsp_name)) {
 					DEBUG(3,("smbd_smb2_setinfo_send: "
@@ -527,7 +527,7 @@ static struct tevent_req *smbd_smb2_setinfo_send(TALLOC_CTX *mem_ctx,
 		break;
 	}
 
-	case 0x02:/* SMB2_SETINFO_FS */
+	case SMB2_0_INFO_FILESYSTEM:
 	{
 		uint16_t file_info_level = in_file_info_class + 1000;
 
@@ -545,7 +545,7 @@ static struct tevent_req *smbd_smb2_setinfo_send(TALLOC_CTX *mem_ctx,
 		break;
 	}
 
-	case 0x03:/* SMB2_SETINFO_SECURITY */
+	case SMB2_0_INFO_SECURITY:
 	{
 		if (!CAN_WRITE(conn)) {
 			tevent_req_nterror(req, NT_STATUS_ACCESS_DENIED);
@@ -564,6 +564,46 @@ static struct tevent_req *smbd_smb2_setinfo_send(TALLOC_CTX *mem_ctx,
 		break;
 	}
 
+	case SMB2_0_INFO_QUOTA:
+	{
+#ifdef HAVE_SYS_QUOTAS
+		struct file_quota_information info = {0};
+		SMB_NTQUOTA_STRUCT qt = {0};
+		enum ndr_err_code err;
+		int ret;
+
+		if (!fsp->fake_file_handle) {
+			tevent_req_nterror(req, NT_STATUS_INVALID_PARAMETER);
+			return tevent_req_post(req, ev);
+		}
+		err = ndr_pull_struct_blob(
+			&in_input_buffer, state, &info,
+			(ndr_pull_flags_fn_t)ndr_pull_file_quota_information);
+		if (!NDR_ERR_CODE_IS_SUCCESS(err)) {
+			tevent_req_nterror(req, NT_STATUS_UNSUCCESSFUL);
+			return tevent_req_post(req, ev);
+		}
+
+		qt.usedspace = info.quota_used;
+
+		qt.softlim = info.quota_threshold;
+
+		qt.hardlim = info.quota_limit;
+
+		qt.sid = info.sid;
+		ret = vfs_set_ntquota(fsp, SMB_USER_QUOTA_TYPE, &qt.sid, &qt);
+		if (ret !=0 ) {
+			status = map_nt_error_from_unix(errno);
+			tevent_req_nterror(req, status);
+			return tevent_req_post(req, ev);
+		}
+		status = NT_STATUS_OK;
+		break;
+#else
+		tevent_req_nterror(req, NT_STATUS_NOT_SUPPORTED);
+		return tevent_req_post(req, ev);
+#endif
+	}
 	default:
 		tevent_req_nterror(req, NT_STATUS_INVALID_PARAMETER);
 		return tevent_req_post(req, ev);

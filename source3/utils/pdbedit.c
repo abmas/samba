@@ -25,6 +25,7 @@
 #include "../librpc/gen_ndr/samr.h"
 #include "../libcli/security/security.h"
 #include "passdb.h"
+#include "cmdline_contexts.h"
 
 #define BIT_BACKEND	0x00000004
 #define BIT_VERBOSE	0x00000008
@@ -267,14 +268,15 @@ static int print_sam_info (struct samu *sam_pwent, bool verbosity, bool smbpwdst
 	if (verbosity) {
 		char temp[44];
 		const uint8_t *hours;
+		struct dom_sid_buf buf;
 
 		printf ("Unix username:        %s\n", pdb_get_username(sam_pwent));
 		printf ("NT username:          %s\n", pdb_get_nt_username(sam_pwent));
 		printf ("Account Flags:        %s\n", pdb_encode_acct_ctrl(pdb_get_acct_ctrl(sam_pwent), NEW_PW_FORMAT_SPACE_PADDED_LEN));
 		printf ("User SID:             %s\n",
-			sid_string_tos(pdb_get_user_sid(sam_pwent)));
+			dom_sid_str_buf(pdb_get_user_sid(sam_pwent), &buf));
 		printf ("Primary Group SID:    %s\n",
-			sid_string_tos(pdb_get_group_sid(sam_pwent)));
+			dom_sid_str_buf(pdb_get_group_sid(sam_pwent), &buf));
 		printf ("Full Name:            %s\n", pdb_get_fullname(sam_pwent));
 		printf ("Home Directory:       %s\n", pdb_get_homedir(sam_pwent));
 		printf ("HomeDir Drive:        %s\n", pdb_get_dir_drive(sam_pwent));
@@ -596,9 +598,11 @@ static int set_user_info(const char *username, const char *fullname,
 		time_t value = get_time_t_max();
 
 		if (strcmp(kickoff_time, "never") != 0) {
-			uint32_t num = strtoul(kickoff_time, &endptr, 10);
+			int error = 0;
+			uint32_t num;
 
-			if ((endptr == kickoff_time) || (endptr[0] != '\0')) {
+			num = strtoul_err(kickoff_time, &endptr, 10, &error);
+			if (error != 0 || *endptr != '\0') {
 				fprintf(stderr, "Failed to parse kickoff time\n");
 				return -1;
 			}
@@ -750,7 +754,7 @@ static int new_user(const char *username, const char *fullname,
 	NTSTATUS status;
 	struct dom_sid u_sid;
 	int flags;
-	int ret;
+	int ret = -1;
 
 	tosctx = talloc_tos();
 	if (!tosctx) {
@@ -766,10 +770,14 @@ static int new_user(const char *username, const char *fullname,
 	}
 
 	pwd1 = get_pass( "new password:", stdin_get);
-	pwd2 = get_pass( "retype new password:", stdin_get);
-	if (!pwd1 || !pwd2) {
+	if (pwd1 == NULL) {
 		fprintf(stderr, "Failed to read passwords.\n");
-		return -1;
+		goto done;
+	}
+	pwd2 = get_pass( "retype new password:", stdin_get);
+	if (pwd2 == NULL) {
+		fprintf(stderr, "Failed to read passwords.\n");
+		goto done;
 	}
 	ret = strcmp(pwd1, pwd2);
 	if (ret != 0) {
@@ -1116,6 +1124,8 @@ int main(int argc, const char **argv)
 
 	if (user_name == NULL)
 		user_name = poptGetArg(pc);
+
+	cmdline_messaging_context(get_dyn_CONFIGFILE());
 
 	if (!lp_load_global(get_dyn_CONFIGFILE())) {
 		fprintf(stderr, "Can't load %s - run testparm to debug it\n", get_dyn_CONFIGFILE());

@@ -30,17 +30,18 @@
 #include <tevent.h>
 #include <tdb.h>
 
-#include "common/version.h"
+#include "version.h"
 #include "lib/util/debug.h"
 #include "lib/util/samba_util.h"
 #include "lib/util/sys_rw.h"
 
 #include "common/db_hash.h"
 #include "common/logging.h"
+#include "common/path.h"
 #include "protocol/protocol.h"
 #include "protocol/protocol_api.h"
 #include "protocol/protocol_util.h"
-#include "common/system.h"
+#include "common/system_socket.h"
 #include "client/client.h"
 #include "client/client_sync.h"
 
@@ -314,6 +315,7 @@ static bool parse_nodestring(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		goto done;
 	} else {
 		char *ns, *tok;
+		int error = 0;
 
 		ns = talloc_strdup(mem_ctx, nodestring);
 		if (ns == NULL) {
@@ -323,10 +325,9 @@ static bool parse_nodestring(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		tok = strtok(ns, ",");
 		while (tok != NULL) {
 			uint32_t pnn;
-			char *endptr;
 
-			pnn = (uint32_t)strtoul(tok, &endptr, 0);
-			if (pnn == 0 && tok == endptr) {
+			pnn = (uint32_t)strtoul_err(tok, NULL, 0, &error);
+			if (error != 0) {
 				fprintf(stderr, "Invalid node %s\n", tok);
 					return false;
 			}
@@ -534,7 +535,8 @@ static bool db_exists(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	struct ctdb_dbid *db = NULL;
 	uint32_t id = 0;
 	const char *name = NULL;
-	int ret, i;
+	int i;
+	int ret = 0;
 
 	ret = ctdb_ctrl_get_dbmap(mem_ctx, ctdb->ev, ctdb->client,
 				  ctdb->pnn, TIMEOUT(), &dbmap);
@@ -543,7 +545,10 @@ static bool db_exists(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	}
 
 	if (strncmp(db_arg, "0x", 2) == 0) {
-		id = strtoul(db_arg, NULL, 0);
+		id = strtoul_err(db_arg, NULL, 0, &ret);
+		if (ret != 0) {
+			return false;
+		}
 		for (i=0; i<dbmap->num; i++) {
 			if (id == dbmap->dbs[i].db_id) {
 				db = &dbmap->dbs[i];
@@ -586,7 +591,7 @@ static int h2i(char h)
 		return h - 'a' + 10;
 	}
 	if (h >= 'A' && h <= 'F') {
-		return h - 'f' + 10;
+		return h - 'A' + 10;
 	}
 	return h - '0';
 }
@@ -625,6 +630,9 @@ static int str_to_data(const char *str, size_t len, TALLOC_CTX *mem_ctx,
 
 	if (strncmp(str, "0x", 2) == 0) {
 		ret = hex_to_data(str+2, len-2, mem_ctx, &data);
+		if (ret != 0) {
+			return ret;
+		}
 	} else {
 		data.dptr = talloc_memdup(mem_ctx, str, len);
 		if (data.dptr == NULL) {
@@ -634,7 +642,7 @@ static int str_to_data(const char *str, size_t len, TALLOC_CTX *mem_ctx,
 	}
 
 	*out = data;
-	return ret;
+	return 0;
 }
 
 static int run_helper(TALLOC_CTX *mem_ctx, const char *command,
@@ -714,7 +722,7 @@ static int run_helper(TALLOC_CTX *mem_ctx, const char *command,
 static int control_version(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 			   int argc, const char **argv)
 {
-	printf("%s\n", ctdb_version_string);
+	printf("%s\n", SAMBA_VERSION_STRING);
 	return 0;
 }
 
@@ -1055,8 +1063,9 @@ static int control_setvar(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 {
 	struct ctdb_var_list *tun_var_list;
 	struct ctdb_tunable tunable;
-	int ret, i;
 	bool found;
+	int i;
+	int ret = 0;
 
 	if (argc != 2) {
 		usage("setvar");
@@ -1085,7 +1094,10 @@ static int control_setvar(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	}
 
 	tunable.name = argv[0];
-	tunable.value = strtoul(argv[1], NULL, 0);
+	tunable.value = strtoul_err(argv[1], NULL, 0, &ret);
+	if (ret != 0) {
+		return ret;
+	}
 
 	ret = ctdb_ctrl_set_tunable(mem_ctx, ctdb->ev, ctdb->client,
 				    ctdb->cmd_pnn, TIMEOUT(), &tunable);
@@ -1232,6 +1244,11 @@ static void print_statistics_machine(struct ctdb_statistics *s,
 	printf("%.6f%s", s->call_latency.min, options.sep);
 	printf("%.6f%s", LATENCY_AVG(s->call_latency), options.sep);
 	printf("%.6f%s", s->call_latency.max, options.sep);
+
+	printf("%u%s", s->locks.latency.num, options.sep);
+	printf("%.6f%s", s->locks.latency.min, options.sep);
+	printf("%.6f%s", LATENCY_AVG(s->locks.latency), options.sep);
+	printf("%.6f%s", s->locks.latency.max, options.sep);
 
 	printf("%d%s", s->childwrite_latency.num, options.sep);
 	printf("%.6f%s", s->childwrite_latency.min, options.sep);
@@ -1858,7 +1875,8 @@ static int control_process_exists(TALLOC_CTX *mem_ctx,
 {
 	pid_t pid;
 	uint64_t srvid = 0;
-	int ret, status;
+	int status;
+	int ret = 0;
 
 	if (argc != 1 && argc != 2) {
 		usage("process-exists");
@@ -1866,7 +1884,10 @@ static int control_process_exists(TALLOC_CTX *mem_ctx,
 
 	pid = atoi(argv[0]);
 	if (argc == 2) {
-		srvid = strtoull(argv[1], NULL, 0);
+		srvid = strtoull_err(argv[1], NULL, 0, &ret);
+		if (ret != 0) {
+			return ret;
+		}
 	}
 
 	if (srvid == 0) {
@@ -2429,8 +2450,8 @@ static int control_dumpmemory(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		return ret;
 	}
 
-	n = write(1, mem_str, strlen(mem_str)+1);
-	if (n < 0 || n != strlen(mem_str)+1) {
+	n = write(1, mem_str, strlen(mem_str));
+	if (n < 0 || n != strlen(mem_str)) {
 		fprintf(stderr, "Failed to write talloc summary\n");
 		return 1;
 	}
@@ -2441,10 +2462,12 @@ static int control_dumpmemory(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 static void dump_memory(uint64_t srvid, TDB_DATA data, void *private_data)
 {
 	bool *done = (bool *)private_data;
+	size_t len;
 	ssize_t n;
 
-	n = write(1, data.dptr, data.dsize);
-	if (n < 0 || n != data.dsize) {
+	len = strnlen((const char *)data.dptr, data.dsize);
+	n = write(1, data.dptr, len);
+	if (n < 0 || n != len) {
 		fprintf(stderr, "Failed to write talloc summary\n");
 	}
 
@@ -2757,7 +2780,7 @@ static int control_ban(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		       int argc, const char **argv)
 {
 	struct ctdb_ban_state ban_state;
-	int ret;
+	int ret = 0;
 
 	if (argc != 1) {
 		usage("ban");
@@ -2770,7 +2793,10 @@ static int control_ban(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	}
 
 	ban_state.pnn = ctdb->cmd_pnn;
-	ban_state.time = strtoul(argv[0], NULL, 0);
+	ban_state.time = strtoul_err(argv[0], NULL, 0, &ret);
+	if (ret != 0) {
+		return ret;
+	}
 
 	if (ban_state.time == 0) {
 		fprintf(stderr, "Ban time cannot be zero\n");
@@ -3029,7 +3055,7 @@ static int control_tickle(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		unsigned int num_failed;
 
 		/* Client first but the src/dst logic is confused */
-		ret = ctdb_connection_list_read(mem_ctx, false, &clist);
+		ret = ctdb_connection_list_read(mem_ctx, 0, false, &clist);
 		if (ret != 0) {
 			return ret;
 		}
@@ -3083,14 +3109,18 @@ static int control_gettickles(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	ctdb_sock_addr addr;
 	struct ctdb_tickle_list *tickles;
 	unsigned port = 0;
-	int ret, i;
+	int i;
+	int ret = 0;
 
 	if (argc < 1 || argc > 2) {
 		usage("gettickles");
 	}
 
 	if (argc == 2) {
-		port = strtoul(argv[1], NULL, 10);
+		port = strtoul_err(argv[1], NULL, 10, &ret);
+		if (ret != 0) {
+			return ret;
+		}
 	}
 
 	ret = ctdb_sock_addr_from_string(argv[0], &addr, false);
@@ -3247,7 +3277,7 @@ static int control_addtickle(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		struct tevent_req *req;
 
 		/* Client first but the src/dst logic is confused */
-		ret = ctdb_connection_list_read(mem_ctx, false, &clist);
+		ret = ctdb_connection_list_read(mem_ctx, 0, false, &clist);
 		if (ret != 0) {
 			return ret;
 		}
@@ -3312,7 +3342,7 @@ static int control_deltickle(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		struct tevent_req *req;
 
 		/* Client first but the src/dst logic is confused */
-		ret = ctdb_connection_list_read(mem_ctx, false, &clist);
+		ret = ctdb_connection_list_read(mem_ctx, 0, false, &clist);
 		if (ret != 0) {
 			return ret;
 		}
@@ -3783,7 +3813,8 @@ static int control_moveip(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 {
 	ctdb_sock_addr addr;
 	uint32_t pnn;
-	int ret, retries = 0;
+	int retries = 0;
+	int ret = 0;
 
 	if (argc != 2) {
 		usage("moveip");
@@ -3795,8 +3826,8 @@ static int control_moveip(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		return 1;
 	}
 
-	pnn = strtoul(argv[1], NULL, 10);
-	if (pnn == CTDB_UNKNOWN_PNN) {
+	pnn = strtoul_err(argv[1], NULL, 10, &ret);
+	if (pnn == CTDB_UNKNOWN_PNN || ret != 0) {
 		fprintf(stderr, "Invalid PNN %s\n", argv[1]);
 		return 1;
 	}
@@ -3849,7 +3880,8 @@ static int control_addip(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		usage("addip");
 	}
 
-	if (! parse_ip_mask(argv[0], argv[1], &addr, &mask)) {
+	ret = ctdb_sock_addr_mask_from_string(argv[0], &addr, &mask);
+	if (ret != 0) {
 		fprintf(stderr, "Invalid IP/Mask %s\n", argv[0]);
 		return 1;
 	}
@@ -4558,15 +4590,12 @@ static int control_event(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 			 int argc, const char **argv)
 {
 	char *t, *event_helper = NULL;
-	char *eventd_socket = NULL;
-	const char **new_argv;
-	int i;
 
 	t = getenv("CTDB_EVENT_HELPER");
 	if (t != NULL) {
 		event_helper = talloc_strdup(mem_ctx, t);
 	} else {
-		event_helper = talloc_asprintf(mem_ctx, "%s/ctdb_event",
+		event_helper = talloc_asprintf(mem_ctx, "%s/ctdb-event",
 					       CTDB_HELPER_BINDIR);
 	}
 
@@ -4575,49 +4604,25 @@ static int control_event(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 		return 1;
 	}
 
-	t = getenv("CTDB_SOCKET");
-	if (t != NULL) {
-		eventd_socket = talloc_asprintf(mem_ctx, "%s/eventd.sock",
-						dirname(t));
-	} else {
-		eventd_socket = talloc_asprintf(mem_ctx, "%s/eventd.sock",
-						CTDB_RUNDIR);
-	}
-
-	if (eventd_socket == NULL) {
-		fprintf(stderr, "Unable to set event daemon socket\n");
-		return 1;
-	}
-
-	new_argv = talloc_array(mem_ctx, const char *, argc + 1);
-	if (new_argv == NULL) {
-		fprintf(stderr, "Memory allocation error\n");
-		return 1;
-	}
-
-	new_argv[0] = eventd_socket;
-	for (i=0; i<argc; i++) {
-		new_argv[i+1] = argv[i];
-	}
-
 	return run_helper(mem_ctx, "event daemon helper", event_helper,
-			  argc+1, new_argv);
+			  argc, argv);
 }
 
 static int control_scriptstatus(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 				int argc, const char **argv)
 {
-	const char *new_argv[3];
+	const char *new_argv[4];
 
 	if (argc > 1) {
 		usage("scriptstatus");
 	}
 
 	new_argv[0] = "status";
-	new_argv[1] = (argc == 0) ? "monitor" : argv[0];
-	new_argv[2] = NULL;
+	new_argv[1] = "legacy";
+	new_argv[2] = (argc == 0) ? "monitor" : argv[0];
+	new_argv[3] = NULL;
 
-	(void) control_event(mem_ctx, ctdb, 2, new_argv);
+	(void) control_event(mem_ctx, ctdb, 3, new_argv);
 	return 0;
 }
 
@@ -4829,7 +4834,7 @@ static int control_pfetch(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	TDB_DATA key, data;
 	int ret;
 
-	if (argc < 2 || argc > 3) {
+	if (argc != 2) {
 		usage("pfetch");
 	}
 
@@ -5245,7 +5250,7 @@ static int control_tstore(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	struct ctdb_ltdb_header header;
 	uint8_t header_buf[sizeof(struct ctdb_ltdb_header)];
 	size_t np;
-	int ret;
+	int ret = 0;
 
 	if (argc < 3 || argc > 5) {
 		usage("tstore");
@@ -5274,7 +5279,10 @@ static int control_tstore(TALLOC_CTX *mem_ctx, struct ctdb_context *ctdb,
 	ZERO_STRUCT(header);
 
 	if (argc > 3) {
-		header.rsn = (uint64_t)strtoull(argv[3], NULL, 0);
+		header.rsn = (uint64_t)strtoull_err(argv[3], NULL, 0, &ret);
+		if (ret != 0) {
+			return ret;
+		}
 	}
 	if (argc > 4) {
 		header.dmaster = (uint32_t)atol(argv[4]);
@@ -5980,9 +5988,9 @@ static const struct ctdb_cmd {
 		"wipe the contents of a database.", "<dbname|dbid>"},
 	{ "recmaster", control_recmaster, false, true,
 		"show the pnn for the recovery master", NULL },
-	{ "event", control_event, false, false,
+	{ "event", control_event, true, false,
 		"event and event script commands", NULL },
-	{ "scriptstatus", control_scriptstatus, false, false,
+	{ "scriptstatus", control_scriptstatus, true, false,
 		"show event script status",
 		"[init|setup|startup|monitor|takeip|releaseip|ipreallocated]" },
 	{ "natgw", control_natgw, false, false,
@@ -5998,7 +6006,7 @@ static const struct ctdb_cmd {
 	{ "setdbsticky", control_setdbsticky, false, true,
 		"enable sticky records", "<dbname|dbid>"},
 	{ "pfetch", control_pfetch, false, false,
-		"fetch record from persistent database", "<dbname|dbid> <key> [<file>]" },
+		"fetch record from persistent database", "<dbname|dbid> <key>" },
 	{ "pstore", control_pstore, false, false,
 		"write record to persistent database", "<dbname|dbid> <key> <value>" },
 	{ "pdelete", control_pdelete, false, false,
@@ -6085,22 +6093,70 @@ static void usage(const char *command)
 
 struct poptOption cmdline_options[] = {
 	POPT_AUTOHELP
-	{ "debug", 'd', POPT_ARG_STRING, &options.debuglevelstr, 0,
-		"debug level"},
-	{ "timelimit", 't', POPT_ARG_INT, &options.timelimit, 0,
-		"timelimit (in seconds)" },
-	{ "node", 'n', POPT_ARG_INT, &options.pnn, 0,
-		"node specification - integer" },
-	{ NULL, 'Y', POPT_ARG_NONE, &options.machinereadable, 0,
-		"enable machine readable output", NULL },
-	{ "separator", 'x', POPT_ARG_STRING, &options.sep, 0,
-		"specify separator for machine readable output", "CHAR" },
-	{ NULL, 'X', POPT_ARG_NONE, &options.machineparsable, 0,
-		"enable machine parsable output with separator |", NULL },
-	{ "verbose", 'v', POPT_ARG_NONE, &options.verbose, 0,
-		"enable verbose output", NULL },
-	{ "maxruntime", 'T', POPT_ARG_INT, &options.maxruntime, 0,
-		"die if runtime exceeds this limit (in seconds)" },
+	{
+		.longName   = "debug",
+		.shortName  = 'd',
+		.argInfo    = POPT_ARG_STRING,
+		.arg        = &options.debuglevelstr,
+		.val        = 0,
+		.descrip    = "debug level",
+	},
+	{
+		.longName   = "timelimit",
+		.shortName  = 't',
+		.argInfo    = POPT_ARG_INT,
+		.arg        = &options.timelimit,
+		.val        = 0,
+		.descrip    = "timelimit (in seconds)",
+	},
+	{
+		.longName   = "node",
+		.shortName  = 'n',
+		.argInfo    = POPT_ARG_INT,
+		.arg        = &options.pnn,
+		.val        = 0,
+		.descrip    = "node specification - integer",
+	},
+	{
+		.longName   = NULL,
+		.shortName  = 'Y',
+		.argInfo    = POPT_ARG_NONE,
+		.arg        = &options.machinereadable,
+		.val        = 0,
+		.descrip    = "enable machine readable output",
+	},
+	{
+		.longName   = "separator",
+		.shortName  = 'x',
+		.argInfo    = POPT_ARG_STRING,
+		.arg        = &options.sep,
+		.val        = 0,
+		.descrip    = "specify separator for machine readable output",
+		.argDescrip = "CHAR",
+	},
+	{
+		.shortName  = 'X',
+		.argInfo    = POPT_ARG_NONE,
+		.arg        = &options.machineparsable,
+		.val        = 0,
+		.descrip    = "enable machine parsable output with separator |",
+	},
+	{
+		.longName   = "verbose",
+		.shortName  = 'v',
+		.argInfo    = POPT_ARG_NONE,
+		.arg        = &options.verbose,
+		.val        = 0,
+		.descrip    = "enable verbose output",
+	},
+	{
+		.longName   = "maxruntime",
+		.shortName  = 'T',
+		.argInfo    = POPT_ARG_INT,
+		.arg        = &options.maxruntime,
+		.val        = 0,
+		.descrip    = "die if runtime exceeds this limit (in seconds)",
+	},
 	POPT_TABLEEND
 };
 
@@ -6145,9 +6201,10 @@ static int process_command(const struct ctdb_cmd *cmd, int argc,
 		goto fail;
 	}
 
-	ctdb_socket = getenv("CTDB_SOCKET");
+	ctdb_socket = path_socket(ctdb, "ctdbd");
 	if (ctdb_socket == NULL) {
-		ctdb_socket = CTDB_SOCKET;
+		fprintf(stderr, "Memory allocation error\n");
+		goto fail;
 	}
 
 	ret = ctdb_client_init(ctdb, ctdb->ev, ctdb_socket, &ctdb->client);
@@ -6212,7 +6269,8 @@ int main(int argc, const char *argv[])
 	int extra_argc;
 	const struct ctdb_cmd *cmd;
 	int loglevel;
-	int ret;
+	bool ok;
+	int ret = 0;
 
 	setlinebuf(stdout);
 
@@ -6236,7 +6294,11 @@ int main(int argc, const char *argv[])
 
 		ctdb_timeout = getenv("CTDB_TIMEOUT");
 		if (ctdb_timeout != NULL) {
-			options.maxruntime = strtoul(ctdb_timeout, NULL, 0);
+			options.maxruntime = strtoul_err(ctdb_timeout, NULL, 0, &ret);
+			if (ret != 0) {
+				fprintf(stderr, "Invalid value CTDB_TIMEOUT\n");
+				exit(1);
+			}
 		} else {
 			options.maxruntime = 120;
 		}
@@ -6270,11 +6332,11 @@ int main(int argc, const char *argv[])
 
 	/* Enable logging */
 	setup_logging("ctdb", DEBUG_STDERR);
-	if (debug_level_parse(options.debuglevelstr, &loglevel)) {
-		DEBUGLEVEL = loglevel;
-	} else {
-		DEBUGLEVEL = DEBUG_ERR;
+	ok = debug_level_parse(options.debuglevelstr, &loglevel);
+	if (!ok) {
+		loglevel = DEBUG_ERR;
 	}
+	debuglevel_set(loglevel);
 
 	signal(SIGALRM, alarm_handler);
 	alarm(options.maxruntime);

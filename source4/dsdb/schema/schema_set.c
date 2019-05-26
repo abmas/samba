@@ -33,7 +33,7 @@
 /* change this when we change something in our schema code that
  * requires a re-index of the database
  */
-#define SAMDB_INDEXING_VERSION "2"
+#define SAMDB_INDEXING_VERSION "3"
 
 /*
   override the name to attribute handler function
@@ -152,6 +152,8 @@ int dsdb_schema_set_indices_and_attributes(struct ldb_context *ldb,
 		 */
 		if (strcmp(syntax, LDB_SYNTAX_INTEGER) == 0) {
 			ret = ldb_msg_add_string(msg, attr->lDAPDisplayName, "INTEGER");
+		} else if (strcmp(syntax, LDB_SYNTAX_ORDERED_INTEGER) == 0) {
+			ret = ldb_msg_add_string(msg, attr->lDAPDisplayName, "ORDERED_INTEGER");
 		} else if (strcmp(syntax, LDB_SYNTAX_DIRECTORY_STRING) == 0) {
 			ret = ldb_msg_add_string(msg, attr->lDAPDisplayName, "CASE_INSENSITIVE");
 		}
@@ -741,7 +743,7 @@ struct dsdb_schema *dsdb_get_schema(struct ldb_context *ldb, TALLOC_CTX *referen
 	}
 
 	if (refresh_fn) {
-		/* We need to guard against recurisve calls here */
+		/* We need to guard against recursive calls here */
 		if (ldb_set_opaque(ldb, "dsdb_schema_refresh_fn", NULL) != LDB_SUCCESS) {
 			ldb_debug_set(ldb, LDB_DEBUG_FATAL,
 				      "dsdb_get_schema: clearing dsdb_schema_refresh_fn failed");

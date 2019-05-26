@@ -148,7 +148,7 @@ static char *net_idmap_dbfile(struct net_context *c,
 			d_fprintf(stderr, _("Out of memory!\n"));
 		}
 	} else if (strequal(backend, "tdb")) {
-		dbfile = state_path("winbindd_idmap.tdb");
+		dbfile = state_path(talloc_tos(), "winbindd_idmap.tdb");
 		if (dbfile == NULL) {
 			d_fprintf(stderr, _("Out of memory!\n"));
 		}
@@ -161,7 +161,7 @@ static char *net_idmap_dbfile(struct net_context *c,
 		}
 		ctx->backend = TDB;
 	} else if (strequal(backend, "autorid")) {
-		dbfile = state_path("autorid.tdb");
+		dbfile = state_path(talloc_tos(), "autorid.tdb");
 		if (dbfile == NULL) {
 			d_fprintf(stderr, _("Out of memory!\n"));
 		}
@@ -417,14 +417,14 @@ static int net_idmap_restore(struct net_context *c, int argc, const char **argv)
 		if ( (len > 0) && (line[len-1] == '\n') )
 			line[len-1] = '\0';
 
-		if (sscanf(line, "GID %lu %128s", &idval, sid_string) == 2)
+		if (sscanf(line, "GID %lu %127s", &idval, sid_string) == 2)
 		{
 			ret = net_idmap_store_id_mapping(db, ID_TYPE_GID,
 							 idval, sid_string);
 			if (ret != 0) {
 				break;
 			}
-		} else if (sscanf(line, "UID %lu %128s", &idval, sid_string) == 2)
+		} else if (sscanf(line, "UID %lu %127s", &idval, sid_string) == 2)
 		{
 			ret = net_idmap_store_id_mapping(db, ID_TYPE_UID,
 							 idval, sid_string);
@@ -628,22 +628,13 @@ static bool parse_uint32(const char *str, uint32_t *result)
 {
 	unsigned long val;
 	char *endptr;
+	int error = 0;
 
-	val = strtoul(str, &endptr, 10);
+	val = strtoul_err(str, &endptr, 10, &error);
+	if (error != 0 || *endptr != '\0') {
+		return false;
+	}
 
-	if (str == endptr) {
-		return false;
-	}
-	if (*endptr != '\0') {
-		return false;
-	}
-	if ((val == ULONG_MAX) && (errno == ERANGE)) {
-		return false;
-	}
-	if ((val & UINT32_MAX) != val) {
-		/* overflow */
-		return false;
-	}
 	*result = val;		/* Potential crop */
 	return true;
 }

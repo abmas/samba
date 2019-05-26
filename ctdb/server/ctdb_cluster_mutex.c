@@ -19,10 +19,10 @@
    along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <tevent.h>
-
 #include "replace.h"
 #include "system/network.h"
+
+#include <tevent.h>
 
 #include "lib/util/debug.h"
 #include "lib/util/time.h"
@@ -118,70 +118,99 @@ static void cluster_mutex_handler(struct tevent_context *ev,
 
 static char cluster_mutex_helper[PATH_MAX+1] = "";
 
-static bool cluster_mutex_helper_args(TALLOC_CTX *mem_ctx,
-				      const char *argstring, char ***argv)
+static bool cluster_mutex_helper_args_file(TALLOC_CTX *mem_ctx,
+					   const char *argstring,
+					   char ***argv)
 {
-	int nargs, i, ret, n;
-	bool is_command = false;
+	bool ok;
+	char **args = NULL;
+
+	ok = ctdb_set_helper("cluster mutex helper",
+			     cluster_mutex_helper,
+			     sizeof(cluster_mutex_helper),
+			     "CTDB_CLUSTER_MUTEX_HELPER",
+			     CTDB_HELPER_BINDIR,
+			     "ctdb_mutex_fcntl_helper");
+	if (! ok) {
+		DBG_ERR("ctdb exiting with error: "
+			"Unable to set cluster mutex helper\n");
+		exit(1);
+	}
+
+
+	/* Array includes default helper, file and NULL */
+	args = talloc_array(mem_ctx, char *, 3);
+	if (args == NULL) {
+		DBG_ERR("Memory allocation error\n");
+		return false;
+	}
+
+	args[0] = cluster_mutex_helper;
+
+	args[1] = talloc_strdup(args, argstring);
+	if (args[1] == NULL) {
+		DBG_ERR("Memory allocation error\n");
+		return false;
+	}
+
+	args[2] = NULL;
+
+	*argv = args;
+	return true;
+}
+
+static bool cluster_mutex_helper_args_cmd(TALLOC_CTX *mem_ctx,
+					  const char *argstring,
+					  char ***argv)
+{
+	int i, ret, n;
 	char **args = NULL;
 	char *strv = NULL;
 	char *t = NULL;
 
-	if (argstring != NULL && argstring[0] == '!') {
-		/* This is actually a full command */
-		is_command = true;
-		t = discard_const(&argstring[1]);
-	} else {
-		is_command = false;
-		t = discard_const(argstring);
-	}
-
-	ret = strv_split(mem_ctx, &strv, t, " \t");
+	ret = strv_split(mem_ctx, &strv, argstring, " \t");
 	if (ret != 0) {
-		DEBUG(DEBUG_ERR,
-		      ("Unable to parse mutex helper string \"%s\" (%s)\n",
-		       argstring, strerror(ret)));
+		D_ERR("Unable to parse mutex helper command \"%s\" (%s)\n",
+		      argstring,
+		      strerror(ret));
 		return false;
 	}
 	n = strv_count(strv);
 
-	args = talloc_array(mem_ctx, char *, n + (is_command ? 1 : 2));
-
+	/* Extra slot for NULL */
+	args = talloc_array(mem_ctx, char *, n + 1);
 	if (args == NULL) {
-		DEBUG(DEBUG_ERR,(__location__ " out of memory\n"));
+		DBG_ERR("Memory allocation error\n");
 		return false;
 	}
 
-	nargs = 0;
-
-	if (! is_command) {
-		if (!ctdb_set_helper("cluster mutex helper",
-				     cluster_mutex_helper,
-				     sizeof(cluster_mutex_helper),
-				     "CTDB_CLUSTER_MUTEX_HELPER",
-				     CTDB_HELPER_BINDIR,
-				     "ctdb_mutex_fcntl_helper")) {
-			DEBUG(DEBUG_ERR,("ctdb exiting with error: %s\n",
-					 __location__
-					 " Unable to set cluster mutex helper\n"));
-			exit(1);
-		}
-
-		args[nargs++] = cluster_mutex_helper;
-	}
+	talloc_steal(args, strv);
 
 	t = NULL;
-	for (i = 0; i < n; i++) {
-		/* Don't copy, just keep cmd_args around */
+	for (i = 0 ; i < n; i++) {
 		t = strv_next(strv, t);
-		args[nargs++] = t;
+		args[i] = t;
 	}
 
-	/* Make sure last argument is NULL */
-	args[nargs] = NULL;
+	args[n] = NULL;
 
 	*argv = args;
 	return true;
+}
+
+static bool cluster_mutex_helper_args(TALLOC_CTX *mem_ctx,
+				      const char *argstring,
+				      char ***argv)
+{
+	bool ok;
+
+	if (argstring != NULL && argstring[0] == '!') {
+		ok = cluster_mutex_helper_args_cmd(mem_ctx, &argstring[1], argv);
+	} else {
+		ok = cluster_mutex_helper_args_file(mem_ctx, argstring, argv);
+	}
+
+	return ok;
 }
 
 struct ctdb_cluster_mutex_handle *
@@ -196,6 +225,7 @@ ctdb_cluster_mutex(TALLOC_CTX *mem_ctx,
 {
 	struct ctdb_cluster_mutex_handle *h;
 	char **args;
+	sigset_t sigset_term;
 	int ret;
 
 	h = talloc(mem_ctx, struct ctdb_cluster_mutex_handle);
@@ -225,15 +255,41 @@ ctdb_cluster_mutex(TALLOC_CTX *mem_ctx,
 		return NULL;
 	}
 
+	sigemptyset(&sigset_term);
+	sigaddset(&sigset_term, SIGTERM);
+	ret = sigprocmask(SIG_BLOCK, &sigset_term, NULL);
+	if (ret != 0) {
+		DBG_WARNING("Failed to block SIGTERM (%d)\n", errno);
+	}
+
 	h->child = ctdb_fork(ctdb);
 	if (h->child == (pid_t)-1) {
 		close(h->fd[0]);
 		close(h->fd[1]);
 		talloc_free(h);
+		ret = sigprocmask(SIG_UNBLOCK, &sigset_term, NULL);
+		if (ret != 0) {
+			DBG_WARNING("Failed to unblock SIGTERM (%d)\n", errno);
+		}
 		return NULL;
 	}
 
 	if (h->child == 0) {
+		struct sigaction sa = {
+			.sa_handler = SIG_DFL,
+		};
+
+		ret = sigaction(SIGTERM, &sa, NULL);
+		if (ret != 0) {
+			DBG_WARNING("Failed to reset signal handler (%d)\n",
+				    errno);
+		}
+
+		ret = sigprocmask(SIG_UNBLOCK, &sigset_term, NULL);
+		if (ret != 0) {
+			DBG_WARNING("Failed to unblock SIGTERM (%d)\n", errno);
+		}
+
 		/* Make stdout point to the pipe */
 		close(STDOUT_FILENO);
 		dup2(h->fd[1], STDOUT_FILENO);
@@ -247,6 +303,11 @@ ctdb_cluster_mutex(TALLOC_CTX *mem_ctx,
 	}
 
 	/* Parent */
+
+	ret = sigprocmask(SIG_UNBLOCK, &sigset_term, NULL);
+	if (ret != 0) {
+		DBG_WARNING("Failed to unblock SIGTERM (%d)\n", errno);
+	}
 
 	DEBUG(DEBUG_DEBUG, (__location__ " Created PIPE FD:%d\n", h->fd[0]));
 	set_close_on_exec(h->fd[0]);

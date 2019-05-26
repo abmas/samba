@@ -530,12 +530,6 @@ int ctdb_reply_control_set_db_sticky(struct ctdb_reply_control *reply);
 void ctdb_req_control_reload_public_ips(struct ctdb_req_control *request);
 int ctdb_reply_control_reload_public_ips(struct ctdb_reply_control *reply);
 
-void ctdb_req_control_receive_records(struct ctdb_req_control *request,
-				      struct ctdb_rec_buffer *recbuf);
-int ctdb_reply_control_receive_records(struct ctdb_reply_control *reply,
-				       TALLOC_CTX *mem_ctx,
-				       struct ctdb_rec_buffer **recbuf);
-
 void ctdb_req_control_ipreallocated(struct ctdb_req_control *request);
 int ctdb_reply_control_ipreallocated(struct ctdb_reply_control *reply);
 
@@ -666,26 +660,6 @@ int ctdb_req_tunnel_pull(uint8_t *buf, size_t buflen,
 			 struct ctdb_req_header *h,
 			 TALLOC_CTX *mem_ctx,
 			 struct ctdb_req_tunnel *c);
-
-/* From protocol/protocol_event.c */
-
-size_t ctdb_event_request_len(struct ctdb_event_request *in);
-
-int ctdb_event_request_push(struct ctdb_event_request *in,
-			    uint8_t *buf, size_t *buflen);
-
-int ctdb_event_request_pull(uint8_t *buf, size_t buflen,
-			    TALLOC_CTX *mem_ctx,
-			    struct ctdb_event_request *out);
-
-size_t ctdb_event_reply_len(struct ctdb_event_reply *in);
-
-int ctdb_event_reply_push(struct ctdb_event_reply *in,
-			  uint8_t *buf, size_t *buflen);
-
-int ctdb_event_reply_pull(uint8_t *buf, size_t buflen,
-			  TALLOC_CTX *mem_ctx,
-			  struct ctdb_event_reply *out);
 
 /* From protocol/protocol_packet.c */
 

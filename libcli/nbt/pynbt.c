@@ -97,13 +97,28 @@ static bool PyObject_AsNBTName(PyObject *obj, struct nbt_name_socket *name_socke
 	if (PyTuple_Check(obj)) {
 		if (PyTuple_Size(obj) == 2) {
 			name->name = PyStr_AsString(PyTuple_GetItem(obj, 0));
+			if (name->name == NULL) {
+				goto err;
+			}
 			name->type = PyInt_AsLong(PyTuple_GetItem(obj, 1));
+			if (name->type == -1 && PyErr_Occurred()) {
+				goto err;
+			}
 			name->scope = NULL;
 			return true;
 		} else if (PyTuple_Size(obj) == 3) {
 			name->name = PyStr_AsString(PyTuple_GetItem(obj, 0));
+			if (name->name == NULL) {
+				goto err;
+			}
 			name->scope = PyStr_AsString(PyTuple_GetItem(obj, 1));
+			if (name->scope == NULL) {
+				goto err;
+			}
 			name->type = PyInt_AsLong(PyTuple_GetItem(obj, 2));
+			if (name->type == -1 && PyErr_Occurred()) {
+				goto err;
+			}
 			return true;
 		} else {
 			PyErr_SetString(PyExc_TypeError, "Invalid tuple size");
@@ -114,11 +129,14 @@ static bool PyObject_AsNBTName(PyObject *obj, struct nbt_name_socket *name_socke
 	if (PyStr_Check(obj) || PyUnicode_Check(obj)) {
 		/* FIXME: Parse string to be able to interpret things like RHONWYN<02> ? */
 		name->name = PyStr_AsString(obj);
+		if (name->name == NULL) {
+			goto err;
+		}
 		name->scope = NULL;
 		name->type = 0;
 		return true;
 	}
-
+err:
 	PyErr_SetString(PyExc_TypeError, "Invalid type for object");
 	return false;
 }
@@ -371,17 +389,23 @@ static PyObject *py_nbt_name_release(PyObject *self, PyObject *args, PyObject *k
 }
 
 static PyMethodDef py_nbt_methods[] = {
-	{ "query_name", (PyCFunction)py_nbt_name_query, METH_VARARGS|METH_KEYWORDS,
+	{ "query_name", PY_DISCARD_FUNC_SIG(PyCFunction, py_nbt_name_query),
+		METH_VARARGS|METH_KEYWORDS,
 		"S.query_name(name, dest, broadcast=True, wins=False, timeout=0, retries=3) -> (reply_from, name, reply_addr)\n"
 		"Query for a NetBIOS name" },
-	{ "register_name", (PyCFunction)py_nbt_name_register, METH_VARARGS|METH_KEYWORDS,
+	{ "register_name", PY_DISCARD_FUNC_SIG(PyCFunction,
+					       py_nbt_name_register),
+		METH_VARARGS|METH_KEYWORDS,
 		"S.register_name(name, address, dest, register_demand=True, broadcast=True, multi_homed=True, ttl=0, timeout=0, retries=0) -> (reply_from, name, reply_addr, rcode)\n"
 		"Register a new name" },
-	{ "release_name", (PyCFunction)py_nbt_name_release, METH_VARARGS|METH_KEYWORDS, "S.release_name(name, address, dest, nb_flags=0, broadcast=true, timeout=0, retries=3) -> (reply_from, name, reply_addr, rcode)\n"
+	{ "release_name", PY_DISCARD_FUNC_SIG(PyCFunction, py_nbt_name_release),
+		METH_VARARGS|METH_KEYWORDS, "S.release_name(name, address, dest, nb_flags=0, broadcast=true, timeout=0, retries=3) -> (reply_from, name, reply_addr, rcode)\n"
 		"release a previously registered name" },
-	{ "refresh_name", (PyCFunction)py_nbt_name_refresh, METH_VARARGS|METH_KEYWORDS, "S.refresh_name(name, address, dest, nb_flags=0, broadcast=True, ttl=0, timeout=0, retries=0) -> (reply_from, name, reply_addr, rcode)\n"
+	{ "refresh_name", PY_DISCARD_FUNC_SIG(PyCFunction, py_nbt_name_refresh),
+		METH_VARARGS|METH_KEYWORDS, "S.refresh_name(name, address, dest, nb_flags=0, broadcast=True, ttl=0, timeout=0, retries=0) -> (reply_from, name, reply_addr, rcode)\n"
 		"release a previously registered name" },
-	{ "name_status", (PyCFunction)py_nbt_name_status, METH_VARARGS|METH_KEYWORDS,
+	{ "name_status", PY_DISCARD_FUNC_SIG(PyCFunction, py_nbt_name_status),
+		METH_VARARGS|METH_KEYWORDS,
 		"S.name_status(name, dest, timeout=0, retries=0) -> (reply_from, name, status)\n"
 		"Find the status of a name" },
 

@@ -75,8 +75,16 @@ static void reg_ldb_unpack_value(TALLOC_CTX *mem_ctx,
 	case REG_DWORD:
 	case REG_DWORD_BIG_ENDIAN:
 		if (val != NULL) {
+			int error = 0;
 			/* The data is a plain DWORD */
-			uint32_t tmp = strtoul((char *)val->data, NULL, 0);
+			uint32_t tmp;
+
+			tmp = strtoul_err((char *)val->data, NULL, 0, &error);
+			if (error != 0) {
+				data->data = NULL;
+				data->length = 0;
+				break;
+			}
 			data->data = talloc_size(mem_ctx, sizeof(uint32_t));
 			if (data->data != NULL) {
 				SIVAL(data->data, 0, tmp);
@@ -90,8 +98,16 @@ static void reg_ldb_unpack_value(TALLOC_CTX *mem_ctx,
 
 	case REG_QWORD:
 		if (val != NULL) {
+			int error = 0;
 			/* The data is a plain QWORD */
-			uint64_t tmp = strtoull((char *)val->data, NULL, 0);
+			uint64_t tmp;
+
+			tmp = strtoull_err((char *)val->data, NULL, 0, &error);
+			if (error != 0) {
+				data->data = NULL;
+				data->length = 0;
+				break;
+			}
 			data->data = talloc_size(mem_ctx, sizeof(uint64_t));
 			if (data->data != NULL) {
 				SBVAL(data->data, 0, tmp);
@@ -126,7 +142,7 @@ static struct ldb_message *reg_ldb_pack_value(struct ldb_context *ctx,
 	char *name_dup, *type_str;
 	int ret;
 
-	msg = talloc_zero(mem_ctx, struct ldb_message);
+	msg = ldb_msg_new(mem_ctx);
 	if (msg == NULL) {
 		return NULL;
 	}
@@ -642,7 +658,7 @@ static WERROR ldb_del_value(TALLOC_CTX *mem_ctx, struct hive_key *key,
 
 	if (child[0] == '\0') {
 		/* default value */
-		msg = talloc_zero(mem_ctx, struct ldb_message);
+		msg = ldb_msg_new(mem_ctx);
 		W_ERROR_HAVE_NO_MEMORY(msg);
 		msg->dn = ldb_dn_copy(msg, kd->dn);
 		W_ERROR_HAVE_NO_MEMORY(msg->dn);

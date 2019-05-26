@@ -23,7 +23,7 @@
 
 #include "includes.h"
 #include "system/filesys.h"
-#include "popt_common.h"
+#include "popt_common_cmdline.h"
 #include "rpc_client/cli_pipe.h"
 #include "client/client_proto.h"
 #include "client/clitar_proto.h"
@@ -52,6 +52,7 @@ static int port = 0;
 static char *service;
 static char *desthost;
 static bool grepable = false;
+static bool quiet = false;
 static char *cmdstr = NULL;
 const char *cmd_ptr = NULL;
 
@@ -1159,6 +1160,7 @@ static int do_get(const char *rname, const char *lname_in, bool reget)
 				start = lseek(handle, 0, SEEK_END);
 				if (start == -1) {
 					d_printf("Error seeking local file\n");
+					close(handle);
 					return 1;
 				}
 			}
@@ -1180,6 +1182,9 @@ static int do_get(const char *rname, const char *lname_in, bool reget)
 				      NULL);
 		if(!NT_STATUS_IS_OK(status)) {
 			d_printf("getattrib: %s\n", nt_errstr(status));
+			if (newhandle) {
+				close(handle);
+			}
 			return 1;
 		}
 	}
@@ -1192,6 +1197,9 @@ static int do_get(const char *rname, const char *lname_in, bool reget)
 	if (!NT_STATUS_IS_OK(status)) {
 		d_fprintf(stderr, "parallel_read returned %s\n",
 			  nt_errstr(status));
+		if (newhandle) {
+			close(handle);
+		}
 		cli_close(targetcli, fnum);
 		return 1;
 	}
@@ -3351,9 +3359,10 @@ static int cmd_posix_whoami(void)
 	}
 	d_printf("NUM_SIDS:%" PRIu32 "\n", num_sids);
 	for (i = 0; i < num_sids; i++) {
-		char *sid_str = dom_sid_string(ctx, &sids[i]);
-		d_printf("SIDS[%" PRIu32 "]:%s\n", i, sid_str);
-		TALLOC_FREE(sid_str);
+		struct dom_sid_buf buf;
+		d_printf("SIDS[%" PRIu32 "]:%s\n",
+			 i,
+			 dom_sid_str_buf(&sids[i], &buf));
 	}
 	return 0;
 }
@@ -3478,7 +3487,7 @@ static int cmd_readlink(void)
 	char *name= NULL;
 	char *buf = NULL;
 	char *targetname = NULL;
-	char linkname[PATH_MAX+1];
+	char *linkname = NULL;
 	struct cli_state *targetcli;
         NTSTATUS status;
 
@@ -3510,7 +3519,7 @@ static int cmd_readlink(void)
 		return 1;
 	}
 
-	status = cli_posix_readlink(targetcli, name, linkname, PATH_MAX+1);
+	status = cli_posix_readlink(targetcli, name, talloc_tos(), &linkname);
 	if (!NT_STATUS_IS_OK(status)) {
 		d_printf("%s readlink on file %s\n",
 			 nt_errstr(status), name);
@@ -3518,6 +3527,8 @@ static int cmd_readlink(void)
 	}
 
 	d_printf("%s -> %s\n", name, linkname);
+
+	TALLOC_FREE(linkname);
 
 	return 0;
 }
@@ -4483,7 +4494,7 @@ static int cmd_hardlink(void)
 		return 1;
 	}
 
-	status = cli_nt_hardlink(targetcli, targetname, dest);
+	status = cli_hardlink(targetcli, targetname, dest);
 	if (!NT_STATUS_IS_OK(status)) {
 		d_printf("%s doing an NT hard link of files\n",
 			 nt_errstr(status));
@@ -4893,6 +4904,7 @@ static bool browse_host_rpc(bool sort)
 static bool browse_host(bool sort)
 {
 	int ret;
+
 	if (!grepable) {
 	        d_printf("\n\tSharename       Type      Comment\n");
 	        d_printf("\t---------       ----      -------\n");
@@ -4902,7 +4914,12 @@ static bool browse_host(bool sort)
 		return true;
 	}
 
-	if((ret = cli_RNetShareEnum(cli, browse_fn, NULL)) == -1) {
+	if (lp_client_min_protocol() > PROTOCOL_NT1) {
+		return false;
+	}
+
+	ret = cli_RNetShareEnum(cli, browse_fn, NULL);
+	if (ret == -1) {
 		NTSTATUS status = cli_nt_error(cli);
 		d_printf("Error returning browse list: %s\n",
 			 nt_errstr(status));
@@ -6066,7 +6083,9 @@ static int process_stdin(void)
 {
 	int rc = 0;
 
-	d_printf("Try \"help\" to get a list of possible commands.\n");
+	if (!quiet) {
+		d_printf("Try \"help\" to get a list of possible commands.\n");
+	}
 
 	while (!finished) {
 		TALLOC_CTX *frame = talloc_stackframe();
@@ -6217,7 +6236,7 @@ static int do_host_query(const char *query_host)
 				     smb_encrypt, max_proto,
 				     NBT_SMB_PORT, name_type, &cli);
 		if (!NT_STATUS_IS_OK(status)) {
-			d_printf("Failed to connect with SMB1 "
+			d_printf("Unable to connect with SMB1 "
 				 "-- no workgroup available\n");
 			return 0;
 		}
@@ -6323,20 +6342,136 @@ int main(int argc,char *argv[])
 	struct poptOption long_options[] = {
 		POPT_AUTOHELP
 
-		{ "name-resolve", 'R', POPT_ARG_STRING, &new_name_resolve_order, 'R', "Use these name resolution services only", "NAME-RESOLVE-ORDER" },
-		{ "message", 'M', POPT_ARG_STRING, NULL, 'M', "Send message", "HOST" },
-		{ "ip-address", 'I', POPT_ARG_STRING, NULL, 'I', "Use this IP to connect to", "IP" },
-		{ "stderr", 'E', POPT_ARG_NONE, NULL, 'E', "Write messages to stderr instead of stdout" },
-		{ "list", 'L', POPT_ARG_STRING, NULL, 'L', "Get a list of shares available on a host", "HOST" },
-		{ "max-protocol", 'm', POPT_ARG_STRING, NULL, 'm', "Set the max protocol level", "LEVEL" },
-		{ "tar", 'T', POPT_ARG_STRING, NULL, 'T', "Command line tar", "<c|x>IXFqgbNan" },
-		{ "directory", 'D', POPT_ARG_STRING, NULL, 'D', "Start from directory", "DIR" },
-		{ "command", 'c', POPT_ARG_STRING, &cmdstr, 'c', "Execute semicolon separated commands" },
-		{ "send-buffer", 'b', POPT_ARG_INT, &io_bufsize, 'b', "Changes the transmit/send buffer", "BYTES" },
-		{ "timeout", 't', POPT_ARG_INT, &io_timeout, 'b', "Changes the per-operation timeout", "SECONDS" },
-		{ "port", 'p', POPT_ARG_INT, &port, 'p', "Port to connect to", "PORT" },
-		{ "grepable", 'g', POPT_ARG_NONE, NULL, 'g', "Produce grepable output" },
-                { "browse", 'B', POPT_ARG_NONE, NULL, 'B', "Browse SMB servers using DNS" },
+		{
+			.longName   = "name-resolve",
+			.shortName  = 'R',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = &new_name_resolve_order,
+			.val        = 'R',
+			.descrip    = "Use these name resolution services only",
+			.argDescrip = "NAME-RESOLVE-ORDER",
+		},
+		{
+			.longName   = "message",
+			.shortName  = 'M',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = NULL,
+			.val        = 'M',
+			.descrip    = "Send message",
+			.argDescrip = "HOST",
+		},
+		{
+			.longName   = "ip-address",
+			.shortName  = 'I',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = NULL,
+			.val        = 'I',
+			.descrip    = "Use this IP to connect to",
+			.argDescrip = "IP",
+		},
+		{
+			.longName   = "stderr",
+			.shortName  = 'E',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'E',
+			.descrip    = "Write messages to stderr instead of stdout",
+		},
+		{
+			.longName   = "list",
+			.shortName  = 'L',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = NULL,
+			.val        = 'L',
+			.descrip    = "Get a list of shares available on a host",
+			.argDescrip = "HOST",
+		},
+		{
+			.longName   = "max-protocol",
+			.shortName  = 'm',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = NULL,
+			.val        = 'm',
+			.descrip    = "Set the max protocol level",
+			.argDescrip = "LEVEL",
+		},
+		{
+			.longName   = "tar",
+			.shortName  = 'T',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = NULL,
+			.val        = 'T',
+			.descrip    = "Command line tar",
+			.argDescrip = "<c|x>IXFqgbNan",
+		},
+		{
+			.longName   = "directory",
+			.shortName  = 'D',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = NULL,
+			.val        = 'D',
+			.descrip    = "Start from directory",
+			.argDescrip = "DIR",
+		},
+		{
+			.longName   = "command",
+			.shortName  = 'c',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = &cmdstr,
+			.val        = 'c',
+			.descrip    = "Execute semicolon separated commands",
+		},
+		{
+			.longName   = "send-buffer",
+			.shortName  = 'b',
+			.argInfo    = POPT_ARG_INT,
+			.arg        = &io_bufsize,
+			.val        = 'b',
+			.descrip    = "Changes the transmit/send buffer",
+			.argDescrip = "BYTES",
+		},
+		{
+			.longName   = "timeout",
+			.shortName  = 't',
+			.argInfo    = POPT_ARG_INT,
+			.arg        = &io_timeout,
+			.val        = 'b',
+			.descrip    = "Changes the per-operation timeout",
+			.argDescrip = "SECONDS",
+		},
+		{
+			.longName   = "port",
+			.shortName  = 'p',
+			.argInfo    = POPT_ARG_INT,
+			.arg        = &port,
+			.val        = 'p',
+			.descrip    = "Port to connect to",
+			.argDescrip = "PORT",
+		},
+		{
+			.longName   = "grepable",
+			.shortName  = 'g',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'g',
+			.descrip    = "Produce grepable output",
+		},
+		{
+			.longName   = "quiet",
+			.shortName  = 'q',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'q',
+			.descrip    = "Suppress help message",
+		},
+		{
+			.longName   = "browse",
+			.shortName  = 'B',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'B',
+			.descrip    = "Browse SMB servers using DNS",
+		},
 		POPT_COMMON_SAMBA
 		POPT_COMMON_CONNECTION
 		POPT_COMMON_CREDENTIALS
@@ -6457,6 +6592,9 @@ int main(int argc,char *argv[])
 			break;
 		case 'g':
 			grepable=true;
+			break;
+		case 'q':
+			quiet=true;
 			break;
 		case 'e':
 			smb_encrypt=true;

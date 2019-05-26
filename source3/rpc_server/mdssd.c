@@ -37,6 +37,7 @@
 
 #include "librpc/gen_ndr/srv_mdssvc.h"
 #include "rpc_server/mdssvc/srv_mdssvc_nt.h"
+#include "rpc_server/mdssd.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_RPC_SRV
@@ -200,7 +201,7 @@ static bool mdssd_child_init(struct tevent_context *ev_ctx,
 			     struct pf_worker_data *pf)
 {
 	NTSTATUS status;
-	struct messaging_context *msg_ctx = server_messaging_context();
+	struct messaging_context *msg_ctx = global_messaging_context();
 	bool ok;
 
 	status = reinit_after_fork(msg_ctx, ev_ctx,

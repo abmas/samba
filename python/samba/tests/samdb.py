@@ -19,7 +19,6 @@
 
 import logging
 import os
-import uuid
 import shutil
 
 from samba.auth import system_session
@@ -43,7 +42,6 @@ class SamDBTestCase(TestCaseInTempDir):
         realm = "dsdb.samba.example.com"
         host_name = "test"
         server_role = "active directory domain controller"
-        dns_backend = "SAMBA_INTERNAL"
         self.result = provision(logger,
                                 self.session, targetdir=self.tempdir,
                                 realm=realm, domain=domain,
@@ -59,7 +57,7 @@ class SamDBTestCase(TestCaseInTempDir):
         for f in ['names.tdb']:
             os.remove(os.path.join(self.tempdir, f))
 
-        for d in ['etc', 'msg.lock', 'private', 'state']:
+        for d in ['etc', 'msg.lock', 'private', 'state', 'bind-dns']:
             shutil.rmtree(os.path.join(self.tempdir, d))
 
         super(SamDBTestCase, self).tearDown()

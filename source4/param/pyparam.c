@@ -347,7 +347,7 @@ static PyObject *py_lp_dump_a_parameter(PyObject *self, PyObject *args)
 
 static PyObject *py_lp_log_level(PyObject *self, PyObject *unused)
 {
-	int ret = DEBUGLEVEL_CLASS[DBGC_CLASS];
+	int ret = debuglevel_get();
 	return PyInt_FromLong(ret);
 }
 
@@ -370,6 +370,30 @@ static PyObject *py_cache_path(PyObject *self, PyObject *args)
 	}
 
 	path = lpcfg_cache_path(NULL, lp_ctx, name);
+	if (!path) {
+		PyErr_Format(PyExc_RuntimeError,
+			     "Unable to access cache %s", name);
+		return NULL;
+	}
+	ret = PyStr_FromString(path);
+	talloc_free(path);
+
+	return ret;
+}
+
+static PyObject *py_state_path(PyObject *self, PyObject *args)
+{
+	struct loadparm_context *lp_ctx =
+		PyLoadparmContext_AsLoadparmContext(self);
+	char *name = NULL;
+	char *path = NULL;
+	PyObject *ret = NULL;
+
+	if (!PyArg_ParseTuple(args, "s", &name)) {
+		return NULL;
+	}
+
+	path = lpcfg_state_path(NULL, lp_ctx, name);
 	if (!path) {
 		PyErr_Format(PyExc_RuntimeError,
 			     "Unable to access cache %s", name);
@@ -419,6 +443,9 @@ static PyMethodDef py_lp_ctx_methods[] = {
 	{ "cache_path", py_cache_path, METH_VARARGS,
 		"S.cache_path(name) -> string\n"
 		"Returns a path in the Samba cache directory." },
+	{ "state_path", py_state_path, METH_VARARGS,
+		"S.state_path(name) -> string\n"
+		"Returns a path in the Samba state directory." },
 	{ NULL }
 };
 
@@ -437,15 +464,66 @@ static PyObject *py_lp_ctx_config_file(PyObject *self, void *closure)
 }
 
 static PyGetSetDef py_lp_ctx_getset[] = {
-	{ discard_const_p(char, "default_service"), (getter)py_lp_ctx_default_service, NULL, NULL },
-	{ discard_const_p(char, "configfile"), (getter)py_lp_ctx_config_file, NULL,
-	  discard_const_p(char, "Name of last config file that was loaded.") },
-	{ NULL }
+	{
+		.name = discard_const_p(char, "default_service"),
+		.get  = (getter)py_lp_ctx_default_service,
+	},
+	{
+		.name = discard_const_p(char, "configfile"),
+		.get  = (getter)py_lp_ctx_config_file,
+		.doc  = discard_const_p(char, "Name of last config file that was loaded.")
+	},
+	{ .name = NULL }
 };
 
 static PyObject *py_lp_ctx_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
 {
-	return pytalloc_reference(type, loadparm_init_global(false));
+	const char *kwnames[] = {"filename_for_non_global_lp", NULL};
+	PyObject *lp_ctx;
+	const char *non_global_conf = NULL;
+	struct loadparm_context *ctx;
+
+	if (!PyArg_ParseTupleAndKeywords(args,
+					 kwargs,
+					 "|s",
+					 discard_const_p(char *,
+							 kwnames),
+					 &non_global_conf)) {
+		return NULL;
+	}
+
+	/*
+	 * by default, any LoadParm python objects map to a single global
+	 * underlying object. The filename_for_non_global_lp arg overrides this
+	 * default behaviour and creates a separate underlying LoadParm object.
+	 */
+	if (non_global_conf != NULL) {
+		bool ok;
+		ctx = loadparm_init(NULL);
+		if (ctx == NULL) {
+			PyErr_NoMemory();
+			return NULL;
+		}
+
+		lp_ctx = pytalloc_reference(type, ctx);
+		if (lp_ctx == NULL) {
+			PyErr_NoMemory();
+			return NULL;
+		}
+
+		ok = lpcfg_load_no_global(
+			PyLoadparmContext_AsLoadparmContext(lp_ctx),
+			non_global_conf);
+		if (!ok) {
+			PyErr_Format(PyExc_ValueError,
+				     "Could not load non-global conf %s",
+				     non_global_conf);
+			return NULL;
+		}
+		return lp_ctx;
+	} else{
+		return pytalloc_reference(type, loadparm_init_global(false));
+	}
 }
 
 static Py_ssize_t py_lp_ctx_len(PyObject *self)
@@ -536,33 +614,33 @@ PyTypeObject PyLoadparmService = {
 	.tp_flags = Py_TPFLAGS_DEFAULT,
 };
 
-static PyObject *py_default_path(PyObject *self)
+static PyObject *py_default_path(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
 	return PyStr_FromString(lp_default_path());
 }
 
-static PyObject *py_setup_dir(PyObject *self)
+static PyObject *py_setup_dir(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
 	return PyStr_FromString(dyn_SETUPDIR);
 }
 
-static PyObject *py_modules_dir(PyObject *self)
+static PyObject *py_modules_dir(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
 	return PyStr_FromString(dyn_MODULESDIR);
 }
 
-static PyObject *py_bin_dir(PyObject *self)
+static PyObject *py_bin_dir(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
 	return PyStr_FromString(dyn_BINDIR);
 }
 
-static PyObject *py_sbin_dir(PyObject *self)
+static PyObject *py_sbin_dir(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
 	return PyStr_FromString(dyn_SBINDIR);
 }
 
 static PyMethodDef pyparam_methods[] = {
-	{ "default_path", (PyCFunction)py_default_path, METH_NOARGS, 
+	{ "default_path", (PyCFunction)py_default_path, METH_NOARGS,
 		"Returns the default smb.conf path." },
 	{ "setup_dir", (PyCFunction)py_setup_dir, METH_NOARGS,
 		"Returns the compiled in location of provision tempates." },

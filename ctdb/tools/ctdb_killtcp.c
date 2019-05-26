@@ -17,11 +17,11 @@
    along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <talloc.h>
-#include <tevent.h>
-
 #include "replace.h"
 #include "system/network.h"
+
+#include <talloc.h>
+#include <tevent.h>
 
 #include "lib/util/debug.h"
 #include "lib/util/tevent_unix.h"
@@ -30,7 +30,7 @@
 #include "protocol/protocol_util.h"
 
 #include "common/db_hash.h"
-#include "common/system.h"
+#include "common/system_socket.h"
 #include "common/logging.h"
 
 
@@ -330,16 +330,17 @@ int main(int argc, char **argv)
 	struct tevent_req *req;
 	int debug_level;
 	bool status;
+	bool ok;
 	int ret;
 
 	/* Set the debug level */
 	t = getenv("CTDB_DEBUGLEVEL");
 	if (t != NULL) {
-		if (debug_level_parse(t, &debug_level)) {
-			DEBUGLEVEL = debug_level;
-		} else {
-			DEBUGLEVEL = DEBUG_ERR;
+		ok = debug_level_parse(t, &debug_level);
+		if (!ok) {
+			debug_level = DEBUG_ERR;
 		}
+		debuglevel_set(debug_level);
 	}
 
 	if (argc != 2 && argc != 4) {
@@ -372,7 +373,7 @@ int main(int argc, char **argv)
 			goto fail;
 		}
 	} else {
-		ret = ctdb_connection_list_read(mem_ctx, true, &conn_list);
+		ret = ctdb_connection_list_read(mem_ctx, 0, true, &conn_list);
 		if (ret != 0) {
 			D_ERR("Unable to parse connections (%s)\n",
 			      strerror(ret));

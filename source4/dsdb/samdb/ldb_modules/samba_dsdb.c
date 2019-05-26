@@ -123,6 +123,10 @@ static int prepare_modules_line(struct ldb_context *ldb,
 	}
 
 	mod_list_string = str_list_join(tmp_ctx, backend_full_list, ',');
+
+	/* str_list_append allocates on NULL */
+	talloc_free(backend_full_list);
+
 	if (!mod_list_string) {
 		talloc_free(tmp_ctx);
 		return ldb_oom(ldb);
@@ -283,7 +287,7 @@ static int samba_dsdb_init(struct ldb_module *module)
 					     "schema_load",
 					     "lazy_commit",
 					     "dirsync",
-					     "paged_results",
+					     "dsdb_paged_results",
 					     "vlv",
 					     "ranged_results",
 					     "anr",
@@ -541,11 +545,6 @@ static int samba_dsdb_init(struct ldb_module *module)
 		} else {
 			return ldb_error(ldb, LDB_ERR_OPERATIONS_ERROR, "invalid backend type");
 		}
-		ret = ldb_set_opaque(ldb, "readOnlySchema", (void*)1);
-		if (ret != LDB_SUCCESS) {
-			ldb_set_errstring(ldb, "Failed to set readOnlySchema opaque");
-		}
-
 		cred = ldb_get_opaque(ldb, "credentials");
 		if (!cred || !cli_credentials_authentication_requested(cred)) {
 			ret = set_ldap_credentials(ldb, use_sasl_external);
@@ -605,7 +604,8 @@ static int samba_dsdb_init(struct ldb_module *module)
 
 	talloc_steal(ldb, partition_msg);
 
-	/* Now prepare the module chain.  Oddly, we must give it to ldb_load_modules_list in REVERSE */
+	/* Now prepare the module chain. Oddly, we must give it to
+	 * ldb_module_load_list in REVERSE */
 	for (len = 0; final_module_list[len]; len++) { /* noop */};
 
 	reverse_module_list = talloc_array(tmp_ctx, const char *, len+1);
@@ -626,7 +626,8 @@ static int samba_dsdb_init(struct ldb_module *module)
 	CHECK_LDB_RET(ret);
 
 	talloc_free(tmp_ctx);
-	/* Set this as the 'next' module, so that we effectivly append it to module chain */
+	/* Set this as the 'next' module, so that we effectively append it to
+	 * module chain */
 	ldb_module_set_next(module, module_chain);
 
 	ret = ldb_next_read_lock(module);

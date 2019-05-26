@@ -13,6 +13,7 @@
  */
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <setjmp.h>
 #include <cmocka.h>
 
@@ -3806,7 +3807,7 @@ static void test_ldb_unique_index_duplicate_logging(void **state)
 	p = strstr(
 		debug_string,
 		"unique index violation on cn "
-		"in dc=test02, conficts with dc=test01 in "
+		"in dc=test02, conflicts with dc=test01 in "
 		"@INDEX:CN:test_unique_index");
 	assert_non_null(p);
 	TALLOC_FREE(debug_string);
@@ -3973,7 +3974,7 @@ static void test_ldb_unique_index_duplicate_with_guid(void **state)
 	assert_int_equal(ret, LDB_SUCCESS);
 
 	msg02 = ldb_msg_new(tmp_ctx);
-	assert_non_null(msg01);
+	assert_non_null(msg02);
 
 	msg02->dn = ldb_dn_new_fmt(msg02, test_ctx->ldb, "dc=test02");
 	assert_non_null(msg02->dn);
@@ -3990,11 +3991,12 @@ static void test_ldb_unique_index_duplicate_with_guid(void **state)
 	assert_non_null(debug_string);
 	p = strstr(
 		debug_string,
-		"unique index violation on cn in dc=test02, conficts with "
+		"unique index violation on cn in dc=test02, conflicts with "
 		"objectUUID 0123456789abcdef in @INDEX:CN:test_unique_index");
 	assert_non_null(p);
 	TALLOC_FREE(debug_string);
 	talloc_free(tmp_ctx);
+	ldb_set_debug(test_ctx->ldb, NULL, NULL);
 }
 
 static void test_ldb_guid_index_duplicate_dn_logging(void **state)
@@ -4043,6 +4045,7 @@ static void test_ldb_guid_index_duplicate_dn_logging(void **state)
 
 	assert_null(debug_string);
 	talloc_free(tmp_ctx);
+	ldb_set_debug(test_ctx->ldb, NULL, NULL);
 }
 
 static void test_ldb_talloc_destructor_transaction_cleanup(void **state)

@@ -109,24 +109,61 @@ static uint32_t access_check_max_allowed(const struct security_descriptor *sd,
 					const struct security_token *token)
 {
 	uint32_t denied = 0, granted = 0;
+	bool am_owner = false;
+	bool have_owner_rights_ace = false;
 	unsigned i;
 
-	if (security_token_has_sid(token, sd->owner_sid)) {
-		granted |= SEC_STD_WRITE_DAC | SEC_STD_READ_CONTROL;
+	if (sd->dacl == NULL) {
+		if (security_token_has_sid(token, sd->owner_sid)) {
+			granted |= SEC_STD_WRITE_DAC | SEC_STD_READ_CONTROL;
+		}
+		return granted;
 	}
 
-	if (sd->dacl == NULL) {
-		return granted & ~denied;
+	if (security_token_has_sid(token, sd->owner_sid)) {
+		/*
+		 * Check for explicit owner rights: if there are none, we remove
+		 * the default owner right SEC_STD_WRITE_DAC|SEC_STD_READ_CONTROL
+		 * from remaining_access. Otherwise we just process the
+		 * explicitly granted rights when processing the ACEs.
+		 */
+		am_owner = true;
+
+		for (i=0; i < sd->dacl->num_aces; i++) {
+			struct security_ace *ace = &sd->dacl->aces[i];
+
+			if (ace->flags & SEC_ACE_FLAG_INHERIT_ONLY) {
+				continue;
+			}
+
+			have_owner_rights_ace = dom_sid_equal(
+				&ace->trustee, &global_sid_Owner_Rights);
+			if (have_owner_rights_ace) {
+				break;
+			}
+		}
+	}
+
+	if (am_owner && !have_owner_rights_ace) {
+		granted |= SEC_STD_WRITE_DAC|SEC_STD_READ_CONTROL;
 	}
 
 	for (i = 0;i<sd->dacl->num_aces; i++) {
 		struct security_ace *ace = &sd->dacl->aces[i];
+		bool is_owner_rights_ace = false;
 
 		if (ace->flags & SEC_ACE_FLAG_INHERIT_ONLY) {
 			continue;
 		}
 
-		if (!security_token_has_sid(token, &ace->trustee)) {
+		if (am_owner) {
+			is_owner_rights_ace = dom_sid_equal(
+				&ace->trustee, &global_sid_Owner_Rights);
+		}
+
+		if (!is_owner_rights_ace &&
+		    !security_token_has_sid(token, &ace->trustee))
+		{
 			continue;
 		}
 
@@ -136,7 +173,7 @@ static uint32_t access_check_max_allowed(const struct security_descriptor *sd,
 			break;
 		case SEC_ACE_TYPE_ACCESS_DENIED:
 		case SEC_ACE_TYPE_ACCESS_DENIED_OBJECT:
-			denied |= ace->access_mask;
+			denied |= ~granted & ace->access_mask;
 			break;
 		default:	/* Other ACE types not handled/supported */
 			break;
@@ -159,16 +196,8 @@ NTSTATUS se_access_check(const struct security_descriptor *sd,
 	uint32_t i;
 	uint32_t bits_remaining;
 	uint32_t explicitly_denied_bits = 0;
-	/*
-	 * Up until Windows Server 2008, owner always had these rights. Now
-	 * we have to use Owner Rights perms if they are on the file.
-	 *
-	 * In addition we have to accumulate these bits and apply them
-	 * correctly. See bug #8795
-	 */
-	uint32_t owner_rights_allowed = 0;
-	uint32_t owner_rights_denied = 0;
-	bool owner_rights_default = true;
+	bool am_owner = false;
+	bool have_owner_rights_ace = false;
 
 	*access_granted = access_desired;
 	bits_remaining = access_desired;
@@ -198,35 +227,50 @@ NTSTATUS se_access_check(const struct security_descriptor *sd,
 		goto done;
 	}
 
+	if (security_token_has_sid(token, sd->owner_sid)) {
+		/*
+		 * Check for explicit owner rights: if there are none, we remove
+		 * the default owner right SEC_STD_WRITE_DAC|SEC_STD_READ_CONTROL
+		 * from remaining_access. Otherwise we just process the
+		 * explicitly granted rights when processing the ACEs.
+		 */
+		am_owner = true;
+
+		for (i=0; i < sd->dacl->num_aces; i++) {
+			struct security_ace *ace = &sd->dacl->aces[i];
+
+			if (ace->flags & SEC_ACE_FLAG_INHERIT_ONLY) {
+				continue;
+			}
+
+			have_owner_rights_ace = dom_sid_equal(
+				&ace->trustee, &global_sid_Owner_Rights);
+			if (have_owner_rights_ace) {
+				break;
+			}
+		}
+	}
+	if (am_owner && !have_owner_rights_ace) {
+		bits_remaining &= ~(SEC_STD_WRITE_DAC | SEC_STD_READ_CONTROL);
+	}
+
 	/* check each ace in turn. */
 	for (i=0; bits_remaining && i < sd->dacl->num_aces; i++) {
 		struct security_ace *ace = &sd->dacl->aces[i];
+		bool is_owner_rights_ace = false;
 
 		if (ace->flags & SEC_ACE_FLAG_INHERIT_ONLY) {
 			continue;
 		}
 
-		/*
-		 * We need the Owner Rights permissions to ensure we
-		 * give or deny the correct permissions to the owner. Replace
-		 * owner_rights with the perms here if it is present.
-		 *
-		 * We don't care if we are not the owner because that is taken
-		 * care of below when we check if our token has the owner SID.
-		 *
-		 */
-		if (dom_sid_equal(&ace->trustee, &global_sid_Owner_Rights)) {
-			if (ace->type == SEC_ACE_TYPE_ACCESS_ALLOWED) {
-				owner_rights_allowed |= ace->access_mask;
-				owner_rights_default = false;
-			} else if (ace->type == SEC_ACE_TYPE_ACCESS_DENIED) {
-				owner_rights_denied |= (bits_remaining & ace->access_mask);
-				owner_rights_default = false;
-			}
-			continue;
+		if (am_owner) {
+			is_owner_rights_ace = dom_sid_equal(
+				&ace->trustee, &global_sid_Owner_Rights);
 		}
 
-		if (!security_token_has_sid(token, &ace->trustee)) {
+		if (!is_owner_rights_ace &&
+		    !security_token_has_sid(token, &ace->trustee))
+		{
 			continue;
 		}
 
@@ -245,21 +289,6 @@ NTSTATUS se_access_check(const struct security_descriptor *sd,
 
 	/* Explicitly denied bits always override */
 	bits_remaining |= explicitly_denied_bits;
-
-	/* The owner always gets owner rights as defined above. */
-	if (security_token_has_sid(token, sd->owner_sid)) {
-		if (owner_rights_default) {
-			/*
-			 * Just remove them, no need to check if they are
-			 * there.
-			 */
-			bits_remaining &= ~(SEC_STD_WRITE_DAC |
-						SEC_STD_READ_CONTROL);
-		} else {
-			bits_remaining &= ~owner_rights_allowed;
-			bits_remaining |= owner_rights_denied;
-		}
-	}
 
 	/*
 	 * We check privileges here because they override even DENY entries.
@@ -375,6 +404,81 @@ static const struct GUID *get_ace_object_type(struct security_ace *ace)
 }
 
 /**
+ * Evaluates access rights specified in a object-specific ACE for an AD object.
+ * This logic corresponds to MS-ADTS 5.1.3.3.3 Checking Object-Specific Access.
+ * @param[in] ace - the ACE being processed
+ * @param[in/out] tree - remaining_access gets updated for the tree
+ * @param[out] grant_access - set to true if the ACE grants sufficient access
+ *                            rights to the object/attribute
+ * @returns NT_STATUS_OK, unless access was denied
+ */
+static NTSTATUS check_object_specific_access(struct security_ace *ace,
+					     struct object_tree *tree,
+					     bool *grant_access)
+{
+	struct object_tree *node = NULL;
+	const struct GUID *type = NULL;
+
+	*grant_access = false;
+
+	/* if no tree was supplied, we can't do object-specific access checks */
+	if (!tree) {
+		return NT_STATUS_OK;
+	}
+
+	/* Get the ObjectType GUID this ACE applies to */
+	type = get_ace_object_type(ace);
+
+	/*
+	 * If the ACE doesn't have a type, then apply it to the whole tree, i.e.
+	 * treat 'OA' ACEs as 'A' and 'OD' as 'D'
+	 */
+	if (!type) {
+		node = tree;
+	} else {
+
+		/* skip it if the ACE's ObjectType GUID is not in the tree */
+		node = get_object_tree_by_GUID(tree, type);
+		if (!node) {
+			return NT_STATUS_OK;
+		}
+	}
+
+	if (ace->type == SEC_ACE_TYPE_ACCESS_ALLOWED_OBJECT) {
+
+		/* apply the access rights to this node, and any children */
+		object_tree_modify_access(node, ace->access_mask);
+
+		/*
+		 * Currently all nodes in the tree request the same access mask,
+		 * so we can use any node to check if processing this ACE now
+		 * means the requested access has been granted
+		 */
+		if (node->remaining_access == 0) {
+			*grant_access = true;
+			return NT_STATUS_OK;
+		}
+
+		/*
+		 * As per 5.1.3.3.4 Checking Control Access Right-Based Access,
+		 * if the CONTROL_ACCESS right is present, then we can grant
+		 * access and stop any further access checks
+		 */
+		if (ace->access_mask & SEC_ADS_CONTROL_ACCESS) {
+			*grant_access = true;
+			return NT_STATUS_OK;
+		}
+	} else {
+
+		/* this ACE denies access to the requested object/attribute */
+		if (node->remaining_access & ace->access_mask){
+			return NT_STATUS_ACCESS_DENIED;
+		}
+	}
+	return NT_STATUS_OK;
+}
+
+/**
  * @brief Perform directoryservice (DS) related access checks for a given user
  *
  * Perform DS access checks for the user represented by its security_token, on
@@ -405,8 +509,6 @@ NTSTATUS sec_access_check_ds(const struct security_descriptor *sd,
 {
 	uint32_t i;
 	uint32_t bits_remaining;
-	struct object_tree *node;
-	const struct GUID *type;
 	struct dom_sid self_sid;
 
 	dom_sid_parse(SID_NT_SELF, &self_sid);
@@ -456,6 +558,8 @@ NTSTATUS sec_access_check_ds(const struct security_descriptor *sd,
 	for (i=0; bits_remaining && i < sd->dacl->num_aces; i++) {
 		struct dom_sid *trustee;
 		struct security_ace *ace = &sd->dacl->aces[i];
+		NTSTATUS status;
+		bool grant_access = false;
 
 		if (ace->flags & SEC_ACE_FLAG_INHERIT_ONLY) {
 			continue;
@@ -486,34 +590,15 @@ NTSTATUS sec_access_check_ds(const struct security_descriptor *sd,
 			break;
 		case SEC_ACE_TYPE_ACCESS_DENIED_OBJECT:
 		case SEC_ACE_TYPE_ACCESS_ALLOWED_OBJECT:
-			/*
-			 * check only in case we have provided a tree,
-			 * the ACE has an object type and that type
-			 * is in the tree
-			 */
-			type = get_ace_object_type(ace);
+			status = check_object_specific_access(ace, tree,
+							      &grant_access);
 
-			if (!tree) {
-				continue;
+			if (!NT_STATUS_IS_OK(status)) {
+				return status;
 			}
 
-			if (!type) {
-				node = tree;
-			} else {
-				if (!(node = get_object_tree_by_GUID(tree, type))) {
-					continue;
-				}
-			}
-
-			if (ace->type == SEC_ACE_TYPE_ACCESS_ALLOWED_OBJECT) {
-				object_tree_modify_access(node, ace->access_mask);
-				if (node->remaining_access == 0) {
-					return NT_STATUS_OK;
-				}
-			} else {
-				if (node->remaining_access & ace->access_mask){
-					return NT_STATUS_ACCESS_DENIED;
-				}
+			if (grant_access) {
+				return NT_STATUS_OK;
 			}
 			break;
 		default:	/* Other ACE types not handled/supported */

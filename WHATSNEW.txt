@@ -1,12 +1,12 @@
 Release Announcements
 =====================
 
-This is the first preview release of Samba 4.9.  This is *not*
+This is the first preview release of Samba 4.11.  This is *not*
 intended for production environments and is designed for testing
 purposes only.  Please report any defects via the Samba bug reporting
 system at https://bugzilla.samba.org/.
 
-Samba 4.9 will be the next version of the Samba suite.
+Samba 4.11 will be the next version of the Samba suite.
 
 
 UPGRADING
@@ -16,81 +16,66 @@ UPGRADING
 NEW FEATURES/CHANGES
 ====================
 
+Default samba process model
+---------------------------
 
-net ads setspn
----------------
+The default for the --model argument passed to the samba executable has changed
+from 'standard' to 'prefork'. This means a difference in the number of samba
+child processes that are created to handle client connections. The previous
+default would create a separate process for every LDAP or NETLOGON client
+connection. For a network with a lot of persistent client connections, this
+could result in significant memory overhead.  Now, with the new default of
+'prefork', the LDAP, NETLOGON, and KDC services will create a fixed number of
+worker processes at startup and share the client connections amongst these
+workers. The number of worker processes can be configured by the 'prefork
+children' setting in the smb.conf (the default is 4).
 
-There is a new 'net ads setspn' sub command for managing Windows SPN(s)
-on the AD. This command aims to give the basic functionaility that is
-provided on windows by 'setspn.exe' e.g. ability to add, delete and list
-Windows SPN(s) stored in a Windows AD Computer object.
+Authentication Logging.
+-----------------------
 
-The format of the command is:
+Winbind now logs PAM_AUTH and NTLM_AUTH events, a new attribute "logonId" has
+been added to the Authentication JSON log messages.  This contains a random
+logon id that is generated for each PAM_AUTH and NTLM_AUTH request and is passed
+to SamLogon, linking the windbind and SamLogon requests.
 
-net ads setspn list [machine]
-net ads setspn [add | delete ] SPN [machine]
+The serviceDescription of the messages is set to "winbind", the authDescription
+is set to one of:
+   "PASSDB, <command>, <pid>"
+   "PAM_AUTH, <command>, <pid>"
+   "NTLM_AUTH, <command>, <pid>"
+where:
+   <command> is the name of the command makinmg the winbind request i.e. wbinfo
+   <pid>     is the process id of the requesting process.
 
-'machine' is the name of the computer account on the AD that is to be managed.
-If 'machine' is not specified the name of the 'client' running the command
-is used instead.
+The version of the JSON Authentication messages has been changed to 1.2 from 1.1
 
-The format of a Windows SPN is
-  'serviceclass/host:port/servicename' (servicename and port are optional)
 
-serviceclass/host is generally sufficient to specify a host based service.
-
-net ads keytab changes
-----------------------
-net ads keytab add no longer attempts to convert the passed serviceclass
-(e.g. nfs, html etc.) into a Windows SPN which is added to the Windows AD
-computer object. By default just the keytab file is modified.
-
-A new keytab subcommand 'add_update_ads' has been added to preserve the
-legacy behaviour. However the new 'net ads setspn add' subcommand should
-really be used instead.
-
-net ads keytab create no longer tries to generate SPN(s) from existing
-entries in a keytab file. If it is required to add Windows SPN(s) then
-'net ads setspn add' should be used instead.
 
 REMOVED FEATURES
 ================
 
+Web server
+----------
+
+As a leftover from work related to the Samba Web Administration Tool (SWAT),
+Samba still supported a Python WSGI web server (which could still be turned on
+from the 'server services' smb.conf parameter). This service was unused and has
+now been removed from Samba.
 
 
 smb.conf changes
 ================
 
-As the most popular Samba install platforms (Linux and FreeBSD) both
-support extended attributes by default, the parameters "map readonly",
-"store dos attributes" and "ea support" have had their defaults changed
-to allow better Windows fileserver compatibility in a default install.
+  Parameter Name                     Description                Default
+  --------------                     -----------                -------
 
-  Parameter Name                     Description             Default
-  --------------                     -----------             -------
-  map readonly                       Default changed              no
-  store dos attributes               Default changed             yes
-  ea support                         Default changed             yes
+  web port                           Removed
 
-VFS interface changes
-=====================
-
-The VFS ABI interface version has changed to 39. Function changes
-are:
-
-SMB_VFS_FSYNC: Removed: Only async versions are used.
-SMB_VFS_READ: Removed: Only PREAD or async versions are used.
-SMB_VFS_WRITE: Removed: Only PWRITE or async versions are used.
-SMB_VFS_CHMOD_ACL: Removed: Only CHMOD is used.
-SMB_VFS_FCHMOD_ACL: Removed: Only FCHMOD is used.
-
-Any external VFS modules will need to be updated to match these
-changes in order to work with 4.9.x.
 
 KNOWN ISSUES
 ============
 
-https://wiki.samba.org/index.php/Release_Planning_for_Samba_4.9#Release_blocking_bugs
+https://wiki.samba.org/index.php/Release_Planning_for_Samba_4.11#Release_blocking_bugs
 
 
 #######################################

@@ -20,12 +20,14 @@
 #include <Python.h>
 #include "python/py3compat.h"
 #include "includes.h"
+#include "python/modules.h"
 #include "libcli/util/pyerrors.h"
 #include "param/param.h"
 #include "pyauth.h"
 #include "pyldb.h"
 #include "auth/system_session_proto.h"
 #include "auth/auth.h"
+#include "auth/auth_util.h"
 #include "param/pyparam.h"
 #include "libcli/security/security.h"
 #include "auth/credentials/pycredentials.h"
@@ -38,6 +40,60 @@ static PyTypeObject PyAuthContext;
 static PyObject *PyAuthSession_FromSession(struct auth_session_info *session)
 {
 	return py_return_ndr_struct("samba.dcerpc.auth", "session_info", session, session);
+}
+
+static PyObject *py_copy_session_info(PyObject *module,
+				      PyObject *args,
+				      PyObject *kwargs)
+{
+	PyObject *py_session = Py_None;
+	PyObject *result = Py_None;
+	struct auth_session_info *session = NULL;
+	struct auth_session_info *session_duplicate = NULL;
+	TALLOC_CTX *frame;
+	int ret = 1;
+
+	const char * const kwnames[] = { "session_info", NULL };
+
+	ret = PyArg_ParseTupleAndKeywords(args,
+					  kwargs,
+					  "O",
+					  discard_const_p(char *, kwnames),
+					  &py_session);
+	if (!ret) {
+		return NULL;
+	}
+
+	ret = py_check_dcerpc_type(py_session,
+				   "samba.dcerpc.auth",
+				   "session_info");
+	if (!ret) {
+		return NULL;
+	}
+	session = pytalloc_get_type(py_session,
+				    struct auth_session_info);
+	if (!session) {
+		PyErr_Format(PyExc_TypeError,
+			     "Expected auth_session_info for session_info "
+			     "argument got %s",
+			     talloc_get_name(pytalloc_get_ptr(py_session)));
+		return NULL;
+	}
+
+	frame = talloc_stackframe();
+	if (frame == NULL) {
+		return PyErr_NoMemory();
+	}
+
+	session_duplicate = copy_session_info(frame, session);
+	if (session_duplicate == NULL) {
+		TALLOC_FREE(frame);
+		return PyErr_NoMemory();
+	}
+
+	result = PyAuthSession_FromSession(session_duplicate);
+	TALLOC_FREE(frame);
+	return result;
 }
 
 static PyObject *py_system_session(PyObject *module, PyObject *args)
@@ -135,6 +191,10 @@ static PyObject *py_user_session(PyObject *module, PyObject *args, PyObject *kwa
 	}
 
 	ldb_ctx = pyldb_Ldb_AsLdbContext(py_ldb);
+	if (ldb_ctx == NULL) {
+		talloc_free(mem_ctx);
+		return NULL;
+	}
 
 	if (py_dn == Py_None) {
 		user_dn = NULL;
@@ -162,6 +222,63 @@ static PyObject *py_user_session(PyObject *module, PyObject *args, PyObject *kwa
 	talloc_free(mem_ctx);
 
 	return PyAuthSession_FromSession(session);
+}
+
+static PyObject *py_session_info_fill_unix(PyObject *module,
+					   PyObject *args,
+					   PyObject *kwargs)
+{
+	NTSTATUS nt_status;
+	char *user_name = NULL;
+	struct loadparm_context *lp_ctx = NULL;
+	struct auth_session_info *session_info;
+	PyObject *py_lp_ctx = Py_None;
+	PyObject *py_session = Py_None;
+	TALLOC_CTX *frame;
+
+	const char * const kwnames[] = { "session_info",
+					 "user_name",
+					 "lp_ctx",
+					 NULL };
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oz|O",
+					 discard_const_p(char *, kwnames),
+					 &py_session,
+					 &user_name,
+					 &py_lp_ctx)) {
+		return NULL;
+	}
+
+	if (!py_check_dcerpc_type(py_session,
+				  "samba.dcerpc.auth",
+				  "session_info")) {
+		return NULL;
+	}
+	session_info = pytalloc_get_type(py_session,
+					 struct auth_session_info);
+	if (!session_info) {
+		PyErr_Format(PyExc_TypeError,
+			     "Expected auth_session_info for session_info argument got %s",
+			     talloc_get_name(pytalloc_get_ptr(py_session)));
+		return NULL;
+	}
+
+	frame = talloc_stackframe();
+	
+	lp_ctx = lpcfg_from_py_object(frame, py_lp_ctx);
+	if (lp_ctx == NULL) {
+		TALLOC_FREE(frame);
+		return NULL;
+	}
+
+	nt_status = auth_session_info_fill_unix(lp_ctx,
+					       user_name,
+					       session_info);
+	TALLOC_FREE(frame);
+	if (!NT_STATUS_IS_OK(nt_status)) {
+		PyErr_NTSTATUS_IS_ERR_RAISE(nt_status);
+	}
+
+	Py_RETURN_NONE;
 }
 
 
@@ -208,23 +325,25 @@ static PyObject *py_auth_context_new(PyTypeObject *type, PyObject *args, PyObjec
 {
 	PyObject *py_lp_ctx = Py_None;
 	PyObject *py_ldb = Py_None;
-	PyObject *py_imessaging_ctx = Py_None;
 	PyObject *py_auth_context = Py_None;
 	PyObject *py_methods = Py_None;
 	TALLOC_CTX *mem_ctx;
 	struct auth4_context *auth_context;
-	struct imessaging_context *imessaging_context = NULL;
 	struct loadparm_context *lp_ctx;
 	struct tevent_context *ev;
 	struct ldb_context *ldb = NULL;
 	NTSTATUS nt_status;
 	const char **methods;
 
-	const char * const kwnames[] = { "lp_ctx", "messaging_ctx", "ldb", "methods", NULL };
+	const char *const kwnames[] = {"lp_ctx", "ldb", "methods", NULL};
 
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OOOO",
+	if (!PyArg_ParseTupleAndKeywords(args,
+					 kwargs,
+					 "|OOO",
 					 discard_const_p(char *, kwnames),
-					 &py_lp_ctx, &py_imessaging_ctx, &py_ldb, &py_methods))
+					 &py_lp_ctx,
+					 &py_ldb,
+					 &py_methods))
 		return NULL;
 
 	mem_ctx = talloc_new(NULL);
@@ -235,26 +354,29 @@ static PyObject *py_auth_context_new(PyTypeObject *type, PyObject *args, PyObjec
 
 	if (py_ldb != Py_None) {
 		ldb = pyldb_Ldb_AsLdbContext(py_ldb);
+		if (ldb == NULL) {
+			talloc_free(mem_ctx);
+			return NULL;
+		}
 	}
 
 	lp_ctx = lpcfg_from_py_object(mem_ctx, py_lp_ctx);
 	if (lp_ctx == NULL) {
+		talloc_free(mem_ctx);
 		PyErr_NoMemory();
 		return NULL;
 	}
 
 	ev = s4_event_context_init(mem_ctx);
 	if (ev == NULL) {
+		talloc_free(mem_ctx);
 		PyErr_NoMemory();
 		return NULL;
 	}
 
-	if (py_imessaging_ctx != Py_None) {
-		imessaging_context = pytalloc_get_type(py_imessaging_ctx, struct imessaging_context);
-	}
-
 	if (py_methods == Py_None && py_ldb == Py_None) {
-		nt_status = auth_context_create(mem_ctx, ev, imessaging_context, lp_ctx, &auth_context);
+		nt_status = auth_context_create(
+		    mem_ctx, ev, NULL, lp_ctx, &auth_context);
 	} else {
 		if (py_methods != Py_None) {
 			methods = PyList_AsStringList(mem_ctx, py_methods, "methods");
@@ -265,9 +387,8 @@ static PyObject *py_auth_context_new(PyTypeObject *type, PyObject *args, PyObjec
 		} else {
 			methods = auth_methods_from_lp(mem_ctx, lp_ctx);
 		}
-		nt_status = auth_context_create_methods(mem_ctx, methods, ev, 
-							imessaging_context, lp_ctx,
-							ldb, &auth_context);
+		nt_status = auth_context_create_methods(
+		    mem_ctx, methods, ev, NULL, lp_ctx, ldb, &auth_context);
 	}
 
 	if (!NT_STATUS_IS_OK(nt_status)) {
@@ -303,7 +424,16 @@ static PyTypeObject PyAuthContext = {
 static PyMethodDef py_auth_methods[] = {
 	{ "system_session", (PyCFunction)py_system_session, METH_VARARGS, NULL },
 	{ "admin_session", (PyCFunction)py_admin_session, METH_VARARGS, NULL },
-	{ "user_session", (PyCFunction)py_user_session, METH_VARARGS|METH_KEYWORDS, NULL },
+	{ "user_session", PY_DISCARD_FUNC_SIG(PyCFunction,py_user_session),
+			  METH_VARARGS|METH_KEYWORDS, NULL },
+	{ "session_info_fill_unix",
+	  PY_DISCARD_FUNC_SIG(PyCFunction,py_session_info_fill_unix),
+	  METH_VARARGS|METH_KEYWORDS,
+	  NULL },
+	{ "copy_session_info",
+	  PY_DISCARD_FUNC_SIG(PyCFunction,py_copy_session_info),
+	  METH_VARARGS|METH_KEYWORDS,
+	  NULL },
 	{ NULL },
 };
 

@@ -36,6 +36,8 @@
 #include "lib/crypto/crypto.h"
 #include "lib/krb5_wrap/krb5_samba.h"
 #include "lib/util/time_basic.h"
+#include "../libds/common/flags.h"
+#include "libads/krb5_errs.h"
 
 #undef DBGC_CLASS
 #define DBGC_CLASS DBGC_PASSDB
@@ -113,6 +115,7 @@ bool secrets_store_domain_sid(const char *domain, const struct dom_sid  *sid)
 {
 	char *protect_ids;
 	bool ret;
+	struct dom_sid clean_sid = { 0 };
 
 	protect_ids = secrets_fetch(protect_ids_keystr(domain), NULL);
 	if (protect_ids) {
@@ -125,7 +128,15 @@ bool secrets_store_domain_sid(const char *domain, const struct dom_sid  *sid)
 	}
 	SAFE_FREE(protect_ids);
 
-	ret = secrets_store(domain_sid_keystr(domain), sid, sizeof(struct dom_sid ));
+	/*
+	 * use a copy to prevent uninitialized memory from being carried over
+	 * to the tdb
+	 */
+	sid_copy(&clean_sid, sid);
+
+	ret = secrets_store(domain_sid_keystr(domain),
+			    &clean_sid,
+			    sizeof(struct dom_sid));
 
 	/* Force a re-query, in the case where we modified our domain */
 	if (ret) {
@@ -1072,9 +1083,10 @@ static int secrets_domain_info_kerberos_keys(struct secrets_domain_info1_passwor
 		goto no_kerberos;
 	}
 
-	initialize_krb5_error_table();
-	krb5_ret = krb5_init_context(&krb5_ctx);
+	krb5_ret = smb_krb5_init_context_common(&krb5_ctx);
 	if (krb5_ret != 0) {
+		DBG_ERR("kerberos init context failed (%s)\n",
+			error_message(krb5_ret));
 		TALLOC_FREE(keys);
 		return krb5_ret;
 	}
@@ -1601,7 +1613,7 @@ NTSTATUS secrets_store_JoinCtx(const struct libnet_JoinCtx *r)
 		ret = smb_krb5_salt_principal(info->domain_info.dns_domain.string,
 					      info->account_name,
 					      NULL /* userPrincipalName */,
-					      true /* is_computer */,
+					      UF_WORKSTATION_TRUST_ACCOUNT,
 					      info, &p);
 		if (ret != 0) {
 			status = krb5_to_nt_status(ret);

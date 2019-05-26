@@ -493,7 +493,7 @@ static NTSTATUS messaging_init_internal(TALLOC_CTX *mem_ctx,
 
 	sec_init();
 
-	lck_path = lock_path("msg.lock");
+	lck_path = lock_path(talloc_tos(), "msg.lock");
 	if (lck_path == NULL) {
 		return NT_STATUS_NO_MEMORY;
 	}
@@ -624,15 +624,6 @@ struct messaging_context *messaging_init(TALLOC_CTX *mem_ctx,
 	return ctx;
 }
 
-NTSTATUS messaging_init_client(TALLOC_CTX *mem_ctx,
-			       struct tevent_context *ev,
-			       struct messaging_context **pmsg_ctx)
-{
-	return messaging_init_internal(mem_ctx,
-					ev,
-					pmsg_ctx);
-}
-
 struct server_id messaging_server_id(const struct messaging_context *msg_ctx)
 {
 	return msg_ctx->id;
@@ -653,7 +644,7 @@ NTSTATUS messaging_reinit(struct messaging_context *msg_ctx)
 		.pid = getpid(), .vnn = msg_ctx->id.vnn
 	};
 
-	lck_path = lock_path("msg.lock");
+	lck_path = lock_path(talloc_tos(), "msg.lock");
 	if (lck_path == NULL) {
 		return NT_STATUS_NO_MEMORY;
 	}
@@ -904,7 +895,7 @@ static int send_all_fn(pid_t pid, void *private_data)
 	status = messaging_send_buf(state->msg_ctx, pid_to_procid(pid),
 				    state->msg_type, state->buf, state->len);
 	if (!NT_STATUS_IS_OK(status)) {
-		DBG_WARNING("messaging_send_buf to %ju failed: %s\n",
+		DBG_NOTICE("messaging_send_buf to %ju failed: %s\n",
 			    (uintmax_t)pid, nt_errstr(status));
 	}
 

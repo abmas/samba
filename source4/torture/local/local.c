@@ -64,6 +64,7 @@
 	torture_local_string_case,
 	torture_local_compression,
 	torture_local_event, 
+	torture_local_tevent_req,
 	torture_local_torture,
 	torture_local_dbspeed, 
 	torture_local_credentials,
@@ -90,10 +91,6 @@ NTSTATUS torture_local_init(TALLOC_CTX *ctx)
 	
 	torture_suite_add_simple_test(suite, 
 				      "crypto.md4", torture_local_crypto_md4);
-	torture_suite_add_simple_test(suite, "crypto.md5", 
-				      torture_local_crypto_md5);
-	torture_suite_add_simple_test(suite, "crypto.hmacmd5", 
-				      torture_local_crypto_hmacmd5);
 	torture_suite_add_simple_test(suite, "crypto.aes_cmac_128",
 				      torture_local_crypto_aes_cmac_128);
 	torture_suite_add_simple_test(suite, "crypto.aes_ccm_128",

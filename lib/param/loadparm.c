@@ -331,13 +331,21 @@ int lp_int(const char *s)
  */
 unsigned long lp_ulong(const char *s)
 {
+	int error = 0;
+	unsigned long int ret;
 
 	if (!s || !*s) {
-		DEBUG(0,("lp_ulong(%s): is called with NULL!\n",s));
+		DBG_DEBUG("lp_ulong(%s): is called with NULL!\n",s);
 		return -1;
 	}
 
-	return strtoul(s, NULL, 0);
+	ret = strtoul_err(s, NULL, 0, &error);
+	if (error != 0) {
+		DBG_DEBUG("lp_ulong(%s): conversion failed\n",s);
+		return -1;
+	}
+
+	return ret;
 }
 
 /**
@@ -345,13 +353,21 @@ unsigned long lp_ulong(const char *s)
  */
 unsigned long long lp_ulonglong(const char *s)
 {
+	int error = 0;
+	unsigned long long int ret;
 
 	if (!s || !*s) {
-		DEBUG(0, ("lp_ulonglong(%s): is called with NULL!\n", s));
+		DBG_DEBUG("lp_ulonglong(%s): is called with NULL!\n", s);
 		return -1;
 	}
 
-	return strtoull(s, NULL, 0);
+	ret = strtoull_err(s, NULL, 0, &error);
+	if (error != 0) {
+		DBG_DEBUG("lp_ulonglong(%s): conversion failed\n",s);
+		return -1;
+	}
+
+	return ret;
 }
 
 /**
@@ -2592,6 +2608,8 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lp_ctx->sDefault->force_directory_mode = 0000;
 	lp_ctx->sDefault->aio_read_size = 1;
 	lp_ctx->sDefault->aio_write_size = 1;
+	lp_ctx->sDefault->smbd_search_ask_sharemode = true;
+	lp_ctx->sDefault->smbd_getinfo_ask_sharemode = true;
 
 	DEBUG(3, ("Initialising global parameters\n"));
 
@@ -2733,7 +2751,7 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter(lp_ctx, "require strong key", "True");
 	lpcfg_do_global_parameter(lp_ctx, "winbindd socket directory", dyn_WINBINDD_SOCKET_DIR);
 	lpcfg_do_global_parameter(lp_ctx, "ntp signd socket directory", dyn_NTP_SIGND_SOCKET_DIR);
-	lpcfg_do_global_parameter_var(lp_ctx, "gpo update command", "%s/samba_gpoupdate", dyn_SCRIPTSBINDIR);
+	lpcfg_do_global_parameter_var(lp_ctx, "gpo update command", "%s/samba-gpupdate", dyn_SCRIPTSBINDIR);
 	lpcfg_do_global_parameter_var(lp_ctx, "apply group policies", "False");
 	lpcfg_do_global_parameter_var(lp_ctx, "dns update command", "%s/samba_dnsupdate", dyn_SCRIPTSBINDIR);
 	lpcfg_do_global_parameter_var(lp_ctx, "spn update command", "%s/samba_spnupdate", dyn_SCRIPTSBINDIR);
@@ -2759,7 +2777,6 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter(lp_ctx, "cldap port", "389");
 	lpcfg_do_global_parameter(lp_ctx, "krb5 port", "88");
 	lpcfg_do_global_parameter(lp_ctx, "kpasswd port", "464");
-	lpcfg_do_global_parameter(lp_ctx, "web port", "901");
 
 	lpcfg_do_global_parameter(lp_ctx, "nt status support", "True");
 
@@ -2772,12 +2789,12 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter(lp_ctx, "tls certfile", "tls/cert.pem");
 	lpcfg_do_global_parameter(lp_ctx, "tls cafile", "tls/ca.pem");
 	lpcfg_do_global_parameter(lp_ctx, "tls priority", "NORMAL:-VERS-SSL3.0");
-	lpcfg_do_global_parameter(lp_ctx, "prefork children:smb", "4");
 
 	lpcfg_do_global_parameter(lp_ctx, "rndc command", "/usr/sbin/rndc");
 	lpcfg_do_global_parameter(lp_ctx, "nsupdate command", "/usr/bin/nsupdate -g");
 
         lpcfg_do_global_parameter(lp_ctx, "allow dns updates", "secure only");
+	lpcfg_do_global_parameter(lp_ctx, "dns zone scavenging", "False");
         lpcfg_do_global_parameter(lp_ctx, "dns forwarder", "");
 
 	lpcfg_do_global_parameter(lp_ctx, "algorithmic rid base", "1000");
@@ -2815,6 +2832,8 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 	lpcfg_do_global_parameter_var(lp_ctx, "smb2 max write", "%u", DEFAULT_SMB2_MAX_WRITE);
 
 	lpcfg_do_global_parameter(lp_ctx, "passdb backend", "tdbsam");
+
+	lpcfg_do_global_parameter(lp_ctx, "deadtime", "10080");
 
 	lpcfg_do_global_parameter(lp_ctx, "getwd cache", "True");
 
@@ -2928,7 +2947,7 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 
 	lpcfg_do_global_parameter(lp_ctx, "durable handles", "yes");
 
-	lpcfg_do_global_parameter(lp_ctx, "max stat cache size", "256");
+	lpcfg_do_global_parameter(lp_ctx, "max stat cache size", "512");
 
 	lpcfg_do_global_parameter(lp_ctx, "ldap passwd sync", "no");
 
@@ -2996,13 +3015,17 @@ struct loadparm_context *loadparm_init(TALLOC_CTX *mem_ctx)
 				  "rpc server dynamic port range",
 				  "49152-65535");
 
-	lpcfg_do_global_parameter(lp_ctx, "prefork children", "1");
+	lpcfg_do_global_parameter(lp_ctx, "prefork children", "4");
+	lpcfg_do_global_parameter(lp_ctx, "prefork backoff increment", "10");
+	lpcfg_do_global_parameter(lp_ctx, "prefork maximum backoff", "120");
 
 	lpcfg_do_global_parameter(lp_ctx, "check parent directory delete on close", "no");
 
 	lpcfg_do_global_parameter(lp_ctx, "ea support", "yes");
 
 	lpcfg_do_global_parameter(lp_ctx, "store dos attributes", "yes");
+
+	lpcfg_do_global_parameter(lp_ctx, "debug encryption", "no");
 
 	for (i = 0; parm_table[i].label; i++) {
 		if (!(lp_ctx->flags[i] & FLAG_CMDLINE)) {
@@ -3148,7 +3171,8 @@ bool lpcfg_load_default(struct loadparm_context *lp_ctx)
  *
  * Return True on success, False on failure.
  */
-bool lpcfg_load(struct loadparm_context *lp_ctx, const char *filename)
+static bool lpcfg_load_internal(struct loadparm_context *lp_ctx,
+				const char *filename, bool set_global)
 {
 	char *n2;
 	bool bRetval;
@@ -3183,7 +3207,7 @@ bool lpcfg_load(struct loadparm_context *lp_ctx, const char *filename)
 	   for a missing smb.conf */
 	reload_charcnv(lp_ctx);
 
-	if (bRetval == true) {
+	if (bRetval == true && set_global) {
 		/* set this up so that any child python tasks will
 		   find the right smb.conf */
 		setenv("SMB_CONF_PATH", filename, 1);
@@ -3195,6 +3219,16 @@ bool lpcfg_load(struct loadparm_context *lp_ctx, const char *filename)
 	}
 
 	return bRetval;
+}
+
+bool lpcfg_load_no_global(struct loadparm_context *lp_ctx, const char *filename)
+{
+    return lpcfg_load_internal(lp_ctx, filename, false);
+}
+
+bool lpcfg_load(struct loadparm_context *lp_ctx, const char *filename)
+{
+    return lpcfg_load_internal(lp_ctx, filename, true);
 }
 
 /**

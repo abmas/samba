@@ -34,14 +34,38 @@ struct hold_sharemode_info {
 	const char *filename;
 	struct smb2_handle handle;
 } hold_sharemode_table[] = {
-	{ "",	 BASEDIRHOLD "\\N"	},
-	{ "R",	 BASEDIRHOLD "\\R"	},
-	{ "W",	 BASEDIRHOLD "\\W"	},
-	{ "D",	 BASEDIRHOLD "\\D"	},
-	{ "RW",  BASEDIRHOLD "\\RW"	},
-	{ "RD",  BASEDIRHOLD "\\RD"	},
-	{ "WD",  BASEDIRHOLD "\\WD"	},
-	{ "RWD", BASEDIRHOLD "\\RWD"	},
+	{
+		.sharemode = "",
+		.filename  = BASEDIRHOLD "\\N",
+	},
+	{
+		.sharemode = "R",
+		.filename  = BASEDIRHOLD "\\R",
+	},
+	{
+		.sharemode = "W",
+		.filename  = BASEDIRHOLD "\\W",
+	},
+	{
+		.sharemode = "D",
+		.filename  = BASEDIRHOLD "\\D",
+	},
+	{
+		.sharemode = "RW",
+		.filename  = BASEDIRHOLD "\\RW",
+	},
+	{
+		.sharemode = "RD",
+		.filename  = BASEDIRHOLD "\\RD",
+	},
+	{
+		.sharemode = "WD",
+		.filename  = BASEDIRHOLD "\\WD",
+	},
+	{
+		.sharemode = "RWD",
+		.filename  = BASEDIRHOLD "\\RWD",
+	},
 };
 
 static void signal_handler(struct tevent_context *ev,
@@ -162,12 +186,17 @@ bool torture_smb2_check_sharemode(struct torture_context *tctx)
 	struct smb2_create create = { };
 	NTSTATUS status;
 	bool ret = true;
+	int error = 0;
 
 	sharemode_string = torture_setting_string(tctx, "sharemode", "RWD");
 	sharemode = smb2_util_share_access(sharemode_string);
 
 	access_string = torture_setting_string(tctx, "access", "0xf01ff");
-	access = strtoul(access_string, NULL, 0);
+	access = strtoul_err(access_string, NULL, 0, &error);
+	if (error != 0) {
+		torture_comment(tctx, "Initializing access failed.\n");
+		return false;
+	}
 
 	filename = torture_setting_string(tctx, "filename", "testfile");
 	operation = torture_setting_string(tctx, "operation", "WD");

@@ -100,6 +100,7 @@ static int32_t ctdb_control_dispatch(struct ctdb_context *ctdb,
 	uint32_t opcode = c->opcode;
 	uint64_t srvid = c->srvid;
 	uint32_t client_id = c->client_id;
+	static int level = DEBUG_ERR;
 
 	switch (opcode) {
 	case CTDB_CONTROL_PROCESS_EXISTS: {
@@ -108,14 +109,20 @@ static int32_t ctdb_control_dispatch(struct ctdb_context *ctdb,
 	}
 
 	case CTDB_CONTROL_SET_DEBUG: {
+		union {
+			uint8_t *ptr;
+			int32_t *level;
+		} debug;
 		CHECK_CONTROL_DATA_SIZE(sizeof(int32_t));
-		DEBUGLEVEL = *(int32_t *)indata.dptr;
+		debug.ptr = indata.dptr;
+		debuglevel_set(*debug.level);
 		return 0;
 	}
 
 	case CTDB_CONTROL_GET_DEBUG: {
 		CHECK_CONTROL_DATA_SIZE(0);
-		outdata->dptr = (uint8_t *)&(DEBUGLEVEL);
+		level = debuglevel_get();
+		outdata->dptr = (uint8_t *)&(level);
 		outdata->dsize = sizeof(DEBUGLEVEL);
 		return 0;
 	}
@@ -267,18 +274,34 @@ static int32_t ctdb_control_dispatch(struct ctdb_context *ctdb,
 	}
 
 	case CTDB_CONTROL_DB_ATTACH:
-	  return ctdb_control_db_attach(ctdb, indata, outdata, 0, client_id,
-					c, async_reply);
+	  return ctdb_control_db_attach(ctdb,
+					indata,
+					outdata,
+					0,
+					srcnode,
+					client_id,
+					c,
+					async_reply);
 
 	case CTDB_CONTROL_DB_ATTACH_PERSISTENT:
-	  return ctdb_control_db_attach(ctdb, indata, outdata,
-					CTDB_DB_FLAGS_PERSISTENT, client_id,
-					c, async_reply);
+	  return ctdb_control_db_attach(ctdb,
+					indata,
+					outdata,
+					CTDB_DB_FLAGS_PERSISTENT,
+					srcnode,
+					client_id,
+					c,
+					async_reply);
 
 	case CTDB_CONTROL_DB_ATTACH_REPLICATED:
-	  return ctdb_control_db_attach(ctdb, indata, outdata,
-					CTDB_DB_FLAGS_REPLICATED, client_id,
-					c, async_reply);
+	  return ctdb_control_db_attach(ctdb,
+					indata,
+					outdata,
+					CTDB_DB_FLAGS_REPLICATED,
+					srcnode,
+					client_id,
+					c,
+					async_reply);
 
 	case CTDB_CONTROL_SET_CALL:
 		return control_not_implemented("SET_CALL", NULL);
@@ -634,7 +657,7 @@ static int32_t ctdb_control_dispatch(struct ctdb_context *ctdb,
 		return ctdb_control_reload_public_ips(ctdb, c, async_reply);
 
 	case CTDB_CONTROL_RECEIVE_RECORDS:
-		return ctdb_control_receive_records(ctdb, indata, outdata);
+		return control_not_implemented("RECEIVE_RECORDS", NULL);
 
 	case CTDB_CONTROL_DB_DETACH:
 		return ctdb_control_db_detach(ctdb, indata, client_id);
@@ -860,7 +883,7 @@ int ctdb_daemon_send_control(struct ctdb_context *ctdb, uint32_t destnode,
 		return -1;
 	}
 
-	if (((destnode == CTDB_BROADCAST_VNNMAP) || 
+	if (((destnode == CTDB_BROADCAST_ACTIVE) ||
 	     (destnode == CTDB_BROADCAST_ALL) ||
 	     (destnode == CTDB_BROADCAST_CONNECTED)) && 
 	    !(flags & CTDB_CTRL_FLAG_NOREPLY)) {
@@ -868,7 +891,7 @@ int ctdb_daemon_send_control(struct ctdb_context *ctdb, uint32_t destnode,
 		return -1;
 	}
 
-	if (destnode != CTDB_BROADCAST_VNNMAP && 
+	if (destnode != CTDB_BROADCAST_ACTIVE &&
 	    destnode != CTDB_BROADCAST_ALL && 
 	    destnode != CTDB_BROADCAST_CONNECTED && 
 	    (!ctdb_validate_pnn(ctdb, destnode) || 

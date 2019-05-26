@@ -110,6 +110,11 @@
 <refsect1>
 <title>COMMANDS</title>
 
+<refsect2>
+	<title>computer</title>
+	<para>Manage computer accounts.</para>
+</refsect2>
+
 <refsect3>
 	<title>computer create <replaceable>computername</replaceable> [options]</title>
 	<para>Create a new computer in the Active Directory Domain.</para>
@@ -292,6 +297,31 @@
 </refsect2>
 
 <refsect3>
+	<title>domain backup</title>
+	<para>Create or restore a backup of the domain.</para>
+</refsect3>
+
+<refsect3>
+	<title>domain backup offline</title>
+	<para>Backup (with proper locking) local domain directories into a tar file.</para>
+</refsect3>
+
+<refsect3>
+	<title>domain backup online</title>
+	<para>Copy a running DC's current DB into a backup tar file.</para>
+</refsect3>
+
+<refsect3>
+	<title>domain backup rename</title>
+	<para>Copy a running DC's DB to backup file, renaming the domain in the process.</para>
+</refsect3>
+
+<refsect3>
+	<title>domain backup restore</title>
+	<para>Restore the domain's DB from a backup-file.</para>
+</refsect3>
+
+<refsect3>
 	<title>domain classicupgrade [options] <replaceable>classic_smb_conf</replaceable></title>
 	<para>Upgrade from Samba classic (NT4-like) database to Samba AD DC
 	database.</para>
@@ -446,7 +476,11 @@
 
 <refsect3>
 	<title>drs showrepl</title>
-	<para>Show replication status.</para>
+	<para>Show replication status. The <arg
+	choice="opt">--json</arg> option results in JSON output, and
+	with the <arg choice="opt">--summary</arg> option produces
+	very little output when the replication status seems healthy.
+	</para>
 </refsect3>
 
 <refsect2>
@@ -615,6 +649,11 @@
 	<para>Show group object and it's attributes.</para>
 </refsect3>
 
+<refsect3>
+	<title>group stats [options]</title>
+	<para>Show statistics for overall groups and group memberships.</para>
+</refsect3>
+
 <refsect2>
 	<title>ldapcmp <replaceable>URL1</replaceable> <replaceable>URL2</replaceable> <replaceable>domain|configuration|schema|dnsdomain|dnsforest</replaceable> [options] </title>
 	<para>Compare two LDAP databases.</para>
@@ -644,6 +683,11 @@
 	<title>ntacl sysvolreset</title>
 	<para>Reset sysvol ACLs to defaults (including correct ACLs on GPOs).</para>
 </refsect3>
+
+<refsect2>
+	<title>ou</title>
+	<para>Manage organizational units (OUs).</para>
+</refsect2>
 
 <refsect3>
 	<title>ou create <replaceable>ou_dn</replaceable> [options]</title>
@@ -831,12 +875,27 @@
 
 <refsect3>
 	<title>user disable <replaceable>username</replaceable></title>
-	<para>Disable an user account.</para>
+	<para>Disable a user account.</para>
+</refsect3>
+
+<refsect3>
+	<title>user edit <replaceable>username</replaceable></title>
+	<para>Edit a user account AD object.</para>
+
+	<variablelist>
+	<varlistentry>
+	<term>--editor=EDITOR</term>
+	<listitem><para>
+	Specifies the editor to use instead of the system default, or 'vi' if no
+	system default is set.
+	</para></listitem>
+	</varlistentry>
+	</variablelist>
 </refsect3>
 
 <refsect3>
 	<title>user enable <replaceable>username</replaceable></title>
-	<para>Enable an user account.</para>
+	<para>Enable a user account.</para>
 </refsect3>
 
 <refsect3>
@@ -870,23 +929,23 @@
 
 <refsect3>
 	<title>user password [options]</title>
-	<para>Change password for an user account (the one provided in
+	<para>Change password for a user account (the one provided in
 	authentication).</para>
 </refsect3>
 
 <refsect3>
 	<title>user setexpiry <replaceable>username</replaceable> [options]</title>
-	<para>Set the expiration of an user account.</para>
+	<para>Set the expiration of a user account.</para>
 </refsect3>
 
 <refsect3>
 	<title>user setpassword <replaceable>username</replaceable> [options]</title>
-	<para>Sets or resets the password of an user account.</para>
+	<para>Sets or resets the password of a user account.</para>
 </refsect3>
 
 <refsect3>
 	<title>user getpassword <replaceable>username</replaceable> [options]</title>
-	<para>Gets the password of an user account.</para>
+	<para>Gets the password of a user account.</para>
 </refsect3>
 
 <refsect3>
@@ -925,6 +984,13 @@
 		<listitem><para>Looks at repsTo and repsFrom objects.
 		</para></listitem>
 		</varlistentry>
+
+	<varlistentry>
+		<term>samba-tool visualize uptodateness</term>
+		<listitem><para>Looks at replication lag as shown by the
+                uptodateness vectors.
+		</para></listitem>
+		</varlistentry>
 	</refsect3>
 
 	<refsect3><title>GRAPHICAL MODES</title>
@@ -937,24 +1003,34 @@
 
 	<varlistentry>
                 <term>--dot</term>
-                <listitem><para>Generate Graphviz dot output. When viewed using
-		dot or xdot, this shows the network as a graph with DCs as
-		vertices and connections edges. Certain types of degenerate
-		edges are shown in different colours or line-styles.
+                <listitem><para>Generate Graphviz dot output (for
+                ntdsconn and reps modes). When viewed using dot or
+                xdot, this shows the network as a graph with DCs as
+                vertices and connections edges. Certain types of
+                degenerate edges are shown in different colours or
+                line-styles. </para></listitem>
+                </varlistentry>
+	<varlistentry>
+                <term>--xdot</term>
+                <listitem><para>Generate Graphviz dot output as with
+                <arg choice="opt">--dot</arg> and attempt to view it
+                immediately using <command>/usr/bin/xdot</command>.
                 </para></listitem>
                 </varlistentry>
 	</refsect3>
 
 	<varlistentry>
 		<term>-r</term>
-		<listitem><para>Normally, <command>samba-tool</command> talks
-		to one database; with the <arg choice="opt">-r</arg> option
-		attempts are made to contact all the DCs known to the first
-		database. This is necessary to get sensible results from
-		<command>samba-tool visualize reps</command> because the
-		repsFrom/To objects are not replicated, and it can reveal
-		replication issues in other modes.
-                </para></listitem>
+		<listitem><para>Normally,
+		<command>samba-tool</command> talks to one database;
+		with the <arg choice="opt">-r</arg> option attempts
+		are made to contact all the DCs known to the first
+		database. This is necessary for <command>samba-tool
+		visualize uptodateness</command> and for
+		<command>samba-tool visualize reps</command> because
+		the repsFrom/To objects are not replicated, and it can
+		reveal replication issues in other modes.
+		</para></listitem>
                 </varlistentry>
 </refsect2>
 

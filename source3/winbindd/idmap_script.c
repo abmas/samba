@@ -63,7 +63,7 @@ struct idmap_script_context {
  */
 
 struct idmap_script_xid2sid_state {
-	const char *syscmd;
+	char **argl;
 	size_t idx;
 	uint8_t *out;
 };
@@ -101,13 +101,32 @@ static struct tevent_req *idmap_script_xid2sid_send(
 		    return tevent_req_post(req, ev);
 	}
 
-	state->syscmd = talloc_asprintf(state, "%s IDTOSID %cID %lu", script, key,
-					(unsigned long)xid.id);
-	if (tevent_req_nomem(state->syscmd, req)) {
+	state->argl = talloc_zero_array(state,
+					char *,
+					5);
+	if (tevent_req_nomem(state->argl, req)) {
 		return tevent_req_post(req, ev);
 	}
+	state->argl[0] = talloc_strdup(state->argl, script);
+	if (tevent_req_nomem(state->argl[0], req)) {
+		return tevent_req_post(req, ev);
+	}
+	state->argl[1] = talloc_strdup(state->argl, "IDTOSID");
+	if (tevent_req_nomem(state->argl[1], req)) {
+		return tevent_req_post(req, ev);
+	}
+	state->argl[2] = talloc_asprintf(state->argl, "%cID", key);
+	if (tevent_req_nomem(state->argl[2], req)) {
+		return tevent_req_post(req, ev);
+	}
+	state->argl[3] = talloc_asprintf(state->argl, "%lu",
+				(unsigned long)xid.id);
+	if (tevent_req_nomem(state->argl[3], req)) {
+		return tevent_req_post(req, ev);
+	}
+	state->argl[4] = NULL;
 
-	subreq = file_pload_send(state, ev, state->syscmd, 1024);
+	subreq = file_ploadv_send(state, ev, state->argl, 1024);
 	if (tevent_req_nomem(subreq, req)) {
 		return tevent_req_post(req, ev);
 	}
@@ -123,7 +142,7 @@ static void idmap_script_xid2sid_done(struct tevent_req *subreq)
 		req, struct idmap_script_xid2sid_state);
 	int ret;
 
-	ret = file_pload_recv(subreq, state, &state->out);
+	ret = file_ploadv_recv(subreq, state, &state->out);
 	TALLOC_FREE(subreq);
 	if (tevent_req_error(req, ret)) {
 		return;
@@ -320,7 +339,7 @@ static NTSTATUS idmap_script_unixids_to_sids(struct idmap_domain *dom,
 }
 
 struct idmap_script_sid2xid_state {
-	const char *syscmd;
+	char **argl;
 	size_t idx;
 	uint8_t *out;
 };
@@ -333,7 +352,7 @@ static struct tevent_req *idmap_script_sid2xid_send(
 {
 	struct tevent_req *req, *subreq;
 	struct idmap_script_sid2xid_state *state;
-	char sidbuf[DOM_SID_STR_BUFLEN];
+	struct dom_sid_buf sidbuf;
 
 	req = tevent_req_create(mem_ctx, &state,
 				struct idmap_script_sid2xid_state);
@@ -342,15 +361,28 @@ static struct tevent_req *idmap_script_sid2xid_send(
 	}
 	state->idx = idx;
 
-	dom_sid_string_buf(sid, sidbuf, sizeof(sidbuf));
-
-	state->syscmd = talloc_asprintf(state, "%s SIDTOID %s",
-					script, sidbuf);
-	if (tevent_req_nomem(state->syscmd, req)) {
+	state->argl = talloc_zero_array(state,
+					char *,
+					4);
+	if (tevent_req_nomem(state->argl, req)) {
 		return tevent_req_post(req, ev);
 	}
+	state->argl[0] = talloc_strdup(state->argl, script);
+	if (tevent_req_nomem(state->argl[0], req)) {
+		return tevent_req_post(req, ev);
+	}
+	state->argl[1] = talloc_strdup(state->argl, "SIDTOID");
+	if (tevent_req_nomem(state->argl[1], req)) {
+		return tevent_req_post(req, ev);
+	}
+	state->argl[2] = talloc_asprintf(state->argl, "%s",
+			dom_sid_str_buf(sid, &sidbuf));
+	if (tevent_req_nomem(state->argl[2], req)) {
+		return tevent_req_post(req, ev);
+	}
+	state->argl[3] = NULL;
 
-	subreq = file_pload_send(state, ev, state->syscmd, 1024);
+	subreq = file_ploadv_send(state, ev, state->argl, 1024);
 	if (tevent_req_nomem(subreq, req)) {
 		return tevent_req_post(req, ev);
 	}
@@ -366,7 +398,7 @@ static void idmap_script_sid2xid_done(struct tevent_req *subreq)
 		req, struct idmap_script_sid2xid_state);
 	int ret;
 
-	ret = file_pload_recv(subreq, state, &state->out);
+	ret = file_ploadv_recv(subreq, state, &state->out);
 	TALLOC_FREE(subreq);
 	if (tevent_req_error(req, ret)) {
 		return;

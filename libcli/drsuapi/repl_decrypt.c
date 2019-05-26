@@ -25,10 +25,14 @@
 #include "librpc/gen_ndr/ndr_misc.h"
 #include "librpc/gen_ndr/ndr_drsuapi.h"
 #include "librpc/gen_ndr/ndr_drsblobs.h"
-#include "../lib/crypto/crypto.h"
+#include "../lib/crypto/arcfour.h"
+#include "zlib.h"
 #include "../libcli/drsuapi/drsuapi.h"
 #include "libcli/auth/libcli_auth.h"
 #include "dsdb/samdb/samdb.h"
+
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
 
 WERROR drsuapi_decrypt_attribute_value(TALLOC_CTX *mem_ctx,
 				       const DATA_BLOB *gensec_skey,
@@ -40,7 +44,7 @@ WERROR drsuapi_decrypt_attribute_value(TALLOC_CTX *mem_ctx,
 	DATA_BLOB confounder;
 	DATA_BLOB enc_buffer;
 
-	MD5_CTX md5;
+	gnutls_hash_hd_t hash_hnd = NULL;
 	uint8_t _enc_key[16];
 	DATA_BLOB enc_key;
 
@@ -51,6 +55,8 @@ WERROR drsuapi_decrypt_attribute_value(TALLOC_CTX *mem_ctx,
 	DATA_BLOB checked_buffer;
 
 	DATA_BLOB plain_buffer;
+	WERROR result;
+	int rc;
 
 	/*
 	 * users with rid == 0 should not exist
@@ -77,10 +83,26 @@ WERROR drsuapi_decrypt_attribute_value(TALLOC_CTX *mem_ctx,
 	 * not the dcerpc ncacn_ip_tcp "SystemLibraryDTC" key!
 	 */
 	enc_key = data_blob_const(_enc_key, sizeof(_enc_key));
-	MD5Init(&md5);
-	MD5Update(&md5, gensec_skey->data, gensec_skey->length);
-	MD5Update(&md5, confounder.data, confounder.length);
-	MD5Final(enc_key.data, &md5);
+
+	rc = gnutls_hash_init(&hash_hnd, GNUTLS_DIG_MD5);
+	if (rc < 0) {
+		result = WERR_NOT_ENOUGH_MEMORY;
+		goto out;
+	}
+	rc = gnutls_hash(hash_hnd, gensec_skey->data, gensec_skey->length);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		result = WERR_INTERNAL_ERROR;
+		goto out;
+	}
+	rc = gnutls_hash(hash_hnd, confounder.data, confounder.length);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		result = WERR_INTERNAL_ERROR;
+		goto out;
+	}
+
+	gnutls_hash_deinit(hash_hnd, enc_key.data);
 
 	/*
 	 * copy the encrypted buffer part and 
@@ -89,19 +111,25 @@ WERROR drsuapi_decrypt_attribute_value(TALLOC_CTX *mem_ctx,
 	dec_buffer = data_blob_const(enc_buffer.data, enc_buffer.length);
 	arcfour_crypt_blob(dec_buffer.data, dec_buffer.length, &enc_key);
 
+	ZERO_ARRAY_LEN(enc_key.data, enc_key.length);
+
 	/* 
 	 * the first 4 byte are the crc32 checksum
 	 * of the remaining bytes
 	 */
 	crc32_given = IVAL(dec_buffer.data, 0);
-	crc32_calc = crc32_calc_buffer(dec_buffer.data + 4 , dec_buffer.length - 4);
+	crc32_calc = crc32(0, Z_NULL, 0);
+	crc32_calc = crc32(crc32_calc,
+			   dec_buffer.data + 4 ,
+			   dec_buffer.length - 4);
 	checked_buffer = data_blob_const(dec_buffer.data + 4, dec_buffer.length - 4);
 
 	plain_buffer = data_blob_talloc(mem_ctx, checked_buffer.data, checked_buffer.length);
 	W_ERROR_HAVE_NO_MEMORY(plain_buffer.data);
 
 	if (crc32_given != crc32_calc) {
-		return W_ERROR(HRES_ERROR_V(HRES_SEC_E_DECRYPT_FAILURE));
+		result = W_ERROR(HRES_ERROR_V(HRES_SEC_E_DECRYPT_FAILURE));
+		goto out;
 	}
 	/*
 	 * The following rid_crypt obfuscation isn't session specific
@@ -118,7 +146,8 @@ WERROR drsuapi_decrypt_attribute_value(TALLOC_CTX *mem_ctx,
 		uint32_t i, num_hashes;
 
 		if ((checked_buffer.length % 16) != 0) {
-			return WERR_DS_DRA_INVALID_PARAMETER;
+			result = WERR_DS_DRA_INVALID_PARAMETER;
+			goto out;
 		}
 
 		num_hashes = plain_buffer.length / 16;
@@ -129,7 +158,9 @@ WERROR drsuapi_decrypt_attribute_value(TALLOC_CTX *mem_ctx,
 	}
 
 	*out = plain_buffer;
-	return WERR_OK;
+	result = WERR_OK;
+out:
+	return result;
 }
 
 WERROR drsuapi_decrypt_attribute(TALLOC_CTX *mem_ctx, 
@@ -204,13 +235,15 @@ static WERROR drsuapi_encrypt_attribute_value(TALLOC_CTX *mem_ctx,
 	DATA_BLOB rid_crypt_out = data_blob(NULL, 0);
 	DATA_BLOB confounder;
 
-	MD5_CTX md5;
+	gnutls_hash_hd_t hash_hnd = NULL;
 	uint8_t _enc_key[16];
 	DATA_BLOB enc_key;
 
 	DATA_BLOB enc_buffer;
 
 	uint32_t crc32_calc;
+	WERROR result;
+	int rc;
 
 	/*
 	 * users with rid == 0 should not exist
@@ -269,16 +302,33 @@ static WERROR drsuapi_encrypt_attribute_value(TALLOC_CTX *mem_ctx,
 	 * not the dcerpc ncacn_ip_tcp "SystemLibraryDTC" key!
 	 */
 	enc_key = data_blob_const(_enc_key, sizeof(_enc_key));
-	MD5Init(&md5);
-	MD5Update(&md5, gensec_skey->data, gensec_skey->length);
-	MD5Update(&md5, confounder.data, confounder.length);
-	MD5Final(enc_key.data, &md5);
+
+	rc = gnutls_hash_init(&hash_hnd, GNUTLS_DIG_MD5);
+	if (rc < 0) {
+		result = WERR_NOT_ENOUGH_MEMORY;
+		goto out;
+	}
+
+	rc = gnutls_hash(hash_hnd, gensec_skey->data, gensec_skey->length);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		result = WERR_INTERNAL_ERROR;
+		goto out;
+	}
+	rc = gnutls_hash(hash_hnd, confounder.data, confounder.length);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		result = WERR_INTERNAL_ERROR;
+		goto out;
+	}
+	gnutls_hash_deinit(hash_hnd, enc_key.data);
 
 	/* 
 	 * the first 4 byte are the crc32 checksum
 	 * of the remaining bytes
 	 */
-	crc32_calc = crc32_calc_buffer(in->data, in->length);
+	crc32_calc = crc32(0, Z_NULL, 0);
+	crc32_calc = crc32(crc32_calc, in->data, in->length);
 	SIVAL(enc_buffer.data, 16, crc32_calc);
 
 	/*
@@ -290,9 +340,12 @@ static WERROR drsuapi_encrypt_attribute_value(TALLOC_CTX *mem_ctx,
 
 	arcfour_crypt_blob(enc_buffer.data+16, enc_buffer.length-16, &enc_key);
 
-	*out = enc_buffer;
+	ZERO_ARRAY_LEN(enc_key.data, enc_key.length);
 
-	return WERR_OK;
+	*out = enc_buffer;
+	result =  WERR_OK;
+out:
+	return result;
 }
 
 /*

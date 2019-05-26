@@ -36,6 +36,7 @@ static void PyType_AddMethods(PyTypeObject *type, PyMethodDef *methods)
 			descr = PyDescr_NewMethod(type, &methods[i]);
 		PyDict_SetItemString(dict, methods[i].ml_name, 
 				     descr);
+		Py_CLEAR(descr);
 	}
 }
 
@@ -114,18 +115,17 @@ static int py_dom_sid_cmp(PyObject *py_self, PyObject *py_other)
 static PyObject *py_dom_sid_str(PyObject *py_self)
 {
 	struct dom_sid *self = pytalloc_get_ptr(py_self);
-	char *str = dom_sid_string(NULL, self);
-	PyObject *ret = PyStr_FromString(str);
-	talloc_free(str);
+	struct dom_sid_buf buf;
+	PyObject *ret = PyStr_FromString(dom_sid_str_buf(self, &buf));
 	return ret;
 }
 
 static PyObject *py_dom_sid_repr(PyObject *py_self)
 {
 	struct dom_sid *self = pytalloc_get_ptr(py_self);
-	char *str = dom_sid_string(NULL, self);
-	PyObject *ret = PyStr_FromFormat("dom_sid('%s')", str);
-	talloc_free(str);
+	struct dom_sid_buf buf;
+	PyObject *ret = PyStr_FromFormat(
+		"dom_sid('%s')", dom_sid_str_buf(self, &buf));
 	return ret;
 }
 
@@ -343,28 +343,32 @@ static PyObject *py_token_has_sid(PyObject *self, PyObject *args)
 	return PyBool_FromLong(security_token_has_sid(token, sid));
 }
 
-static PyObject *py_token_is_anonymous(PyObject *self)
+static PyObject *py_token_is_anonymous(PyObject *self,
+	PyObject *Py_UNUSED(ignored))
 {
 	struct security_token *token = pytalloc_get_ptr(self);
 	
 	return PyBool_FromLong(security_token_is_anonymous(token));
 }
 
-static PyObject *py_token_is_system(PyObject *self)
+static PyObject *py_token_is_system(PyObject *self,
+	PyObject *Py_UNUSED(ignored))
 {
 	struct security_token *token = pytalloc_get_ptr(self);
 	
 	return PyBool_FromLong(security_token_is_system(token));
 }
 
-static PyObject *py_token_has_builtin_administrators(PyObject *self)
+static PyObject *py_token_has_builtin_administrators(PyObject *self,
+	PyObject *Py_UNUSED(ignored))
 {
 	struct security_token *token = pytalloc_get_ptr(self);
 	
 	return PyBool_FromLong(security_token_has_builtin_administrators(token));
 }
 
-static PyObject *py_token_has_nt_authenticated_users(PyObject *self)
+static PyObject *py_token_has_nt_authenticated_users(PyObject *self,
+	PyObject *Py_UNUSED(ignored))
 {
 	struct security_token *token = pytalloc_get_ptr(self);
 	
@@ -447,7 +451,8 @@ static PyObject *py_privilege_id(PyObject *self, PyObject *args)
 	return PyInt_FromLong(sec_privilege_id(name));
 }
 
-static PyObject *py_random_sid(PyObject *self)
+static PyObject *py_random_sid(PyObject *self,
+	PyObject *Py_UNUSED(ignored))
 {
 	struct dom_sid *sid;
 	PyObject *ret;

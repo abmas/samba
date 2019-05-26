@@ -228,7 +228,7 @@ NTSTATUS smbd_smb2_request_process_create(struct smbd_smb2_request *smb2req)
 	}
 
 	tsubreq = smbd_smb2_create_send(smb2req,
-				       smb2req->ev_ctx,
+				       smb2req->sconn->ev_ctx,
 				       smb2req,
 				       in_oplock_level,
 				       in_impersonation_level,
@@ -381,6 +381,7 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(struct smb_request *smb1req
 	const char *requested_filename, const struct files_struct *fsp,
 	const struct smb2_lease *lease_ptr)
 {
+	char *filename = NULL;
 	struct smb_filename *smb_fname = NULL;
 	uint32_t ucf_flags;
 	NTSTATUS status;
@@ -407,10 +408,23 @@ static NTSTATUS smbd_smb2_create_durable_lease_check(struct smb_request *smb1req
 		return NT_STATUS_OBJECT_NAME_NOT_FOUND;
 	}
 
+	filename = talloc_strdup(talloc_tos(), requested_filename);
+	if (filename == NULL) {
+		return NT_STATUS_NO_MEMORY;
+	}
+
+	/* This also converts '\' to '/' */
+	status = check_path_syntax(filename);
+	if (!NT_STATUS_IS_OK(status)) {
+		TALLOC_FREE(filename);
+		return status;
+	}
+
 	ucf_flags = filename_create_ucf_flags(smb1req, FILE_OPEN);
 	status = filename_convert(talloc_tos(), fsp->conn,
-				  requested_filename, ucf_flags,
-				  NULL, &smb_fname);
+				  filename, ucf_flags,
+				  NULL, NULL, &smb_fname);
+	TALLOC_FREE(filename);
 	if (!NT_STATUS_IS_OK(status)) {
 		DEBUG(10, ("filename_convert returned %s\n",
 			   nt_errstr(status)));
@@ -462,6 +476,8 @@ struct smbd_smb2_create_state {
 	ssize_t lease_len;
 	bool need_replay_cache;
 	struct smbXsrv_open *op;
+	time_t twrp_time;
+	time_t *twrp_timep;
 
 	struct smb2_create_blob *dhnc;
 	struct smb2_create_blob *dh2c;
@@ -877,6 +893,7 @@ static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
 				  smb1req->conn,
 				  state->fname,
 				  ucf_flags,
+				  state->twrp_timep,
 				  NULL, /* ppath_contains_wcards */
 				  &smb_fname);
 	if (!NT_STATUS_IS_OK(status)) {
@@ -1164,9 +1181,6 @@ static void smbd_smb2_create_before_exec(struct tevent_req *req)
 
 	if (state->twrp != NULL) {
 		NTTIME nttime;
-		time_t t;
-		struct tm *tm;
-		char *tmpname = state->fname;
 
 		if (state->twrp->data.length != 8) {
 			tevent_req_nterror(req, NT_STATUS_INVALID_PARAMETER);
@@ -1174,27 +1188,9 @@ static void smbd_smb2_create_before_exec(struct tevent_req *req)
 		}
 
 		nttime = BVAL(state->twrp->data.data, 0);
-		t = nt_time_to_unix(nttime);
-		tm = gmtime(&t);
+		state->twrp_time = nt_time_to_unix(nttime);
+		state->twrp_timep = &state->twrp_time;
 
-		state->fname = talloc_asprintf(
-			state,
-			"%s\\@GMT-%04u.%02u.%02u-%02u.%02u.%02u",
-			state->fname,
-			tm->tm_year + 1900,
-			tm->tm_mon + 1,
-			tm->tm_mday,
-			tm->tm_hour,
-			tm->tm_min,
-			tm->tm_sec);
-		if (tevent_req_nomem(state->fname, req)) {
-			return;
-		}
-		TALLOC_FREE(tmpname);
-		/*
-		 * Tell filename_create_ucf_flags() this
-		 * is an @GMT path.
-		 */
 		smb1req->flags2 |= FLAGS2_REPARSE_PATH;
 	}
 
@@ -1262,8 +1258,6 @@ static void smbd_smb2_create_before_exec(struct tevent_req *req)
 			}
 		}
 	}
-
-	return;
 }
 
 static void smbd_smb2_create_after_exec(struct tevent_req *req)
@@ -1508,7 +1502,6 @@ static void smbd_smb2_create_finish(struct tevent_req *req)
 
 	tevent_req_done(req);
 	tevent_req_post(req, state->ev);
-	return;
 }
 
 static NTSTATUS smbd_smb2_create_recv(struct tevent_req *req,
@@ -1763,7 +1756,7 @@ bool schedule_deferred_open_message_smb2(
 		(unsigned long long)mid ));
 
 	tevent_schedule_immediate(state->im,
-			smb2req->ev_ctx,
+			smb2req->sconn->ev_ctx,
 			smbd_smb2_create_request_dispatch_immediate,
 			smb2req);
 
@@ -1795,7 +1788,7 @@ static bool smbd_smb2_create_cancel(struct tevent_req *req)
 
 	remove_deferred_open_message_smb2_internal(smb2req, mid);
 
-	tevent_req_defer_callback(req, smb2req->ev_ctx);
+	tevent_req_defer_callback(req, smb2req->sconn->ev_ctx);
 	tevent_req_nterror(req, NT_STATUS_CANCELLED);
 	return true;
 }

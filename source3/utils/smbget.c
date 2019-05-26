@@ -18,8 +18,9 @@
 
 #include "includes.h"
 #include "system/filesys.h"
-#include "popt_common.h"
+#include "popt_common_cmdline.h"
 #include "libsmbclient.h"
+#include "cmdline_contexts.h"
 
 static int columns = 0;
 
@@ -189,13 +190,22 @@ static bool smb_download_dir(const char *base, const char *name, int resume)
 	while (*relname == '/') {
 		relname++;
 	}
-	mkdir(relname, 0755);
+
+	if (strlen(relname) > 0) {
+		int rc = mkdir(relname, 0755);
+		if (rc == -1 && errno != EEXIST) {
+			fprintf(stderr, "Can't create directory %s: %s\n",
+				relname, strerror(errno));
+			return false;
+		}
+	}
 
 	tmpname = SMB_STRDUP(name);
 
 	while ((dirent = smbc_readdir(dirhandle))) {
 		char *newname;
 		if (!strcmp(dirent->name, ".") || !strcmp(dirent->name, "..")) {
+			ok = true;
 			continue;
 		}
 		if (asprintf(&newname, "%s/%s", tmpname, dirent->name) == -1) {
@@ -288,7 +298,7 @@ static void print_progress(const char *name, time_t start, time_t now,
 	double avg = 0.0;
 	long eta = -1;
 	double prcnt = 0.0;
-	char hpos[20], htotal[20], havg[20];
+	char hpos[22], htotal[22], havg[22];
 	char *status, *filename;
 	int len;
 	if (now - start) {
@@ -759,25 +769,139 @@ int main(int argc, char **argv)
 	struct poptOption long_options[] = {
 		POPT_AUTOHELP
 
-		{"workgroup",  'w', POPT_ARG_STRING, &opt.workgroup,   'w', "Workgroup to use (optional)" },
-		{"user",       'U', POPT_ARG_STRING, &opt.username,    'U', "Username to use" },
-		{"guest",      'a', POPT_ARG_NONE,   NULL,             'a', "Work as user guest" },
+		{
+			.longName   = "workgroup",
+			.shortName  = 'w',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = &opt.workgroup,
+			.val        = 'w',
+			.descrip    = "Workgroup to use (optional)"
+		},
+		{
+			.longName   = "user",
+			.shortName  = 'U',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = &opt.username,
+			.val        = 'U',
+			.descrip    = "Username to use"
+		},
+		{
+			.longName   = "guest",
+			.shortName  = 'a',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'a',
+			.descrip    = "Work as user guest"
+		},
 
-		{"nonprompt",  'n', POPT_ARG_NONE,   NULL,             'n',  "Don't ask anything (non-interactive)" },
-		{"debuglevel", 'd', POPT_ARG_INT,    &opt.debuglevel,  'd', "Debuglevel to use" },
+		{
+			.longName   = "nonprompt",
+			.shortName  = 'n',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'n',
+			.descrip    = "Don't ask anything (non-interactive)"
+		},
+		{
+			.longName   = "debuglevel",
+			.shortName  = 'd',
+			.argInfo    = POPT_ARG_INT,
+			.arg        = &opt.debuglevel,
+			.val        = 'd',
+			.descrip    = "Debuglevel to use"
+		},
 
-		{"encrypt",    'e', POPT_ARG_NONE,   NULL,             'e', "Encrypt SMB transport" },
-		{"resume",     'r', POPT_ARG_NONE,   NULL,             'r',  "Automatically resume aborted files" },
-		{"update",     'u', POPT_ARG_NONE,   NULL,             'u',  "Download only when remote file is newer than local file or local file is missing"},
-		{"recursive",  'R', POPT_ARG_NONE,   NULL,             'R',  "Recursively download files" },
-		{"blocksize",  'b', POPT_ARG_INT,    &opt.blocksize,   'b', "Change number of bytes in a block"},
+		{
+			.longName   = "encrypt",
+			.shortName  = 'e',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'e',
+			.descrip    = "Encrypt SMB transport"
+		},
+		{
+			.longName   = "resume",
+			.shortName  = 'r',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'r',
+			.descrip    = "Automatically resume aborted files"
+		},
+		{
+			.longName   = "update",
+			.shortName  = 'u',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'u',
+			.descrip    = "Download only when remote file is "
+				      "newer than local file or local file "
+				      "is missing"
+		},
+		{
+			.longName   = "recursive",
+			.shortName  = 'R',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'R',
+			.descrip    = "Recursively download files"
+		},
+		{
+			.longName   = "blocksize",
+			.shortName  = 'b',
+			.argInfo    = POPT_ARG_INT,
+			.arg        = &opt.blocksize,
+			.val        = 'b',
+			.descrip    = "Change number of bytes in a block"
+		},
 
-		{"outputfile", 'o', POPT_ARG_STRING, &opt.outputfile,  'o', "Write downloaded data to specified file" },
-		{"stdout",     'O', POPT_ARG_NONE,   NULL,             'O',  "Write data to stdout" },
-		{"dots",       'D', POPT_ARG_NONE,   NULL,             'D',  "Show dots as progress indication" },
-		{"quiet",      'q', POPT_ARG_NONE,   NULL,             'q',  "Be quiet" },
-		{"verbose",    'v', POPT_ARG_NONE,   NULL,             'v',  "Be verbose" },
-		{"rcfile",     'f', POPT_ARG_STRING, NULL,             'f', "Use specified rc file"},
+		{
+			.longName   = "outputfile",
+			.shortName  = 'o',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = &opt.outputfile,
+			.val        = 'o',
+			.descrip    = "Write downloaded data to specified file"
+		},
+		{
+			.longName   = "stdout",
+			.shortName  = 'O',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'O',
+			.descrip    = "Write data to stdout"
+		},
+		{
+			.longName   = "dots",
+			.shortName  = 'D',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'D',
+			.descrip    = "Show dots as progress indication"
+		},
+		{
+			.longName   = "quiet",
+			.shortName  = 'q',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'q',
+			.descrip    = "Be quiet"
+		},
+		{
+			.longName   = "verbose",
+			.shortName  = 'v',
+			.argInfo    = POPT_ARG_NONE,
+			.arg        = NULL,
+			.val        = 'v',
+			.descrip    = "Be verbose"
+		},
+		{
+			.longName   = "rcfile",
+			.shortName  = 'f',
+			.argInfo    = POPT_ARG_STRING,
+			.arg        = NULL,
+			.val        = 'f',
+			.descrip    = "Use specified rc file"
+		},
 
 		POPT_TABLEEND
 	};
@@ -878,6 +1002,8 @@ int main(int argc, char **argv)
 	}
 
 	popt_burn_cmdline_password(argc, argv);
+
+	cmdline_messaging_context(get_dyn_CONFIGFILE());
 
 	if (smbc_init(get_auth_data, opt.debuglevel) < 0) {
 		fprintf(stderr, "Unable to initialize libsmbclient\n");

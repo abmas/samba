@@ -30,6 +30,7 @@
 #include "librpc/gen_ndr/netlogon.h"
 #include "librpc/gen_ndr/auth.h"
 #include "../auth/auth_sam_reply.h"
+#include "../auth/auth_util.h"
 #include "auth.h"
 #include "rpc_server/rpc_pipes.h"
 #include "../lib/tsocket/tsocket.h"
@@ -163,7 +164,7 @@ NTSTATUS make_internal_rpc_pipe_socketpair(
 				      NCACN_NP,
 				      npc->remote_client_addr,
 				      npc->local_server_addr,
-				      npc->session_info,
+				      &npc->session_info,
 				      &npc->p,
 				      &error);
 	if (rc == -1) {
@@ -185,7 +186,7 @@ NTSTATUS make_internal_rpc_pipe_socketpair(
 	}
 	tevent_req_set_callback(subreq, named_pipe_packet_process, npc);
 
-	*pnpa = talloc_steal(mem_ctx, npa);
+	*pnpa = talloc_move(mem_ctx, &npa);
 	status = NT_STATUS_OK;
 out:
 	talloc_free(tmp_ctx);

@@ -5,7 +5,7 @@ test_info()
     cat <<EOF
 Check that CTDB operates correctly if:
 
-* DisableIPFailover is set; or
+* failover is disabled; or
 * there are 0 public IPs configured
 
 This test only does anything with local daemons.  On a real cluster it
@@ -15,58 +15,38 @@ EOF
 
 . "${TEST_SCRIPTS_DIR}/integration.bash"
 
-ctdb_test_init "$@"
-
 set -e
-
-cluster_is_healthy
 
 if [ -z "$TEST_LOCAL_DAEMONS" ] ; then
 	echo "SKIPPING this test - only runs against local daemons"
 	exit 0
 fi
 
-# Reset configuration
-ctdb_restart_when_done
+echo "Starting CTDB with failover disabled..."
+ctdb_test_init --disable-failover
 
-select_test_node_and_ips
+cluster_is_healthy
 
-echo "Setting DisableIPFailover=1 on all nodes"
-try_command_on_node all $CTDB setvar DisableIPFailover 1
+echo "Getting IP allocation..."
+try_command_on_node -v any "$CTDB ip all | tail -n +2"
 
-echo "Getting \"before\" IP allocation..."
-try_command_on_node -v any $CTDB ip all
-before="$out"
+while read ip pnn ; do
+	if [ "$pnn" != "-1" ] ; then
+		die "BAD: IP address ${ip} is assigned to node ${pnn}"
+	fi
+done <"$outfile"
 
-echo "Disabling node ${test_node}..."
-try_command_on_node "$test_node" $CTDB disable
-wait_until_node_has_status $test_node disabled
-
-echo "Getting \"after\" IP allocation..."
-try_command_on_node -v any $CTDB ip all
-after="$out"
-
-if [ "$before" == "$after" ] ; then
-	echo "GOOD: IP allocation is unchanged"
-	echo
-else
-	die "BAD: IP allocation changed"
-fi
+echo "GOOD: All IP addresses are unassigned"
 
 echo "----------------------------------------"
 
-daemons_stop
-
 echo "Starting CTDB with an empty public addresses configuration..."
-setup_ctdb --no-public-addresses
-daemons_start
+ctdb_test_init --no-public-addresses
 
-wait_until_ready
+cluster_is_healthy
 
 echo "Trying explicit ipreallocate..."
 try_command_on_node any $CTDB ipreallocate
 
 echo "Good, that seems to work!"
 echo
-
-ps_ctdbd

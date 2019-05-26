@@ -208,6 +208,7 @@ int smb_create_group(const char *unix_group, gid_t *new_gid)
 	char *add_script = NULL;
 	int 	ret = -1;
 	int 	fd = 0;
+	int error = 0;
 
 	*new_gid = 0;
 
@@ -244,7 +245,15 @@ int smb_create_group(const char *unix_group, gid_t *new_gid)
 			nread = read(fd, output, sizeof(output)-1);
 			if (nread > 0) {
 				output[nread] = '\0';
-				*new_gid = (gid_t)strtoul(output, NULL, 10);
+				*new_gid = (gid_t)strtoul_err(output,
+							      NULL,
+							      10,
+							      &error);
+				if (error != 0) {
+					*new_gid = 0;
+					close(fd);
+					return -1;
+				}
 			}
 
 			close(fd);
@@ -606,8 +615,9 @@ NTSTATUS pdb_default_get_aliasinfo(struct pdb_methods *methods,
 
 	if ((map->sid_name_use != SID_NAME_ALIAS) &&
 	    (map->sid_name_use != SID_NAME_WKN_GRP)) {
+		struct dom_sid_buf buf;
 		DEBUG(2, ("%s is a %s, expected an alias\n",
-			  sid_string_dbg(sid),
+			  dom_sid_str_buf(sid, &buf),
 			  sid_type_lookup(map->sid_name_use)));
 		status = NT_STATUS_NO_SUCH_ALIAS;
 		goto done;

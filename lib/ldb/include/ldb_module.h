@@ -54,18 +54,18 @@
 #endif
 
 /*
- * Only Samba versions which expect ldb >= 1.2.0
- * are compatible with read_[un]lock() behaviour.
+ * Only Samba versions which expect ldb >= 1.4.0
+ * reopen the ldb after each fork().
  *
- * See https://bugzilla.samba.org/show_bug.cgi?id=12859
+ * See https://bugzilla.samba.org/show_bug.cgi?id=13519
  */
 #if EXPECTED_SYSTEM_LDB_VERSION_MAJOR > 1
-#define __LDB_READ_LOCK_COMPATIBLE__ 1
-#elif EXPECTED_SYSTEM_LDB_VERSION_MINOR > 1
-#define __LDB_READ_LOCK_COMPATIBLE__ 1
+#define __LDB_FORK_COMPATIBLE__ 1
+#elif EXPECTED_SYSTEM_LDB_VERSION_MINOR > 3
+#define __LDB_FORK_COMPATIBLE__ 1
 #endif
-#ifndef __LDB_READ_LOCK_COMPATIBLE__
-#error "Samba < 4.7 is not compatible with this version of ldb due to assumptions around read locks"
+#ifndef __LDB_FORK_COMPATIBLE__
+#error "Samba < 4.9 is not compatible with this version of ldb due to assumptions around fork() behaviour"
 #endif
 
 #endif /* defined(_SAMBA_BUILD_) && defined(USING_SYSTEM_LDB) */
@@ -102,6 +102,11 @@ struct ldb_module;
 /* The const char * const * pointer to a list of secret (password)
  * attributes, not to be printed in trace messages */
 #define LDB_SECRET_ATTRIBUTE_LIST_OPAQUE "LDB_SECRET_ATTRIBUTE_LIST"
+
+/*
+ * The scheme to be used for referral entries, i.e. ldap or ldaps
+ */
+#define LDAP_REFERRAL_SCHEME_OPAQUE "LDAP_REFERRAL_SCHEME"
 
 /*
    these function pointers define the operations that a ldb module can intercept
@@ -509,38 +514,30 @@ int ldb_register_extended_match_rule(struct ldb_context *ldb,
  */
 int ldb_pack_data(struct ldb_context *ldb,
 		  const struct ldb_message *message,
-		  struct ldb_val *data);
+		  struct ldb_val *data,
+		  uint32_t pack_format_version);
 /*
  * Unpack a ldb message from a linear buffer in ldb_val
- *
- * Providing a list of attributes to this function allows selective unpacking.
- * Giving a NULL list (or a list_size of 0) unpacks all the attributes.
  */
-int ldb_unpack_data_only_attr_list(struct ldb_context *ldb,
-				   const struct ldb_val *data,
-				   struct ldb_message *message,
-				   const char* const * list,
-				   unsigned int list_size,
-				   unsigned int *nb_attributes_indb);
 int ldb_unpack_data(struct ldb_context *ldb,
 		    const struct ldb_val *data,
 		    struct ldb_message *message);
+
+/*
+ * filter the specified list of attributes from msg,
+ * adding requested attributes, and perhaps all for *,
+ * but not the DN to filtered_msg.
+ */
+int ldb_filter_attrs(struct ldb_context *ldb,
+		     const struct ldb_message *msg,
+		     const char *const *attrs,
+		     struct ldb_message *filtered_msg);
 /*
  * Unpack a ldb message from a linear buffer in ldb_val
- *
- * Providing a list of attributes to this function allows selective unpacking.
- * Giving a NULL list (or a list_size of 0) unpacks all the attributes.
- *
- * Flags allow control of allocation, so that if
- * LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC is specified, then data in values are
- * not allocated, instead they point into the supplier constant buffer.
  *
  * If LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC is specified, then values
  * array are not allocated individually (for single-valued
  * attributes), instead they point into a single buffer per message.
- *
- * LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC is only valid when
- * LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC is also specified.
  *
  * Likewise if LDB_UNPACK_DATA_FLAG_NO_DN is specified, the DN is omitted.
  *
@@ -548,18 +545,26 @@ int ldb_unpack_data(struct ldb_context *ldb,
  * are unpacked or returned.
  *
  */
-int ldb_unpack_data_only_attr_list_flags(struct ldb_context *ldb,
-					 const struct ldb_val *data,
-					 struct ldb_message *message,
-					 const char * const *list,
-					 unsigned int list_size,
-					 unsigned int flags,
-					 unsigned int *nb_elements_in_db);
+int ldb_unpack_data_flags(struct ldb_context *ldb,
+			  const struct ldb_val *data,
+			  struct ldb_message *message,
+			  unsigned int flags);
 
-#define LDB_UNPACK_DATA_FLAG_NO_DATA_ALLOC   0x0001
+int ldb_unpack_get_format(const struct ldb_val *data,
+			  uint32_t *pack_format_version);
+
+/* currently unused (was NO_DATA_ALLOC)      0x0001 */
 #define LDB_UNPACK_DATA_FLAG_NO_DN           0x0002
 #define LDB_UNPACK_DATA_FLAG_NO_VALUES_ALLOC 0x0004
 #define LDB_UNPACK_DATA_FLAG_NO_ATTRS        0x0008
+#define LDB_UNPACK_DATA_FLAG_READ_LOCKED     0x0010
+
+/* In-use packing formats */
+#define LDB_PACKING_FORMAT 0x26011967
+#define LDB_PACKING_FORMAT_V2 0x26011968
+
+/* Old packing formats */
+#define LDB_PACKING_FORMAT_NODN 0x26011966
 
 /**
  Forces a specific ldb handle to use the global event context.

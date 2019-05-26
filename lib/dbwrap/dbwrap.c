@@ -457,7 +457,7 @@ struct tevent_req *dbwrap_parse_record_send(
 
 	/*
 	 * Copy the key into our state ensuring the key data buffer is always
-	 * available to the all dbwrap backend over the entire lifetime of the
+	 * available to all the dbwrap backends over the entire lifetime of the
 	 * async request. Otherwise the caller might have free'd the key buffer.
 	 */
 	if (key.dsize > sizeof(state->_keybuf)) {
@@ -505,7 +505,6 @@ static void dbwrap_parse_record_done(struct tevent_req *subreq)
 	}
 
 	tevent_req_done(req);
-	return;
 }
 
 NTSTATUS dbwrap_parse_record_recv(struct tevent_req *req)
@@ -635,16 +634,14 @@ static ssize_t tdb_data_buf(const TDB_DATA *dbufs, int num_dbufs,
 
 	for (i=0; i<num_dbufs; i++) {
 		size_t thislen = dbufs[i].dsize;
-		size_t tmp;
 
-		tmp = needed + thislen;
-		if (tmp < needed) {
+		needed += thislen;
+		if (needed < thislen) {
 			/* wrap */
 			return -1;
 		}
-		needed = tmp;
 
-		if (needed <= buflen) {
+		if ((thislen != 0) && (needed <= buflen)) {
 			memcpy(p, dbufs[i].dptr, thislen);
 			p += thislen;
 		}

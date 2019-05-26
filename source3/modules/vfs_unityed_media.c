@@ -103,6 +103,7 @@ static bool get_digit_group(const char *path, uintmax_t *digit)
 	char *endp = NULL;
 	codepoint_t cp;
 	size_t size;
+	int error = 0;
 
 	DEBUG(10, ("get_digit_group entering with path '%s'\n",
 		   path));
@@ -120,7 +121,10 @@ static bool get_digit_group(const char *path, uintmax_t *digit)
 			return false;
 		}
 		if ((size == 1) && (isdigit(cp))) {
-			*digit = (uintmax_t)strtoul(p, &endp, 10);
+			*digit = (uintmax_t)strtoul_err(p, &endp, 10, &error);
+			if (error != 0) {
+				return false;
+			}
 			DEBUG(10, ("num_suffix = '%ju'\n",
 				   *digit));
 			return true;
@@ -1904,6 +1908,8 @@ static struct vfs_fn_pointers vfs_um_fns = {
 
 	/* EA operations. */
 	.getxattr_fn = um_getxattr,
+	.getxattrat_send_fn = vfs_not_implemented_getxattrat_send,
+	.getxattrat_recv_fn = vfs_not_implemented_getxattrat_recv,
 	.listxattr_fn = um_listxattr,
 	.removexattr_fn = um_removexattr,
 	.setxattr_fn = um_setxattr,

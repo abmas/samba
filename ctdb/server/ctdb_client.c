@@ -1586,17 +1586,6 @@ void ctdb_set_flags(struct ctdb_context *ctdb, unsigned flags)
 	ctdb->flags |= flags;
 }
 
-/*
-  setup the local socket name
-*/
-int ctdb_set_socketname(struct ctdb_context *ctdb, const char *socketname)
-{
-	ctdb->daemon.name = talloc_strdup(ctdb, socketname);
-	CTDB_NO_MEMORY(ctdb, ctdb->daemon.name);
-
-	return 0;
-}
-
 const char *ctdb_get_socketname(struct ctdb_context *ctdb)
 {
 	return ctdb->daemon.name;
@@ -1638,7 +1627,7 @@ static void async_callback(struct ctdb_client_control_state *state)
 		}
 		data->fail_count++;
 		if (state->state == CTDB_CONTROL_TIMEOUT) {
-			res = -ETIME;
+			res = -ETIMEDOUT;
 		} else {
 			res = -1;
 		}

@@ -51,6 +51,15 @@ NTSTATUS fsp_new(struct connection_struct *conn, TALLOC_CTX *mem_ctx,
 		goto fail;
 	}
 
+#if defined(HAVE_OFD_LOCKS)
+	fsp->use_ofd_locks = true;
+	if (lp_parm_bool(SNUM(conn),
+			 "smbd",
+			 "force process locks",
+			 false)) {
+		fsp->use_ofd_locks = false;
+	}
+#endif
 	fsp->fh->ref_count = 1;
 	fsp->fh->fd = -1;
 
@@ -452,22 +461,6 @@ bool file_find_subpath(files_struct *dir_fsp)
 
 	TALLOC_FREE(d_fullname);
 	return false;
-}
-
-/****************************************************************************
- Sync open files on a connection.
-****************************************************************************/
-
-void file_sync_all(connection_struct *conn)
-{
-	files_struct *fsp, *next;
-
-	for (fsp=conn->sconn->files; fsp; fsp=next) {
-		next=fsp->next;
-		if ((conn == fsp->conn) && (fsp->fh->fd != -1)) {
-			sync_file(conn, fsp, True /* write through */);
-		}
-	}
 }
 
 /****************************************************************************

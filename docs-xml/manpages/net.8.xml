@@ -26,6 +26,7 @@
 		<arg choice="opt">-w|--workgroup workgroup</arg>
 		<arg choice="opt">-W|--myworkgroup myworkgroup</arg>
 		<arg choice="opt">-U|--user user</arg>
+		<arg choice="opt">-A|--authentication-file authfile</arg>
 		<arg choice="opt">-I|--ipaddress ip-address</arg>
 		<arg choice="opt">-p|--port port</arg>
 		<arg choice="opt">-n myname</arg>
@@ -377,6 +378,13 @@
 		</para></listitem>
 		</varlistentry>
 
+		<varlistentry>
+		<term>--keep-account</term>
+		<listitem><para>Prevent the machine account removal as
+		part of "net ads leave".
+		</para></listitem>
+		</varlistentry>
+
 		&stdarg.encrypt;
 		&popt.common.samba.client;
 
@@ -549,6 +557,12 @@ account in server manager first.</para>
 <title>[RPC|ADS] GROUP ADD <replaceable>name</replaceable> [-C comment]</title>
 
 <para>Create specified group.</para>
+
+</refsect3>
+<refsect3>
+<title>[ADS] LOOKUP</title>
+
+<para>Lookup the closest Domain Controller in our domain and retrieve server information about it.</para>
 
 </refsect3>
 </refsect2>
@@ -807,6 +821,30 @@ DOMAIN</replaceable>. Defaults to local domain.</para>
 
 <para>Give IP of master browser for specified <replaceable>DOMAIN</replaceable>
 or workgroup. Defaults to local domain.</para>
+
+</refsect3>
+
+<refsect3>
+<title>LOOKUP NAME [<replaceable>NAME</replaceable>]</title>
+
+<para>Lookup username's sid and type for specified <replaceable>NAME</replaceable>
+</para>
+
+</refsect3>
+
+<refsect3>
+<title>LOOKUP SID [<replaceable>SID</replaceable>]</title>
+
+<para>Give sid's name and type for specified <replaceable>SID</replaceable>
+</para>
+
+</refsect3>
+
+<refsect3>
+<title>LOOKUP DSGETDCNAME [<replaceable>NAME</replaceable>] [<replaceable>FLAGS</replaceable>] [<replaceable>SITENAME</replaceable>]</title>
+
+<para>Give Domain Controller information for specified domain <replaceable>NAME</replaceable>
+</para>
 
 </refsect3>
 
@@ -1270,7 +1308,7 @@ against an NT4 Domain Controller.
 </refsect2>
 
 <refsect2>
-<title>ADS LEAVE</title>
+<title>ADS LEAVE [--keep-account]</title>
 
 <para>Make the remote host leave the domain it is part of. </para>
 

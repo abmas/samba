@@ -171,32 +171,6 @@ bool trim_char(char *s,char cfront,char cback)
 }
 
 /**
- Like strncpy but always null terminates. Make sure there is room!
- The variable n should always be one less than the available size.
-**/
-char *StrnCpy(char *dest,const char *src,size_t n)
-{
-	char *d = dest;
-
-	if (!dest) {
-		smb_panic("ERROR: NULL dest in StrnCpy");
-	}
-
-	if (!src) {
-		*dest = 0;
-		return(dest);
-	}
-
-	while (n-- && (*d = *src)) {
-		d++;
-		src++;
-	}
-
-	*d = 0;
-	return(dest);
-}
-
-/**
  Check if a string is part of a list.
 **/
 
@@ -877,14 +851,15 @@ uint64_t conv_str_size(const char * str)
 {
         uint64_t lval;
 	char * end;
+	int error = 0;
 
         if (str == NULL || *str == '\0') {
                 return 0;
         }
 
-	lval = strtoull(str, &end, 10 /* base */);
+	lval = strtoull_err(str, &end, 10, &error);
 
-        if (end == NULL || end == str) {
+        if (error != 0) {
                 return 0;
         }
 

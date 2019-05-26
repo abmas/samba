@@ -1216,8 +1216,8 @@ static NTSTATUS snapper_snap_path_to_id(TALLOC_CTX *mem_ctx,
 {
 	char *path_dup;
 	char *str_idx;
-	char *str_end;
 	uint32_t snap_id;
+	int error = 0;
 
 	path_dup = talloc_strdup(mem_ctx, snap_path);
 	if (path_dup == NULL) {
@@ -1250,8 +1250,8 @@ static NTSTATUS snapper_snap_path_to_id(TALLOC_CTX *mem_ctx,
 	}
 
 	str_idx++;
-	snap_id = strtoul(str_idx, &str_end, 10);
-	if (str_idx == str_end) {
+	snap_id = strtoul_err(str_idx, NULL, 10, &error);
+	if (error != 0) {
 		talloc_free(path_dup);
 		return NT_STATUS_INVALID_PARAMETER;
 	}
@@ -2162,24 +2162,6 @@ static int snapper_gmt_lstat(vfs_handle_struct *handle,
 
 	errno = saved_errno;
 	return ret;
-}
-
-static int snapper_gmt_fstat(vfs_handle_struct *handle, files_struct *fsp,
-			     SMB_STRUCT_STAT *sbuf)
-{
-	time_t timestamp;
-	int ret;
-
-	ret = SMB_VFS_NEXT_FSTAT(handle, fsp, sbuf);
-	if (ret == -1) {
-		return ret;
-	}
-	if (!snapper_gmt_strip_snapshot(talloc_tos(), handle,
-					fsp->fsp_name->base_name,
-					&timestamp, NULL)) {
-		return 0;
-	}
-	return 0;
 }
 
 static int snapper_gmt_open(vfs_handle_struct *handle,
@@ -3110,7 +3092,6 @@ static struct vfs_fn_pointers snapper_fns = {
 	.symlink_fn = snapper_gmt_symlink,
 	.stat_fn = snapper_gmt_stat,
 	.lstat_fn = snapper_gmt_lstat,
-	.fstat_fn = snapper_gmt_fstat,
 	.open_fn = snapper_gmt_open,
 	.unlink_fn = snapper_gmt_unlink,
 	.chmod_fn = snapper_gmt_chmod,
@@ -3125,6 +3106,8 @@ static struct vfs_fn_pointers snapper_fns = {
 	.mkdir_fn = snapper_gmt_mkdir,
 	.rmdir_fn = snapper_gmt_rmdir,
 	.getxattr_fn = snapper_gmt_getxattr,
+	.getxattrat_send_fn = vfs_not_implemented_getxattrat_send,
+	.getxattrat_recv_fn = vfs_not_implemented_getxattrat_recv,
 	.listxattr_fn = snapper_gmt_listxattr,
 	.removexattr_fn = snapper_gmt_removexattr,
 	.setxattr_fn = snapper_gmt_setxattr,

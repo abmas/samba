@@ -173,9 +173,13 @@ void get_file_infos(struct file_id id,
 		    struct timespec *write_time);
 bool is_valid_share_mode_entry(const struct share_mode_entry *e);
 bool share_mode_stale_pid(struct share_mode_data *d, uint32_t idx);
-bool set_share_mode(struct share_mode_lock *lck, struct files_struct *fsp,
-		    uid_t uid, uint64_t mid, uint16_t op_type,
-		    uint32_t lease_idx);
+bool set_share_mode(struct share_mode_lock *lck,
+		    struct files_struct *fsp,
+		    uid_t uid,
+		    uint64_t mid,
+		    uint16_t op_type,
+		    const struct GUID *client_guid,
+		    const struct smb2_lease_key *lease_key);
 struct share_mode_entry *find_share_mode_entry(struct share_mode_lock *lck,
 					       files_struct *fsp);
 void remove_stale_share_mode_entries(struct share_mode_data *d);
@@ -184,12 +188,6 @@ bool mark_share_mode_disconnected(struct share_mode_lock *lck,
 				  struct files_struct *fsp);
 bool remove_share_oplock(struct share_mode_lock *lck, files_struct *fsp);
 bool downgrade_share_oplock(struct share_mode_lock *lck, files_struct *fsp);
-struct share_mode_lease;
-NTSTATUS downgrade_share_lease(struct smbd_server_connection *sconn,
-			       struct share_mode_lock *lck,
-			       const struct smb2_lease_key *key,
-			       uint32_t new_lease_state,
-			       struct share_mode_lease **_l);
 bool get_delete_on_close_token(struct share_mode_lock *lck,
 				uint32_t name_hash,
 				const struct security_token **pp_nt_tok,
@@ -212,13 +210,19 @@ int share_mode_forall(int (*fn)(struct file_id fid,
 				const struct share_mode_data *data,
 				void *private_data),
 		      void *private_data);
-int share_entry_forall(int (*fn)(const struct share_mode_entry *,
-				 const struct file_id *id,
-				 const char *, const char *,
-				 const char *, void *),
+int share_entry_forall(int (*fn)(struct file_id fid,
+				 const struct share_mode_data *data,
+				 const struct share_mode_entry *entry,
+				 void *private_data),
 		      void *private_data);
 bool share_mode_cleanup_disconnected(struct file_id id,
 				     uint64_t open_persistent_id);
+bool share_mode_forall_leases(
+	struct share_mode_lock *lck,
+	bool (*fn)(struct share_mode_lock *lck,
+		   struct share_mode_entry *e,
+		   void *private_data),
+	void *private_data);
 
 
 /* The following definitions come from locking/posix.c  */

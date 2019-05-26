@@ -55,7 +55,7 @@ NTSTATUS smbXsrv_tcon_global_init(void)
 		return NT_STATUS_OK;
 	}
 
-	global_path = lock_path("smbXsrv_tcon_global.tdb");
+	global_path = lock_path(talloc_tos(), "smbXsrv_tcon_global.tdb");
 	if (global_path == NULL) {
 		return NT_STATUS_NO_MEMORY;
 	}
@@ -904,6 +904,25 @@ NTSTATUS smbXsrv_tcon_disconnect(struct smbXsrv_tcon *tcon, uint64_t vuid)
 	table = tcon->table;
 	tcon->table = NULL;
 
+	if (tcon->compat) {
+		bool ok;
+
+		ok = chdir_current_service(tcon->compat);
+		if (!ok) {
+			status = NT_STATUS_INTERNAL_ERROR;
+			DEBUG(0, ("smbXsrv_tcon_disconnect(0x%08x, '%s'): "
+				  "chdir_current_service() failed: %s\n",
+				  tcon->global->tcon_global_id,
+				  tcon->global->share_name,
+				  nt_errstr(status)));
+			tcon->compat = NULL;
+			return status;
+		}
+
+		close_cnum(tcon->compat, vuid);
+		tcon->compat = NULL;
+	}
+
 	tcon->status = NT_STATUS_NETWORK_NAME_DELETED;
 
 	global_rec = tcon->global->db_rec;
@@ -965,25 +984,6 @@ NTSTATUS smbXsrv_tcon_disconnect(struct smbXsrv_tcon *tcon, uint64_t vuid)
 		TALLOC_FREE(local_rec);
 	}
 	tcon->db_rec = NULL;
-
-	if (tcon->compat) {
-		bool ok;
-
-		ok = chdir_current_service(tcon->compat);
-		if (!ok) {
-			status = NT_STATUS_INTERNAL_ERROR;
-			DEBUG(0, ("smbXsrv_tcon_disconnect(0x%08x, '%s'): "
-				  "chdir_current_service() failed: %s\n",
-				  tcon->global->tcon_global_id,
-				  tcon->global->share_name,
-				  nt_errstr(status)));
-			tcon->compat = NULL;
-			return status;
-		}
-
-		close_cnum(tcon->compat, vuid);
-		tcon->compat = NULL;
-	}
 
 	return error;
 }
@@ -1112,9 +1112,8 @@ NTSTATUS smb1srv_tcon_lookup(struct smbXsrv_connection *conn,
 					 local_id, now, tcon);
 }
 
-NTSTATUS smb1srv_tcon_disconnect_all(struct smbXsrv_connection *conn)
+NTSTATUS smb1srv_tcon_disconnect_all(struct smbXsrv_client *client)
 {
-	struct smbXsrv_client *client = conn->client;
 
 	/*
 	 * We do not pass a vuid here,

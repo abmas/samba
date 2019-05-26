@@ -178,23 +178,6 @@ MonitorInterval=20
     </refsect2>
 
     <refsect2>
-      <title>DisableIPFailover</title>
-      <para>Default: 0</para>
-      <para>
-	When set to non-zero, ctdb will not perform failover or
-	failback. Even if a node fails while holding public IPs, ctdb
-	will not recover the IPs or assign them to another node.
-      </para>
-      <para>
-	When this tunable is enabled, ctdb will no longer attempt
-	to recover the cluster by failing IP addresses over to other
-	nodes. This leads to a service outage until the administrator
-	has manually performed IP failover to replacement nodes using the
-	'ctdb moveip' command.
-      </para>
-    </refsect2>
-
-    <refsect2>
       <title>ElectionTimeout</title>
       <para>Default: 3</para>
       <para>
@@ -443,28 +426,14 @@ MonitorInterval=20
     </refsect2>
 
     <refsect2>
-      <title>NoIPHostOnAllDisabled</title>
-      <para>Default: 0</para>
-      <para>
-	If no nodes are HEALTHY then by default ctdb will happily host
-	public IPs on disabled (unhealthy or administratively disabled)
-	nodes.	This can cause problems, for example if the underlying
-	cluster filesystem is not mounted.  When set to 1 and a node
-	is disabled, any IPs hosted by this node will be released and
-	the node will not takeover any IPs until it is no longer disabled.
-      </para>
-    </refsect2>
-
-    <refsect2>
       <title>NoIPTakeover</title>
       <para>Default: 0</para>
       <para>
 	When set to 1, ctdb will not allow IP addresses to be failed
 	over to other nodes.  Any IP addresses already hosted on
-	healthy nodes will remain.  Usually IP addresses hosted on
-	unhealthy nodes will also remain, if NoIPHostOnAllDisabled is
-	0.  However, if NoIPHostOnAllDisabled is 1 then IP addresses
-	will be released by unhealthy nodes and will become un-hosted.
+	healthy nodes will remain.  Any IP addresses hosted on
+	unhealthy nodes will be released by unhealthy nodes and will
+	become un-hosted.
       </para>
     </refsect2>
 
@@ -671,17 +640,6 @@ MonitorInterval=20
       <para>
 	This is the duration in seconds in which ctdb tries to complete IP
 	failover.
-      </para>
-    </refsect2>
-
-    <refsect2>
-      <title>TDBMutexEnabled</title>
-      <para>Default: 1</para>
-      <para>
-	This parameter enables TDB_MUTEX_LOCKING feature on volatile
-	databases if the robust mutexes are supported. This optimizes the
-	record locking using robust mutexes and is much more efficient
-	that using posix locks.
       </para>
     </refsect2>
 

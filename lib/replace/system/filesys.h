@@ -107,24 +107,16 @@
 #include <sys/uio.h>
 #endif
 
-/*
- * Veritas File System.  Often in addition to native.
- * Quotas different.
- */
-#if defined(HAVE_SYS_FS_VX_QUOTA_H)
-#define VXFS_QUOTA
-#endif
-
-#if HAVE_SYS_ATTRIBUTES_H
+#if defined(HAVE_SYS_ATTRIBUTES_H)
 #include <sys/attributes.h>
-#elif HAVE_ATTR_ATTRIBUTES_H
+#elif defined(HAVE_ATTR_ATTRIBUTES_H)
 #include <attr/attributes.h>
 #endif
 
 /* mutually exclusive (SuSE 8.2) */
-#if HAVE_ATTR_XATTR_H
+#if defined(HAVE_ATTR_XATTR_H)
 #include <attr/xattr.h>
-#elif HAVE_SYS_XATTR_H
+#elif defined(HAVE_SYS_XATTR_H)
 #include <sys/xattr.h>
 #endif
 
@@ -218,52 +210,33 @@
 #endif
 
 
-#if !defined(HAVE_GETXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
+#if !defined(HAVE_XATTR_XATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
+
 ssize_t rep_getxattr (const char *path, const char *name, void *value, size_t size);
 #define getxattr(path, name, value, size) rep_getxattr(path, name, value, size)
 /* define is in "replace.h" */
-#endif
-
-#if !defined(HAVE_FGETXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
 ssize_t rep_fgetxattr (int filedes, const char *name, void *value, size_t size);
 #define fgetxattr(filedes, name, value, size) rep_fgetxattr(filedes, name, value, size)
 /* define is in "replace.h" */
-#endif
-
-#if !defined(HAVE_LISTXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
 ssize_t rep_listxattr (const char *path, char *list, size_t size);
 #define listxattr(path, list, size) rep_listxattr(path, list, size)
 /* define is in "replace.h" */
-#endif
-
-#if !defined(HAVE_FLISTXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
 ssize_t rep_flistxattr (int filedes, char *list, size_t size);
 #define flistxattr(filedes, value, size) rep_flistxattr(filedes, value, size)
 /* define is in "replace.h" */
-#endif
-
-#if !defined(HAVE_REMOVEXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
 int rep_removexattr (const char *path, const char *name);
 #define removexattr(path, name) rep_removexattr(path, name)
 /* define is in "replace.h" */
-#endif
-
-#if !defined(HAVE_FREMOVEXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
 int rep_fremovexattr (int filedes, const char *name);
 #define fremovexattr(filedes, name) rep_fremovexattr(filedes, name)
 /* define is in "replace.h" */
-#endif
-
-#if !defined(HAVE_SETXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
 int rep_setxattr (const char *path, const char *name, const void *value, size_t size, int flags);
 #define setxattr(path, name, value, size, flags) rep_setxattr(path, name, value, size, flags)
 /* define is in "replace.h" */
-#endif
-
-#if !defined(HAVE_FSETXATTR) || defined(XATTR_ADDITIONAL_OPTIONS)
 int rep_fsetxattr (int filedes, const char *name, const void *value, size_t size, int flags);
 #define fsetxattr(filedes, name, value, size, flags) rep_fsetxattr(filedes, name, value, size, flags)
 /* define is in "replace.h" */
-#endif
+
+#endif /* !defined(HAVE_XATTR_XATTR) || defined(XATTR_ADDITIONAL_OPTIONS) */
 
 #endif

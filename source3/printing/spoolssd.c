@@ -258,7 +258,7 @@ static bool spoolss_child_init(struct tevent_context *ev_ctx,
 {
 	NTSTATUS status;
 	struct rpc_srv_callbacks spoolss_cb;
-	struct messaging_context *msg_ctx = server_messaging_context();
+	struct messaging_context *msg_ctx = global_messaging_context();
 	bool ok;
 
 	status = reinit_after_fork(msg_ctx, ev_ctx, true, "spoolssd-child");
@@ -288,9 +288,7 @@ static bool spoolss_child_init(struct tevent_context *ev_ctx,
 	 * If so then we probably missed a message and should load_printers()
 	 * ourselves. If pcap has not been loaded yet, then ignore, we will get
 	 * a message as soon as the bq process completes the reload. */
-	if (pcap_cache_loaded(NULL)) {
-		load_printers();
-	}
+	load_printers();
 
 	/* try to reinit rpc queues */
 	spoolss_cb.init = spoolss_init_cb;
@@ -699,9 +697,7 @@ pid_t start_spoolssd(struct tevent_context *ev_ctx,
 	 * If pcap has not been loaded yet, then ignore, as we will reload on
 	 * client enumeration anyway.
 	 */
-	if (pcap_cache_loaded(NULL)) {
-		load_printers();
-	}
+	load_printers();
 
 	mem_ctx = talloc_new(NULL);
 	if (mem_ctx == NULL) {

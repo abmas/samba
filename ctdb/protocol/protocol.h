@@ -44,7 +44,7 @@ enum ctdb_operation {
 /* send a broadcast to all nodes in the cluster, active or not */
 #define CTDB_BROADCAST_ALL    0xF0000002
 /* send a broadcast to all nodes in the current vnn map */
-#define CTDB_BROADCAST_VNNMAP 0xF0000003
+#define CTDB_BROADCAST_ACTIVE 0xF0000003
 /* send a broadcast to all connected nodes */
 #define CTDB_BROADCAST_CONNECTED 0xF0000004
 /* send a broadcast to selected connected nodes */
@@ -355,7 +355,7 @@ enum ctdb_controls {CTDB_CONTROL_PROCESS_EXISTS          = 0,
 		    CTDB_CONTROL_SET_DB_STICKY           = 133,
 		    CTDB_CONTROL_RELOAD_PUBLIC_IPS       = 134,
 		    CTDB_CONTROL_TRAVERSE_ALL_EXT        = 135,
-		    CTDB_CONTROL_RECEIVE_RECORDS         = 136,
+		    CTDB_CONTROL_RECEIVE_RECORDS         = 136, /* obsolete */
 		    CTDB_CONTROL_IPREALLOCATED           = 137,
 		    CTDB_CONTROL_GET_RUNSTATE            = 138,
 		    CTDB_CONTROL_DB_DETACH               = 139,
@@ -1046,81 +1046,6 @@ struct ctdb_g_lock_list {
 struct sock_packet_header {
 	uint32_t length;
 	uint32_t reqid;
-};
-
-/*
- * Eventd protocol
- */
-
-enum ctdb_event_command {
-	CTDB_EVENT_COMMAND_RUN            = 1,
-	CTDB_EVENT_COMMAND_STATUS         = 2,
-	CTDB_EVENT_COMMAND_SCRIPT_LIST    = 3,
-	CTDB_EVENT_COMMAND_SCRIPT_ENABLE  = 4,
-	CTDB_EVENT_COMMAND_SCRIPT_DISABLE = 5,
-};
-
-enum ctdb_event_status_state {
-	CTDB_EVENT_LAST_RUN	= 1,
-	CTDB_EVENT_LAST_PASS	= 2,
-	CTDB_EVENT_LAST_FAIL	= 3,
-};
-
-struct ctdb_event_request_run {
-	enum ctdb_event event;
-	uint32_t timeout;
-	const char *arg_str;
-};
-
-struct ctdb_event_request_status {
-	enum ctdb_event event;
-	enum ctdb_event_status_state state;
-};
-
-struct ctdb_event_request_script_enable {
-	const char *script_name;
-};
-
-struct ctdb_event_request_script_disable {
-	const char *script_name;
-};
-
-struct ctdb_event_request_data {
-	enum ctdb_event_command command;
-	union {
-		struct ctdb_event_request_run *run;
-		struct ctdb_event_request_status *status;
-		struct ctdb_event_request_script_enable *script_enable;
-		struct ctdb_event_request_script_disable *script_disable;
-	} data;
-};
-
-struct ctdb_event_reply_status {
-	int status;
-	struct ctdb_script_list *script_list;
-};
-
-struct ctdb_event_reply_script_list {
-	struct ctdb_script_list *script_list;
-};
-
-struct ctdb_event_reply_data {
-	enum ctdb_event_command command;
-	int32_t result;
-	union {
-		struct ctdb_event_reply_status *status;
-		struct ctdb_event_reply_script_list *script_list;
-	} data;
-};
-
-struct ctdb_event_request {
-	struct sock_packet_header header;
-	struct ctdb_event_request_data rdata;
-};
-
-struct ctdb_event_reply {
-	struct sock_packet_header header;
-	struct ctdb_event_reply_data rdata;
 };
 
 #endif /* __CTDB_PROTOCOL_H__ */

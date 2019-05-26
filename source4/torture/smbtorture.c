@@ -34,7 +34,7 @@
 #include "param/param.h"
 #include "lib/util/samba_modules.h"
 
-#if HAVE_READLINE_HISTORY_H
+#ifdef HAVE_READLINE_HISTORY_H
 #include <readline/history.h>
 #endif
 
@@ -528,8 +528,6 @@ int main(int argc, const char *argv[])
 		lpcfg_set_cmdline(cmdline_lp_ctx, "torture:w2k12", "true");
 	} else if (strcmp(target, "win7") == 0) {
 		lpcfg_set_cmdline(cmdline_lp_ctx, "torture:win7", "true");
-		lpcfg_set_cmdline(cmdline_lp_ctx, "torture:cn_max_buffer_size",
-		    "0x00010000");
 		lpcfg_set_cmdline(cmdline_lp_ctx, "torture:resume_key_support", "false");
 		lpcfg_set_cmdline(cmdline_lp_ctx, "torture:rewind_support", "false");
 

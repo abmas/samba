@@ -122,12 +122,12 @@ static int string_to_integer(const char *str, int *int_val)
 
 static int string_to_boolean(const char *str, bool *bool_val)
 {
-	if (strcasecmp(str, "true") == 0) {
+	if (strcasecmp(str, "true") == 0 || strcasecmp(str, "yes") == 0) {
 		*bool_val = true;
 		return 0;
 	}
 
-	if (strcasecmp(str, "false") == 0) {
+	if (strcasecmp(str, "false") == 0 || strcasecmp(str, "no") == 0) {
 		*bool_val = false;
 		return 0;
 	}
@@ -155,10 +155,48 @@ static int conf_value_from_string(TALLOC_CTX *mem_ctx,
 		break;
 
 	default:
-		return ENOENT;
+		return EINVAL;
 	}
 
 	return ret;
+}
+
+static bool conf_value_compare(struct conf_value *old, struct conf_value *new)
+{
+	if (old == NULL || new == NULL) {
+		return false;
+	}
+
+	if (old->type != new->type) {
+		return false;
+	}
+
+	switch (old->type) {
+	case CONF_STRING:
+		if (old->data.string == NULL && new->data.string == NULL) {
+			return true;
+		}
+		if (old->data.string != NULL && new->data.string != NULL) {
+			if (strcmp(old->data.string, new->data.string) == 0) {
+				return true;
+			}
+		}
+		break;
+
+	case CONF_INTEGER:
+		if (old->data.integer == new->data.integer) {
+			return true;
+		}
+		break;
+
+	case CONF_BOOLEAN:
+		if (old->data.boolean == new->data.boolean) {
+			return true;
+		}
+		break;
+	}
+
+	return false;
 }
 
 static int conf_value_copy(TALLOC_CTX *mem_ctx,
@@ -194,7 +232,7 @@ static int conf_value_copy(TALLOC_CTX *mem_ctx,
 		break;
 
 	default:
-		return ENOENT;
+		return EINVAL;
 	}
 
 	return 0;
@@ -409,6 +447,12 @@ static bool conf_option_validate(struct conf_option *opt,
 	return ret;
 }
 
+static bool conf_option_same_value(struct conf_option *opt,
+				   struct conf_value *new_value)
+{
+	return conf_value_compare(opt->value, new_value);
+}
+
 static int conf_option_new_value(struct conf_option *opt,
 				 struct conf_value *new_value,
 				 enum conf_update_mode mode)
@@ -416,34 +460,54 @@ static int conf_option_new_value(struct conf_option *opt,
 	int ret;
 	bool ok;
 
-	ok = conf_option_validate(opt, new_value, mode);
-	if (!ok) {
-		D_ERR("conf: validation for option \"%s\" failed\n",
-		      opt->name);
-		return EINVAL;
+	if (opt->new_value != &opt->default_value) {
+		TALLOC_FREE(opt->new_value);
 	}
 
-	TALLOC_FREE(opt->new_value);
-	opt->new_value = talloc_zero(opt, struct conf_value);
-	if (opt->new_value == NULL) {
-		return ENOMEM;
-	}
+	if (new_value == &opt->default_value) {
+		/*
+		 * This happens only during load/reload. Set the value to
+		 * default value, so if the config option is dropped from
+		 * config file, then it get's reset to default.
+		 */
+		opt->new_value = &opt->default_value;
+	} else {
+		ok = conf_option_validate(opt, new_value, mode);
+		if (!ok) {
+			D_ERR("conf: validation for option \"%s\" failed\n",
+			      opt->name);
+			return EINVAL;
+		}
 
-	opt->new_value->type = opt->value->type;
-	ret = conf_value_copy(opt, new_value, opt->new_value);
-	if (ret != 0) {
-		return ret;
+		opt->new_value = talloc_zero(opt, struct conf_value);
+		if (opt->new_value == NULL) {
+			return ENOMEM;
+		}
+
+		opt->new_value->type = opt->value->type;
+		ret = conf_value_copy(opt, new_value, opt->new_value);
+		if (ret != 0) {
+			return ret;
+		}
 	}
 
 	conf_option_set_ptr_value(opt);
 
-	if (mode == CONF_MODE_API) {
-		opt->temporary_modified = true;
-	} else {
-		opt->temporary_modified = false;
+	if (new_value != &opt->default_value) {
+		if (mode == CONF_MODE_API) {
+			opt->temporary_modified = true;
+		} else {
+			opt->temporary_modified = false;
+		}
 	}
 
 	return 0;
+}
+
+static int conf_option_new_default_value(struct conf_option *opt,
+					 enum conf_update_mode mode)
+{
+	return conf_option_new_value(opt, &opt->default_value, mode);
 }
 
 static void conf_option_default(struct conf_option *opt)
@@ -462,7 +526,9 @@ static void conf_option_default(struct conf_option *opt)
 
 static void conf_option_reset(struct conf_option *opt)
 {
-	TALLOC_FREE(opt->new_value);
+	if (opt->new_value != &opt->default_value) {
+		TALLOC_FREE(opt->new_value);
+	}
 
 	conf_option_set_ptr_value(opt);
 }
@@ -481,6 +547,11 @@ static void conf_option_update(struct conf_option *opt)
 	opt->new_value = NULL;
 
 	conf_option_set_ptr_value(opt);
+}
+
+static void conf_option_reset_temporary(struct conf_option *opt)
+{
+	opt->temporary_modified = false;
 }
 
 static bool conf_option_is_default(struct conf_option *opt)
@@ -586,6 +657,25 @@ static void conf_all_default(struct conf_context *conf)
 	}
 }
 
+static int conf_all_temporary_default(struct conf_context *conf,
+				      enum conf_update_mode mode)
+{
+	struct conf_section *s;
+	struct conf_option *opt;
+	int ret;
+
+	for (s = conf->section; s != NULL; s = s->next) {
+		for (opt = s->option; opt != NULL; opt = opt->next) {
+			ret = conf_option_new_default_value(opt, mode);
+			if (ret != 0) {
+				return ret;
+			}
+		}
+	}
+
+	return 0;
+}
+
 static void conf_all_reset(struct conf_context *conf)
 {
 	struct conf_section *s;
@@ -606,6 +696,7 @@ static void conf_all_update(struct conf_context *conf)
 	for (s = conf->section; s != NULL; s = s->next) {
 		for (opt = s->option; opt != NULL; opt = opt->next) {
 			conf_option_update(opt);
+			conf_option_reset_temporary(opt);
 		}
 	}
 }
@@ -920,17 +1011,23 @@ static int conf_load_internal(struct conf_context *conf)
 {
 	struct conf_load_state state;
 	FILE *fp;
+	int ret;
 	bool ok;
-
-	fp = fopen(conf->filename, "r");
-	if (fp == NULL) {
-		return errno;
-	}
 
 	state = (struct conf_load_state) {
 		.conf = conf,
 		.mode = (conf->reload ? CONF_MODE_RELOAD : CONF_MODE_LOAD),
 	};
+
+	ret = conf_all_temporary_default(conf, state.mode);
+	if (ret != 0) {
+		return ret;
+	}
+
+	fp = fopen(conf->filename, "r");
+	if (fp == NULL) {
+		return errno;
+	}
 
 	ok = tini_parse(fp,
 			false,
@@ -951,6 +1048,10 @@ static int conf_load_internal(struct conf_context *conf)
 		}
 	}
 
+	if (state.err != 0) {
+		goto fail;
+	}
+
 	conf_all_update(conf);
 	return 0;
 
@@ -969,7 +1070,7 @@ static bool conf_load_section(const char *section, void *private_data)
 		ok = conf_section_validate(state->conf, state->s, state->mode);
 		if (!ok) {
 			state->err = EINVAL;
-			return false;
+			return true;
 		}
 	}
 
@@ -981,7 +1082,7 @@ static bool conf_load_section(const char *section, void *private_data)
 		} else {
 			D_ERR("conf: unknown section [%s]\n", section);
 			state->err = EINVAL;
-			return false;
+			return true;
 		}
 	}
 
@@ -998,26 +1099,34 @@ static bool conf_load_option(const char *name,
 	TALLOC_CTX *tmp_ctx;
 	struct conf_value value;
 	int ret;
+	bool ok;
 
 	if (state->s == NULL) {
 		if (state->conf->ignore_unknown) {
-			D_DEBUG("conf: ignoring unknown option \"%s\"\n",
+			D_DEBUG("conf: unknown section for option \"%s\"\n",
 				name);
 			return true;
 		} else {
-			D_ERR("conf: unknown option \"%s\"\n", name);
+			D_ERR("conf: unknown section for option \"%s\"\n",
+			      name);
 			state->err = EINVAL;
-			return false;
+			return true;
 		}
 	}
 
 	opt = conf_option_find(state->s, name);
 	if (opt == NULL) {
 		if (state->conf->ignore_unknown) {
+			D_DEBUG("conf: unknown option [%s] -> \"%s\"\n",
+				state->s->name,
+				name);
 			return true;
 		} else {
-			state->err = ENOENT;
-			return false;
+			D_ERR("conf: unknown option [%s] -> \"%s\"\n",
+			      state->s->name,
+			      name);
+			state->err = EINVAL;
+			return true;
 		}
 	}
 
@@ -1030,18 +1139,28 @@ static bool conf_load_option(const char *name,
 	value.type = opt->type;
 	ret = conf_value_from_string(tmp_ctx, value_str, &value);
 	if (ret != 0) {
+		D_ERR("conf: invalid value [%s] -> \"%s\" = \"%s\"\n",
+		      state->s->name,
+		      name,
+		      value_str);
 		talloc_free(tmp_ctx);
 		state->err = ret;
-		return false;
+		return true;
+	}
+
+	ok = conf_option_same_value(opt, &value);
+	if (ok) {
+		goto done;
 	}
 
 	ret = conf_option_new_value(opt, &value, state->mode);
 	if (ret != 0) {
 		talloc_free(tmp_ctx);
 		state->err = ret;
-		return false;
+		return true;
 	}
 
+done:
 	talloc_free(tmp_ctx);
 	return true;
 
@@ -1092,16 +1211,21 @@ static int conf_set(struct conf_context *conf,
 
 	s = conf_section_find(conf, section);
 	if (s == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	opt = conf_option_find(s, key);
 	if (opt == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	if (opt->type != value->type) {
-		return ENOENT;
+		return EINVAL;
+	}
+
+	ok = conf_option_same_value(opt, value);
+	if (ok) {
+		return 0;
 	}
 
 	ret = conf_option_new_value(opt, value, CONF_MODE_API);
@@ -1171,12 +1295,12 @@ static int conf_get(struct conf_context *conf,
 
 	s = conf_section_find(conf, section);
 	if (s == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	opt = conf_option_find(s, key);
 	if (opt == NULL) {
-		return ENOENT;
+		return EINVAL;
 	}
 
 	if (opt->type != type) {

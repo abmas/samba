@@ -152,7 +152,9 @@ NTSTATUS torture_smb2_init(TALLOC_CTX *ctx)
 	torture_suite_add_simple_test(suite, "setinfo", torture_smb2_setinfo);
 	torture_suite_add_suite(suite, torture_smb2_lock_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_read_init(suite));
+	torture_suite_add_suite(suite, torture_smb2_aio_delay_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_create_init(suite));
+	torture_suite_add_suite(suite, torture_smb2_twrp_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_acls_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_notify_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_notify_inotify_init(suite));
@@ -163,6 +165,8 @@ NTSTATUS torture_smb2_init(TALLOC_CTX *ctx)
 		torture_smb2_durable_open_disconnect_init(suite));
 	torture_suite_add_suite(suite,
 		torture_smb2_durable_v2_open_init(suite));
+	torture_suite_add_suite(suite,
+		torture_smb2_durable_v2_delay_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_dir_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_lease_init(suite));
 	torture_suite_add_suite(suite, torture_smb2_compound_init(suite));
@@ -186,6 +190,7 @@ NTSTATUS torture_smb2_init(TALLOC_CTX *ctx)
 	torture_suite_add_suite(suite, torture_smb2_crediting_init(suite));
 
 	torture_suite_add_suite(suite, torture_smb2_doc_init(suite));
+	torture_suite_add_suite(suite, torture_smb2_multichannel_init(suite));
 
 	suite->description = talloc_strdup(suite, "SMB2-specific tests");
 

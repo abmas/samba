@@ -92,9 +92,10 @@ struct ldb_dn *ldb_dn_from_ldb_val(TALLOC_CTX *mem_ctx,
 {
 	struct ldb_dn *dn;
 
-	if (! ldb) return NULL;
-
-	if (strdn && strdn->data
+	if (ldb == NULL || strdn == NULL) {
+		return NULL;
+	}
+	if (strdn->data
 	    && (strnlen((const char*)strdn->data, strdn->length) != strdn->length)) {
 		/* The RDN must not contain a character with value 0x0 */
 		return NULL;
@@ -325,12 +326,9 @@ static bool ldb_dn_explode(struct ldb_dn *dn)
 		return true;
 	}
 
-	/* make sure we free this if allocated previously before replacing */
-	LDB_FREE(dn->components);
-	dn->comp_num = 0;
-
 	LDB_FREE(dn->ext_components);
 	dn->ext_comp_num = 0;
+	dn->comp_num = 0;
 
 	/* in the common case we have 3 or more components */
 	/* make sure all components are zeroed, other functions depend on it */
@@ -358,9 +356,6 @@ static bool ldb_dn_explode(struct ldb_dn *dn)
 					p++;
 					ex_name = d;
 					in_ex_name = true;
-					continue;
-				} else if (p[0] == '\0') {
-					p++;
 					continue;
 				} else {
 					in_extended = false;
@@ -472,12 +467,6 @@ static bool ldb_dn_explode(struct ldb_dn *dn)
 				/* valid only if we are at the end */
 				trim = true;
 				continue;
-			}
-
-			if (trim && (*p != '=')) {
-				/* spaces/tabs are not allowed */
-				ldb_dn_mark_invalid(dn);
-				goto failed;
 			}
 
 			if (*p == '=') {
@@ -1603,6 +1592,41 @@ bool ldb_dn_add_child_fmt(struct ldb_dn *dn, const char *child_fmt, ...)
 	talloc_free(child_str);
 
 	return ret;
+}
+
+/* modify the given dn by adding a single child element.
+ *
+ * return true if successful and false if not
+ * if false is returned the dn may be marked invalid
+ */
+bool ldb_dn_add_child_val(struct ldb_dn *dn,
+			  const char *rdn,
+			  struct ldb_val value)
+{
+	bool ret;
+	int ldb_ret;
+	struct ldb_dn *child = NULL;
+
+	if ( !dn || dn->invalid) {
+		return false;
+	}
+
+	child = ldb_dn_new(dn, dn->ldb, "X=Y");
+	ret = ldb_dn_add_child(dn, child);
+
+	if (ret == false) {
+		return false;
+	}
+
+	ldb_ret = ldb_dn_set_component(dn,
+				       0,
+				       rdn,
+				       value);
+	if (ldb_ret != LDB_SUCCESS) {
+		return false;
+	}
+
+	return true;
 }
 
 bool ldb_dn_remove_base_components(struct ldb_dn *dn, unsigned int num)

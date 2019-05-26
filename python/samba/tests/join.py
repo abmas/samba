@@ -21,9 +21,11 @@ import sys
 import shutil
 import os
 from samba.tests.dns_base import DNSTKeyTest
-from samba.join import dc_join
+from samba.join import DCJoinContext
 from samba.dcerpc import drsuapi, misc, dns
 from samba.credentials import Credentials
+from samba.provision import interface_ips_v4
+
 
 def get_logger(name="subunit"):
     """Get a logger object."""
@@ -31,6 +33,7 @@ def get_logger(name="subunit"):
     logger = logging.getLogger(name)
     logger.addHandler(logging.StreamHandler(sys.stderr))
     return logger
+
 
 class JoinTestCase(DNSTKeyTest):
     def setUp(self):
@@ -42,11 +45,12 @@ class JoinTestCase(DNSTKeyTest):
         self.netbios_name = "jointest1"
         logger = get_logger()
 
-        self.join_ctx = dc_join(server=self.server, creds=self.creds, lp=self.get_loadparm(),
-                                netbios_name=self.netbios_name,
-                                targetdir=self.tempdir,
-                                domain=None, logger=logger,
-                                dns_backend="SAMBA_INTERNAL")
+        self.join_ctx = DCJoinContext(server=self.server, creds=self.creds,
+                                      lp=self.get_loadparm(),
+                                      netbios_name=self.netbios_name,
+                                      targetdir=self.tempdir,
+                                      domain=None, logger=logger,
+                                      dns_backend="SAMBA_INTERNAL")
         self.join_ctx.userAccountControl = (samba.dsdb.UF_SERVER_TRUST_ACCOUNT |
                                             samba.dsdb.UF_TRUSTED_FOR_DELEGATION)
 
@@ -73,14 +77,13 @@ class JoinTestCase(DNSTKeyTest):
             shutil.rmtree(os.path.join(self.tempdir, "etc"))
             shutil.rmtree(os.path.join(self.tempdir, "msg.lock"))
             os.unlink(os.path.join(self.tempdir, "names.tdb"))
+            shutil.rmtree(os.path.join(self.tempdir, "bind-dns"))
 
         self.join_ctx.cleanup_old_join(force=True)
 
         super(JoinTestCase, self).tearDown()
 
-
     def test_join_makes_records(self):
-
         "create a query packet containing one query record via TCP"
         p = self.make_name_packet(dns.DNS_OPCODE_QUERY)
         questions = []
@@ -90,7 +93,7 @@ class JoinTestCase(DNSTKeyTest):
         questions.append(q)
 
         # Get expected IPs
-        IPs = samba.interface_ips(self.lp)
+        IPs = interface_ips_v4(self.lp, all_interfaces=True)
 
         self.finish_name_packet(p, questions)
         (response, response_packet) = self.dns_transaction_tcp(p, host=self.server_ip)
@@ -113,7 +116,6 @@ class JoinTestCase(DNSTKeyTest):
         self.assertEquals(response.answers[0].rdata, self.join_ctx.dnshostname)
         self.assertEquals(response.answers[1].rr_type, dns.DNS_QTYPE_A)
 
-
     def test_join_records_can_update(self):
         dc_creds = Credentials()
         dc_creds.guess(self.join_ctx.lp)
@@ -131,7 +133,7 @@ class JoinTestCase(DNSTKeyTest):
 
         updates = []
         # Delete the old expected IPs
-        IPs = samba.interface_ips(self.lp)
+        IPs = interface_ips_v4(self.lp, all_interfaces=True)
         for IP in IPs[1:]:
             if ":" in IP:
                 r = dns.res_rec()

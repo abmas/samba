@@ -32,6 +32,9 @@
 #include "rpc_server/samr/proto.h"
 #include "auth/auth_sam.h"
 
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
+
 static void log_password_change_event(struct imessaging_context *msg_ctx,
 				      struct loadparm_context *lp_ctx,
 				      const struct tsocket_address *remote_client_address,
@@ -68,6 +71,7 @@ static void log_password_change_event(struct imessaging_context *msg_ctx,
 
 	log_authentication_event(msg_ctx,
 				 lp_ctx,
+				 NULL,
 				 &ui,
 				 status,
 				 ui.mapped.domain_name,
@@ -97,6 +101,8 @@ NTSTATUS dcesrv_samr_OemChangePasswordUser2(struct dcesrv_call_state *dce_call,
 					    TALLOC_CTX *mem_ctx,
 					    struct samr_OemChangePasswordUser2 *r)
 {
+	struct auth_session_info *session_info =
+		dcesrv_call_session_info(dce_call);
 	NTSTATUS status = NT_STATUS_WRONG_PASSWORD;
 	DATA_BLOB new_password, new_unicode_password;
 	char *new_pass;
@@ -219,7 +225,7 @@ NTSTATUS dcesrv_samr_OemChangePasswordUser2(struct dcesrv_call_state *dce_call,
 	sam_ctx = samdb_connect(mem_ctx,
 				dce_call->event_ctx,
 				dce_call->conn->dce_ctx->lp_ctx,
-				dce_call->conn->auth_state.session_info,
+				session_info,
 				dce_call->conn->remote_address,
 				0);
 	if (sam_ctx == NULL) {
@@ -294,6 +300,8 @@ NTSTATUS dcesrv_samr_ChangePasswordUser3(struct dcesrv_call_state *dce_call,
 					 TALLOC_CTX *mem_ctx,
 					 struct samr_ChangePasswordUser3 *r)
 {
+	struct auth_session_info *session_info =
+		dcesrv_call_session_info(dce_call);
 	NTSTATUS status = NT_STATUS_WRONG_PASSWORD;
 	DATA_BLOB new_password;
 	struct ldb_context *sam_ctx = NULL;
@@ -422,7 +430,7 @@ NTSTATUS dcesrv_samr_ChangePasswordUser3(struct dcesrv_call_state *dce_call,
 	sam_ctx = samdb_connect(mem_ctx,
 				dce_call->event_ctx,
 				dce_call->conn->dce_ctx->lp_ctx,
-				dce_call->conn->auth_state.session_info,
+				session_info,
 				dce_call->conn->remote_address,
 				0);
 	if (sam_ctx == NULL) {
@@ -540,7 +548,7 @@ NTSTATUS samr_set_password(struct dcesrv_call_state *dce_call,
 	DATA_BLOB new_password;
 	DATA_BLOB session_key = data_blob(NULL, 0);
 
-	nt_status = dcesrv_fetch_session_key(dce_call->conn, &session_key);
+	nt_status = dcesrv_transport_session_key(dce_call, &session_key);
 	if (!NT_STATUS_IS_OK(nt_status)) {
 		DEBUG(3,("samr: failed to get session key: %s "
 			 "=> NT_STATUS_WRONG_PASSWORD\n",
@@ -580,9 +588,10 @@ NTSTATUS samr_set_password_ex(struct dcesrv_call_state *dce_call,
 	DATA_BLOB new_password;
 	DATA_BLOB co_session_key;
 	DATA_BLOB session_key = data_blob(NULL, 0);
-	MD5_CTX ctx;
+	gnutls_hash_hd_t hash_hnd = NULL;
+	int rc;
 
-	nt_status = dcesrv_fetch_session_key(dce_call->conn, &session_key);
+	nt_status = dcesrv_transport_session_key(dce_call, &session_key);
 	if (!NT_STATUS_IS_OK(nt_status)) {
 		DEBUG(3,("samr: failed to get session key: %s "
 			 "=> NT_STATUS_WRONG_PASSWORD\n",
@@ -595,26 +604,54 @@ NTSTATUS samr_set_password_ex(struct dcesrv_call_state *dce_call,
 		return NT_STATUS_NO_MEMORY;
 	}
 
-	MD5Init(&ctx);
-	MD5Update(&ctx, &pwbuf->data[516], 16);
-	MD5Update(&ctx, session_key.data, session_key.length);
-	MD5Final(co_session_key.data, &ctx);
+	rc = gnutls_hash_init(&hash_hnd, GNUTLS_DIG_MD5);
+	if (rc < 0) {
+		nt_status = NT_STATUS_NO_MEMORY;
+		goto out;
+	}
+
+	rc = gnutls_hash(hash_hnd, &pwbuf->data[516], 16);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		nt_status = NT_STATUS_INTERNAL_ERROR;
+		goto out;
+	}
+	rc = gnutls_hash(hash_hnd, session_key.data, session_key.length);
+	if (rc < 0) {
+		gnutls_hash_deinit(hash_hnd, NULL);
+		nt_status = NT_STATUS_INTERNAL_ERROR;
+		goto out;
+	}
+	gnutls_hash_deinit(hash_hnd, co_session_key.data);
 
 	arcfour_crypt_blob(pwbuf->data, 516, &co_session_key);
+	ZERO_ARRAY_LEN(co_session_key.data,
+		       co_session_key.length);
 
 	if (!extract_pw_from_buffer(mem_ctx, pwbuf->data, &new_password)) {
 		DEBUG(3,("samr: failed to decode password buffer\n"));
-		return NT_STATUS_WRONG_PASSWORD;
+		nt_status = NT_STATUS_WRONG_PASSWORD;
+		goto out;
 	}
 
 	/* set the password - samdb needs to know both the domain and user DNs,
 	   so the domain password policy can be used */
-	return samdb_set_password(sam_ctx, mem_ctx,
-				  account_dn, domain_dn,
-				  &new_password,
-				  NULL, NULL,
-				  NULL, NULL, /* This is a password set, not change */
-				  NULL, NULL);
+	nt_status = samdb_set_password(sam_ctx,
+				       mem_ctx,
+				       account_dn,
+				       domain_dn,
+				       &new_password,
+				       NULL,
+				       NULL,
+				       NULL,
+				       NULL, /* This is a password set, not change */
+				       NULL,
+				       NULL);
+	ZERO_ARRAY_LEN(new_password.data,
+		       new_password.length);
+
+out:
+	return nt_status;
 }
 
 /*
@@ -634,7 +671,7 @@ NTSTATUS samr_set_password_buffers(struct dcesrv_call_state *dce_call,
 	DATA_BLOB in, out;
 	NTSTATUS nt_status = NT_STATUS_OK;
 
-	nt_status = dcesrv_fetch_session_key(dce_call->conn, &session_key);
+	nt_status = dcesrv_transport_session_key(dce_call, &session_key);
 	if (NT_STATUS_EQUAL(nt_status, NT_STATUS_NO_USER_SESSION_KEY)) {
 		DEBUG(3,("samr: failed to get session key: %s "
 			 "=> use a random session key\n",

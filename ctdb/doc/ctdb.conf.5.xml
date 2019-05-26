@@ -305,6 +305,23 @@
       </varlistentry>
 
       <varlistentry>
+	<term>tdb mutexes = true|false</term>
+	<listitem>
+	  <para>
+	    This parameter enables TDB_MUTEX_LOCKING feature on
+	    volatile databases if the robust mutexes are
+	    supported. This optimizes the record locking using robust
+	    mutexes and is much more efficient that using posix locks.
+	  </para>
+	  <para>
+	    If robust mutexes are unreliable on the platform being
+	    used then they can be disabled by setting this to
+	    <literal>false</literal>.
+	  </para>
+	</listitem>
+      </varlistentry>
+
+      <varlistentry>
 	<term>lock debug script = <parameter>FILENAME</parameter></term>
 	<listitem>
 	  <para>
@@ -376,6 +393,35 @@
 
   <refsect1>
     <title>
+      FAILOVER CONFIGURATION
+    </title>
+
+    <para>
+      Options in this section affect CTDB failover. They are
+      valid within the <emphasis>failover</emphasis> section of file,
+      indicated by <literal>[failover]</literal>.
+    </para>
+
+    <variablelist>
+
+      <varlistentry>
+	<term>disabled = true|false</term>
+	<listitem>
+	  <para>
+	    If set to <literal>true</literal> then public IP failover
+	    is disabled.
+	  </para>
+	  <para>
+	    Default: <literal>false</literal>
+	  </para>
+	</listitem>
+      </varlistentry>
+
+    </variablelist>
+  </refsect1>
+
+  <refsect1>
+    <title>
       LEGACY CONFIGURATION
     </title>
 
@@ -436,17 +482,17 @@
       </varlistentry>
 
       <varlistentry>
-	<term>no realtime = true|false</term>
+	<term>realtime scheduling = true|false</term>
 	<listitem>
 	  <para>
 	    Usually CTDB runs with real-time priority. This helps it
 	    to perform effectively on a busy system, such as when
 	    there are thousands of Samba clients. If you are running
 	    CTDB on a platform that does not support real-time
-	    priority, you can set this to <literal>true</literal>.
+	    priority, you can set this to <literal>false</literal>.
 	  </para>
 	  <para>
-	    Default: <literal>false</literal>
+	    Default: <literal>true</literal>
 	  </para>
 	</listitem>
       </varlistentry>
